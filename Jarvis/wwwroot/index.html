@@ -1,0 +1,336 @@
+﻿<!DOCTYPE html>
+<html lang="nl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OpenAI Bridge Tester (Qwen / Ryzen AI)</title>
+    <style>
+        /* CSS Variabelen voor soepele Dark Mode overgang */
+        :root {
+            --bg-color: #f4f6f9;
+            --card-bg: #ffffff;
+            --text-main: #333333;
+            --text-muted: #475569;
+            --border-color: #cbd5e1;
+            --title-color: #1e293b;
+            --status-color: #64748b;
+        }
+
+        [data-theme="dark"] {
+            --bg-color: #0f172a;
+            --card-bg: #1e293b;
+            --text-main: #f8fafc;
+            --text-muted: #cbd5e1;
+            --border-color: #475569;
+            --title-color: #f1f5f9;
+            --status-color: #94a3b8;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            justify-content: center;
+            transition: background-color 0.3s, color 0.3s;
+        }
+        .container {
+            width: 100%;
+            max-width: 800px;
+            background: var(--card-bg);
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+            position: relative;
+            transition: background-color 0.3s;
+        }
+        .header-wrapper {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 2px solid var(--border-color);
+            padding-bottom: 10px;
+            margin-bottom: 20px;
+        }
+        h1 {
+            margin: 0;
+            color: var(--title-color);
+            font-size: 24px;
+        }
+        .theme-toggle {
+            background-color: transparent;
+            color: var(--text-muted);
+            border: 1px solid var(--border-color);
+            padding: 6px 12px;
+            font-size: 14px;
+            font-weight: 500;
+            border-radius: 20px;
+            cursor: pointer;
+            width: auto;
+            transition: all 0.2s;
+        }
+        .theme-toggle:hover {
+            background-color: var(--bg-color);
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 600;
+            color: var(--text-muted);
+        }
+        input[type="text"], textarea, select {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            box-sizing: border-box;
+            font-family: inherit;
+            font-size: 14px;
+            background-color: var(--card-bg);
+            color: var(--text-main);
+            transition: background-color 0.3s, color 0.3s, border-color 0.3s;
+        }
+        textarea {
+            resize: vertical;
+            min-height: 100px;
+        }
+        .row {
+            display: flex;
+            gap: 15px;
+        }
+        .row .form-group {
+            flex: 1;
+        }
+        button#submitBtn {
+            background-color: #2563eb;
+            color: white;
+            border: none;
+            padding: 12px 20px;
+            font-size: 16px;
+            font-weight: 600;
+            border-radius: 4px;
+            cursor: pointer;
+            width: 100%;
+            transition: background 0.2s;
+        }
+        button#submitBtn:hover {
+            background-color: #1d4ed8;
+        }
+        button#submitBtn:disabled {
+            background-color: #94a3b8;
+            cursor: not-allowed;
+        }
+        #output-container {
+            margin-top: 25px;
+        }
+        #output {
+            background-color: #020617;
+            color: #38bdf8; /* Lichte neon-blauwe tint voor betere leesbaarheid in dark/light terminal */
+            padding: 15px;
+            border-radius: 4px;
+            min-height: 150px;
+            white-space: pre-wrap;
+            font-family: 'Courier New', Courier, monospace;
+            font-size: 14px;
+            line-height: 1.5;
+            overflow-x: auto;
+            border: 1px solid var(--border-color);
+        }
+        .status {
+            font-style: italic;
+            color: var(--status-color);
+            margin-bottom: 5px;
+            font-size: 13px;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <div class="header-wrapper">
+        <h1>🚀 OpenAI Bridge Tester</h1>
+        <button class="theme-toggle" onclick="toggleTheme()" id="themeBtn">🌙 Dark Mode</button>
+    </div>
+
+    <div class="row">
+        <div class="form-group">
+            <label for="endpoint">API Endpoint URL</label>
+            <input type="text" id="endpoint" value="">
+        </div>
+        <div class="form-group">
+            <label for="model">Model ID</label>
+            <select id="model">
+                <option value="">Modellen laden...</option>
+            </select>
+        </div>
+    </div>
+
+    <div class="form-group">
+        <label for="prompt">Jouw Prompt</label>
+        <textarea id="prompt" placeholder="Bijv: Schrijf een C# functie om een lijst met getallen te sorteren..."></textarea>
+    </div>
+
+    <button id="submitBtn" onclick="sendPrompt()">Verstuur naar Lokale NPU / GPU</button>
+
+    <div id="output-container">
+        <div class="status" id="statusText">Status: Stand-by</div>
+        <label>Model Output:</label>
+        <div id="output">Het antwoord verschijnt hier...</div>
+    </div>
+</div>
+
+<script>
+    // 1. Automatische Host URL detectie & Model initialisatie bij opstarten
+    window.addEventListener('DOMContentLoaded', () => {
+        // Pakt de huidige host (bijv localhost:5000 of 127.0.0.1:11434)
+        const currentHost = window.location.host;
+        const protocol = window.location.protocol;
+
+        // Mocht je de tester als los bestand openen (file://), fallback naar Ollama default
+        const baseEndpoint = currentHost ? `${protocol}//${currentHost}` : "http://localhost:11434";
+
+        document.getElementById('endpoint').value = `${baseEndpoint}/v1/chat/completions`;
+
+        // Laad direct de beschikbare modellen in de dropdown
+        loadModels(baseEndpoint);
+
+        // Check of gebruiker systeemvoorkeur voor dark mode heeft
+        if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+            toggleTheme();
+        }
+    });
+
+    // 2. Dark Mode logica
+    function toggleTheme() {
+        const body = document.body;
+        const themeBtn = document.getElementById('themeBtn');
+        const currentTheme = body.getAttribute('data-theme');
+
+        if (currentTheme === 'dark') {
+            body.removeAttribute('data-theme');
+            themeBtn.innerText = '🌙 Dark Mode';
+        } else {
+            body.setAttribute('data-theme', 'dark');
+            themeBtn.innerText = '☀️ Light Mode';
+        }
+    }
+
+    // 3. Dynamisch modellen ophalen uit /v1/models
+    async function loadModels(baseEndpoint) {
+        const modelSelect = document.getElementById('model');
+        try {
+            const response = await fetch(`${baseEndpoint}/v1/models`, { method: 'GET' });
+            if (!response.ok) throw new Error('Kon modellen niet ophalen');
+
+            const data = await response.json();
+            modelSelect.innerHTML = ''; // Reset dropdown
+
+            if (data.data && data.data.length > 0) {
+                data.data.forEach(modelObj => {
+                    const option = document.createElement('option');
+                    option.value = modelObj.id;
+                    option.innerText = modelObj.id;
+                    modelSelect.appendChild(option);
+                });
+            } else {
+                throw new Error('Geen modellen gevonden in de API array');
+            }
+        } catch (error) {
+            console.error(error);
+            modelSelect.innerHTML = '<option value="microsoft-nextcoder-7b-instruct">Fallback: microsoft-nextcoder-7b-instruct</option>';
+            const statusText = document.getElementById('statusText');
+            statusText.innerText = 'Status: Modellenlijst kon niet geladen worden (Fallback actief)';
+        }
+    }
+
+    // 4. Prompt Streamer
+    async function sendPrompt() {
+        const endpoint = document.getElementById('endpoint').value;
+        const model = document.getElementById('model').value;
+        const promptText = document.getElementById('prompt').value;
+        const outputDiv = document.getElementById('output');
+        const statusText = document.getElementById('statusText');
+        const submitBtn = document.getElementById('submitBtn');
+
+        if (!promptText.trim()) {
+            alert('Vul eerst een prompt in!');
+            return;
+        }
+
+        outputDiv.innerText = '';
+        statusText.innerText = 'Verbinding maken en genereren...';
+        submitBtn.disabled = true;
+
+        const requestBody = {
+            model: model,
+            messages: [
+                { role: "user", content: promptText }
+            ],
+            stream: true
+        };
+
+        try {
+            const response = await fetch(endpoint, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(requestBody)
+            });
+
+            if (!response.ok) {
+                throw new Error(`Server reageerde met status ${response.status}`);
+            }
+
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder('utf-8');
+            let buffer = '';
+
+            while (true) {
+                const { value, done } = await reader.read();
+                if (done) break;
+
+                buffer += decoder.decode(value, { stream: true });
+                const lines = buffer.split('\n');
+                buffer = lines.pop();
+
+                for (const line of lines) {
+                    const cleanedLine = line.trim();
+                    if (!cleanedLine) continue;
+
+                    if (cleanedLine === 'data: [DONE]') {
+                        statusText.innerText = 'Status: Genereren voltooid!';
+                        continue;
+                    }
+
+                    if (cleanedLine.startsWith('data: ')) {
+                        try {
+                            const jsonString = cleanedLine.replace('data: ', '');
+                            const parsed = JSON.parse(jsonString);
+                            const content = parsed.choices[0]?.delta?.content;
+                            if (content) {
+                                outputDiv.innerText += content;
+                            }
+                        } catch (e) {
+                            // Negeer incomplete of lege JSON regels tijdens streaming
+                        }
+                    }
+                }
+            }
+
+        } catch (error) {
+            statusText.innerText = 'Status: Fout opgetreden!';
+            outputDiv.innerText = `Foutmelding: ${error.message}\n\nControleer of:\n1. Je AI-bridge engine (C# app / Ollama) actief is.\n2. CORS-headers correct zijn ingesteld.`;
+        } finally {
+            submitBtn.disabled = false;
+        }
+    }
+</script>
+
+</body>
+</html>

@@ -1,0 +1,22 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <TargetFramework>net10.0</TargetFramework>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+    </PropertyGroup>
+
+    <ItemGroup>
+      <PackageReference Include="LLamaSharp" Version="0.27.0" />
+      <PackageReference Include="LLamaSharp.Backend.Cpu" Version="0.27.0" />
+      <PackageReference Include="LLamaSharp.Backend.Vulkan" Version="0.27.0" />
+        <PackageReference Include="LLamaSharp.Backend.Cuda12" Version="0.27.0" />
+      <PackageReference Include="Microsoft.Extensions.Configuration.Abstractions" Version="10.0.9" />
+      <PackageReference Include="System.Management" Version="10.0.9" />
+    </ItemGroup>
+
+    <ItemGroup>
+      <ProjectReference Include="..\Jarvis.Core\Jarvis.Core.csproj" />
+    </ItemGroup>
+
+</Project>

@@ -1,0 +1,12 @@
+﻿using System.Text.Json.Serialization;
+
+namespace Jarvis.Models;
+
+public class ModelListResponse
+{
+    [JsonPropertyName("object")]
+    public string Object { get; set; } = "list";
+
+    [JsonPropertyName("data")]
+    public List<ModelData> Data { get; set; } = new();
+}
