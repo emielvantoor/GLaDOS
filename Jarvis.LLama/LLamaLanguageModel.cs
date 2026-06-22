@@ -95,13 +95,13 @@ public class LLamaLanguageModel : LanguageModel, IDisposable
 
         var inferenceParams = new InferenceParams
         {
-            MaxTokens = 1024, // Ruimer voor complexere code-antwoorden
+            MaxTokens = ModelMetaData.MaxOutputTokens, // Ruimer voor complexere code-antwoorden
             SamplingPipeline = new DefaultSamplingPipeline()
             {
                 Temperature = 0.4f, // Iets ademruimte om makkelijker op te starten na een tool response,
                 Seed = (uint)Random.Shared.Next(1, 100000), // Dynamisch om executor/cache-loops te voorkomen
             },
-            AntiPrompts = new[] { "<|im_end|>" } // Alleen stoppen als de beurt ÉCHT voorbij is
+            AntiPrompts = ["<|im_end|>"] // Alleen stoppen als de beurt ÉCHT voorbij is
         };
 
         var textBuffer = new StringBuilder();

@@ -9,6 +9,10 @@ public class LanguageModelMetaData
     public long Created { get; set; } = 1717830000;
 
     public string OwnedBy { get; set; } = "openai";
+    
+    public int ContextLength { get; set; }
+    
+    public int MaxOutputTokens { get; set; }
 
-    public List<LanguageModelPermission> Permission { get; set; } = [ new() ];
+    public List<LanguageModelPermission> Permission { get; set; } = [new()];
 }

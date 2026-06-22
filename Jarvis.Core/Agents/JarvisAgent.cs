@@ -42,6 +42,11 @@ public class JarvisAgent
 
             await foreach (var chunk in responseStream)
             {
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    break;
+                }
+                
                 if (chunk.IsToolCall)
                 {
                     isToolCallDetected = true;

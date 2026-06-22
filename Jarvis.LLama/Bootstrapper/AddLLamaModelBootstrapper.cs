@@ -19,6 +19,10 @@ public static class AddLLamaModelBootstrapper
             Created = DateTimeOffset.UtcNow.ToUnixTimeSeconds(), 
     
             OwnedBy = "microsoft",
+            
+            ContextLength =  8192,
+            
+            MaxOutputTokens =  1024,
     
             Permission = [
                 new LanguageModelPermission
@@ -42,7 +46,9 @@ public static class AddLLamaModelBootstrapper
         services.AddSingleton<LanguageModel, LLamaLanguageModel>(provider =>
         {
             const string modelPath = "C:\\Users\\Emiel\\Downloads\\NextCoder-7B-Q5_K_M.gguf";
-            return new LLamaLanguageModel(modelPath, nextCoderMetaData, provider.GetRequiredService<ModelParams>());
+            var modelParams = provider.GetRequiredService<ModelParams>();
+            nextCoderMetaData.ContextLength = modelParams.ContextSize.HasValue ? (int) modelParams.ContextSize.Value : 0;
+            return new LLamaLanguageModel(modelPath, nextCoderMetaData, modelParams);
         });
     }
 

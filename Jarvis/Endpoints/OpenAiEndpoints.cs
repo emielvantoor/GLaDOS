@@ -137,22 +137,54 @@ public static class OpenAiEndpoints
     //     }
     // }
 
+    // Maak een statische semaphore aan die maximaal 1 request tegelijk doorlaat
+    private static readonly SemaphoreSlim _llmLock = new SemaphoreSlim(1, 1);
+
     /// <summary>
-    /// Handles chat completions by processing the request, retrieving the model, and running the agent to generate the response.
+    /// Handles chat completions by processing the request, initializing the model, and streaming the response.
     /// </summary>
-    /// <param name="modelManager">The model manager to retrieve and initialize the language model.</param>
+    /// <param name="modelManager">The model manager to use for retrieving and initializing the model.</param>
     /// <param name="request">The chat completion request containing the messages.</param>
-    /// <param name="agent">The agent to handle the complete interaction.</param>
-    /// <param name="token">The cancellation token to handle asynchronous operations.</param>
-    /// <returns>A task that represents the asynchronous operation. Returns a stream of chat completion chunks or an error result.</returns>
-    private static async Task<IResult> HandleChatCompletions(IModelManager modelManager, ChatCompletionRequest request,
-        JarvisAgent agent, CancellationToken token)
+    /// <param name="agent">The agent to handle the interaction.</param>
+    /// <param name="context">The HTTP context for the request.</param>
+    /// <returns>An asynchronous result representing the chat completion response.</returns>
+    private static async Task<IResult> HandleChatCompletions(IModelManager modelManager,
+        JarvisAgent agent, HttpContext context)
     {
+        // Dit is het échte live-signaal van Rider
+        var token = context.RequestAborted;
+
+        try
+        {
+            await _llmLock.WaitAsync(token);
+        }
+        catch (OperationCanceledException)
+        {
+            return Results.BadRequest("Operation cancelled");
+        }
+
+        Console.WriteLine("Handling Chat Completions");
+
+        // 1. Lees het request handmatig als een stream uit de HTTP body
+        ChatCompletionRequest? request = null;
+        try
+        {
+            // Hiermee stream je de binnenkomende JSON-data van Rider direct naar de deserializer
+            request = await JsonSerializer.DeserializeAsync<ChatCompletionRequest>(
+                context.Request.Body,
+                cancellationToken: token);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Fout bij het lezen van Rider request stream: {ex.Message}");
+            return Results.BadRequest("Invalide JSON of stream afgebroken.");
+        }
+
         if (request?.Messages == null || !request.Messages.Any())
         {
             return Results.BadRequest("Invalide request of lege berichtenlijst.");
         }
-        
+
         LanguageModel model;
         try
         {
@@ -162,72 +194,87 @@ public static class OpenAiEndpoints
         {
             return Results.Problem($"Fout bij laden van model: {ex.Message}");
         }
-        
+
         // De agent handelt nu autonoom de complete interactie af!
-        var agentResultStream = agent.RunAsync(model, [.. request.Messages.Select(message => message.ToDomainModel())], token);
-    
+        var agentResultStream =
+            agent.RunAsync(model, [.. request.Messages.Select(message => message.ToDomainModel())], token);
+
         // Gebruik de juiste encoder om HTML/Markdown escaping te minimaliseren
         var serializerOptions = new JsonSerializerOptions
         {
             Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
         };
 
-// Genereer één unieke ID voor de gehele sessie/request
+        // Genereer één unieke ID voor de gehele sessie/request
         string chunkId = $"chatcmpl-{Guid.NewGuid()}";
         long createdTimestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
         string modelName = request.Model ?? "local-model"; // Zorg dat de modelnaam matcht
 
-        return Results.Stream(async stream => {
-            await using var writer = new StreamWriter(stream) { NewLine = "\n" };
-    
-            await foreach (var text in agentResultStream)
-            {
-                if (text == null) continue;
 
-                // Bouw exact de structuur na waar Rider om vraagt
-                var openAIChunk = new {
+        return Results.Stream(async stream =>
+        {
+            try
+            {
+                await using var writer = new StreamWriter(stream) { NewLine = "\n" };
+
+                await foreach (var text in agentResultStream)
+                {
+                    // Bouw exact de structuur na waar Rider om vraagt
+                    var openAIChunk = new
+                    {
+                        id = chunkId,
+                        @object = "chat.completion.chunk", // 'object' is een C# keyword, dus @ gebruiken
+                        created = createdTimestamp,
+                        model = modelName,
+                        choices = new[]
+                        {
+                            new
+                            {
+                                index = 0,
+                                delta = new { content = text },
+                                finish_reason = (string?)null
+                            }
+                        }
+                    };
+
+                    var json = JsonSerializer.Serialize(openAIChunk, serializerOptions);
+
+                    await writer.WriteAsync($"data: {json}\n\n");
+                    await writer.FlushAsync(token);
+                }
+
+                // Optioneel: stuur de officiële afsluitende chunk met finish_reason "stop"
+                var finalChunk = new
+                {
                     id = chunkId,
-                    @object = "chat.completion.chunk", // 'object' is een C# keyword, dus @ gebruiken
+                    @object = "chat.completion.chunk",
                     created = createdTimestamp,
                     model = modelName,
-                    choices = new[] { 
-                        new { 
+                    choices = new[]
+                    {
+                        new
+                        {
                             index = 0,
-                            delta = new { content = text },
-                            finish_reason = (string?)null
-                        } 
-                    } 
+                            delta = new { },
+                            finish_reason = "stop"
+                        }
+                    }
                 };
-        
-                var json = JsonSerializer.Serialize(openAIChunk, serializerOptions);
-        
-                await writer.WriteAsync($"data: {json}\n\n");
+                var finalJson = JsonSerializer.Serialize(finalChunk, serializerOptions);
+                await writer.WriteAsync($"data: {finalJson}\n\n");
+
+                // Sluit af met de OpenAI-standaard marker
+                await writer.WriteAsync("data: [DONE]\n\n");
                 await writer.FlushAsync(token);
             }
-
-            // Optioneel: stuur de officiële afsluitende chunk met finish_reason "stop"
-            var finalChunk = new {
-                id = chunkId,
-                @object = "chat.completion.chunk",
-                created = createdTimestamp,
-                model = modelName,
-                choices = new[] { 
-                    new { 
-                        index = 0,
-                        delta = new { },
-                        finish_reason = "stop"
-                    } 
-                } 
-            };
-            var finalJson = JsonSerializer.Serialize(finalChunk, serializerOptions);
-            await writer.WriteAsync($"data: {finalJson}\n\n");
-
-            // Sluit af met de OpenAI-standaard marker
-            await writer.WriteAsync("data: [DONE]\n\n");
-            await writer.FlushAsync(token);
+            finally
+            {
+                // CRUCIAAL: Laat de lock pas los als de stream HELEMAAL klaar is of is afgebroken!
+                _llmLock.Release();
+            }
         }, "text/event-stream");
     }
-    
+
     private static IResult GetModels(IModelManager modelManager)
     {
         var modelsList = new ModelListResponse();

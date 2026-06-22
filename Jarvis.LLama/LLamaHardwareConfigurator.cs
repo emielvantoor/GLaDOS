@@ -163,11 +163,11 @@ public static class LLamaHardwareConfigurator
     }
 
     /// <summary>
-    /// 
+    /// Creates optimized parameters for the model based on the provided configuration.
     /// </summary>
-    /// <param name="configuration"></param>
-    /// <returns></returns>
-    /// <exception cref="ArgumentNullException"></exception>
+    /// <param name="configuration">The configuration object containing model settings.</param>
+    /// <returns>The optimized model parameters.</returns>
+    /// <exception cref="ArgumentNullException">Thrown when the configuration is null.</exception>
     public static ModelParams CreateOptimizedParameters(IConfiguration configuration)
     {
         // 1. Dwing de configurator EERST de juiste .so/.dll paden te registreren!
@@ -186,9 +186,13 @@ public static class LLamaHardwareConfigurator
         {
             ContextSize = contextSize,
             Threads = cpuCores,
-            GpuLayerCount = _useGpu ? 99 : 0,
+            GpuLayerCount = _useGpu 
+                ? int.TryParse(configuration["Jarvis:GpuLayerCount"], out var gpuLayerCount) 
+                    ? gpuLayerCount : 99
+                : 0,
             TypeK = GGMLType.GGML_TYPE_Q8_0,
             TypeV = GGMLType.GGML_TYPE_Q8_0,
+            FlashAttention = true
         };
     }
 }

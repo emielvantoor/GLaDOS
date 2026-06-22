@@ -16,7 +16,13 @@ public class ModelData
 
     [JsonPropertyName("owned_by")]
     public string OwnedBy { get; set; } = "openai";
-
+    
+    [JsonPropertyName("context_length")]
+    public int ContextLength { get; set; }
+    
+    [JsonPropertyName("max_output_tokens")]
+    public int MaxOutputTokens { get; set; }
+    
     [JsonPropertyName("permission")]
     public List<ModelPermission> Permission { get; set; } = [ new() ];
 }

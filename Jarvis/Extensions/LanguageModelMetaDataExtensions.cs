@@ -14,6 +14,8 @@ public static class LanguageModelMetaDataExtensions
             OwnedBy = metaData.OwnedBy,
             Created = metaData.Created,
             Object = metaData.Object,
+            ContextLength = metaData.ContextLength,
+            MaxOutputTokens = metaData.MaxOutputTokens,
             Permission = [.. metaData.Permission.Select(p => p.ToDto())]
         };
     }
