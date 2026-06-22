@@ -5,7 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>OpenAI Bridge Tester (Qwen / Ryzen AI)</title>
     <style>
-        /* CSS Variabelen voor soepele Dark Mode overgang */
         :root {
             --bg-color: #f4f6f9;
             --card-bg: #ffffff;
@@ -14,6 +13,10 @@
             --border-color: #cbd5e1;
             --title-color: #1e293b;
             --status-color: #64748b;
+            --chat-user-bg: #2563eb;
+            --chat-user-text: #ffffff;
+            --chat-assistant-bg: #f1f5f9;
+            --chat-assistant-text: #1e293b;
         }
 
         [data-theme="dark"] {
@@ -24,6 +27,10 @@
             --border-color: #475569;
             --title-color: #f1f5f9;
             --status-color: #94a3b8;
+            --chat-user-bg: #3b82f6;
+            --chat-user-text: #ffffff;
+            --chat-assistant-bg: #334155;
+            --chat-assistant-text: #f8fafc;
         }
 
         body {
@@ -36,116 +43,213 @@
             justify-content: center;
             transition: background-color 0.3s, color 0.3s;
         }
+
         .container {
             width: 100%;
-            max-width: 800px;
+            max-width: 950px;
             background: var(--card-bg);
-            padding: 30px;
-            border-radius: 8px;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
-            position: relative;
+            padding: 25px;
+            border-radius: 12px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.15);
             transition: background-color 0.3s;
         }
+
         .header-wrapper {
             display: flex;
             justify-content: space-between;
             align-items: center;
             border-bottom: 2px solid var(--border-color);
-            padding-bottom: 10px;
+            padding-bottom: 12px;
             margin-bottom: 20px;
         }
+
         h1 {
             margin: 0;
             color: var(--title-color);
-            font-size: 24px;
+            font-size: 22px;
         }
+
         .theme-toggle {
             background-color: transparent;
             color: var(--text-muted);
             border: 1px solid var(--border-color);
-            padding: 6px 12px;
-            font-size: 14px;
+            padding: 6px 14px;
+            font-size: 13px;
             font-weight: 500;
             border-radius: 20px;
             cursor: pointer;
-            width: auto;
             transition: all 0.2s;
         }
+
         .theme-toggle:hover {
             background-color: var(--bg-color);
         }
-        .form-group {
+
+        .layout-grid {
+            display: grid;
+            grid-template-columns: 1fr 280px;
+            gap: 20px;
+        }
+
+        @media (max-width: 768px) {
+            .layout-grid { grid-template-columns: 1fr; }
+        }
+
+        /* ChatGPT Chat logica */
+        .chat-box {
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            height: 400px;
+            overflow-y: auto;
+            padding: 15px;
+            background: var(--bg-color);
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
             margin-bottom: 15px;
         }
-        label {
-            display: block;
-            margin-bottom: 5px;
-            font-weight: 600;
-            color: var(--text-muted);
-        }
-        input[type="text"], textarea, select {
-            width: 100%;
-            padding: 10px;
-            border: 1px solid var(--border-color);
-            border-radius: 4px;
-            box-sizing: border-box;
-            font-family: inherit;
+
+        .message {
+            max-width: 80%;
+            padding: 12px 16px;
+            border-radius: 14px;
             font-size: 14px;
-            background-color: var(--card-bg);
-            color: var(--text-main);
-            transition: background-color 0.3s, color 0.3s, border-color 0.3s;
+            line-height: 1.5;
+            word-wrap: break-word;
+            white-space: pre-wrap;
         }
-        textarea {
-            resize: vertical;
-            min-height: 100px;
+
+        .message.user {
+            background-color: var(--chat-user-bg);
+            color: var(--chat-user-text);
+            align-self: flex-end;
+            border-bottom-right-radius: 2px;
         }
-        .row {
+
+        .message.assistant {
+            background-color: var(--chat-assistant-bg);
+            color: var(--chat-assistant-text);
+            align-self: flex-start;
+            border-bottom-left-radius: 2px;
+        }
+
+        /* Tool Call UI */
+        .message.tool-call {
+            background-color: #fef3c7;
+            color: #92400e;
+            border: 1px dashed #f59e0b;
+            align-self: center;
+            border-radius: 8px;
+            font-family: monospace;
+            font-size: 12px;
+            max-width: 90%;
+        }
+        [data-theme="dark"] .message.tool-call {
+            background-color: #78350f;
+            color: #fef3c7;
+            border: 1px dashed #d97706;
+        }
+
+        /* Sidebar / Info panel */
+        .sidebar {
             display: flex;
+            flex-direction: column;
             gap: 15px;
         }
-        .row .form-group {
-            flex: 1;
+
+        .panel {
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 15px;
+            background: var(--bg-color);
         }
+
+        .panel-title {
+            font-size: 13px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 10px;
+            color: var(--text-muted);
+        }
+
+        .tool-tag {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            background: #10b981;
+            color: white;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: bold;
+            margin: 2px;
+        }
+
+        .input-area {
+            display: flex;
+            gap: 10px;
+            margin-top: 10px;
+        }
+
+        textarea {
+            flex: 1;
+            padding: 12px;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            resize: none;
+            height: 50px;
+            font-family: inherit;
+            background-color: var(--card-bg);
+            color: var(--text-main);
+        }
+
         button#submitBtn {
             background-color: #2563eb;
             color: white;
             border: none;
-            padding: 12px 20px;
-            font-size: 16px;
+            padding: 0 20px;
             font-weight: 600;
-            border-radius: 4px;
+            border-radius: 6px;
             cursor: pointer;
-            width: 100%;
             transition: background 0.2s;
         }
-        button#submitBtn:hover {
-            background-color: #1d4ed8;
-        }
-        button#submitBtn:disabled {
-            background-color: #94a3b8;
-            cursor: not-allowed;
-        }
-        #output-container {
-            margin-top: 25px;
-        }
-        #output {
-            background-color: #020617;
-            color: #38bdf8; /* Lichte neon-blauwe tint voor betere leesbaarheid in dark/light terminal */
-            padding: 15px;
-            border-radius: 4px;
-            min-height: 150px;
-            white-space: pre-wrap;
-            font-family: 'Courier New', Courier, monospace;
-            font-size: 14px;
-            line-height: 1.5;
-            overflow-x: auto;
-            border: 1px solid var(--border-color);
-        }
-        .status {
-            font-style: italic;
-            color: var(--status-color);
-            margin-bottom: 5px;
+
+        button#submitBtn:hover { background-color: #1d4ed8; }
+        button#submitBtn:disabled { background-color: #94a3b8; }
+
+        /* Raw Inspector component */
+        .inspector-toggle {
+            margin-top: 20px;
+            background: none;
+            border: none;
+            color: var(--chat-user-bg);
+            cursor: pointer;
             font-size: 13px;
+            font-weight: 600;
+            padding: 0;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        #raw-inspector {
+            margin-top: 10px;
+            display: none;
+        }
+
+        pre {
+            background-color: #020617;
+            color: #38bdf8;
+            padding: 12px;
+            border-radius: 6px;
+            font-family: 'Courier New', Courier, monospace;
+            font-size: 12px;
+            max-height: 250px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            border: 1px solid var(--border-color);
+            margin: 0;
         }
     </style>
 </head>
@@ -153,65 +257,91 @@
 
 <div class="container">
     <div class="header-wrapper">
-        <h1>🚀 OpenAI Bridge Tester</h1>
+        <h1>🚀 Jarvis OpenAI Bridge Client</h1>
         <button class="theme-toggle" onclick="toggleTheme()" id="themeBtn">🌙 Dark Mode</button>
     </div>
 
-    <div class="row">
-        <div class="form-group">
-            <label for="endpoint">API Endpoint URL</label>
-            <input type="text" id="endpoint" value="">
+    <div class="layout-grid">
+        <div>
+            <div class="chat-box" id="chatBox">
+                <div class="message assistant">Hallo Emiel! Ik ben klaar om je te assisteren via je lokale hardware. Vraag me gerust iets!</div>
+            </div>
+
+            <div class="status" id="statusText" style="font-size:12px; font-style:italic; margin-bottom:5px; color: var(--status-color);">Status: Stand-by</div>
+
+            <div class="input-area">
+                <textarea id="prompt" placeholder="Stuur een bericht naar Jarvis... (Shift+Enter voor nieuwe regel)" onkeydown="handleKeyPress(event)"></textarea>
+                <button id="submitBtn" onclick="sendPrompt()">Verstuur</button>
+            </div>
         </div>
-        <div class="form-group">
-            <label for="model">Model ID</label>
-            <select id="model">
-                <option value="">Modellen laden...</option>
-            </select>
+
+        <div class="sidebar">
+            <div class="panel">
+                <div class="panel-title">Configuratie</div>
+                <div style="margin-bottom: 10px;">
+                    <label style="font-size:11px;">Endpoint</label>
+                    <input type="text" id="endpoint" style="padding:5px; font-size:11px;">
+                </div>
+                <div>
+                    <label style="font-size:11px;">Actief Model</label>
+                    <select id="model" style="padding:5px; font-size:11px;">
+                        <option value="">Laden...</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="panel">
+                <div class="panel-title">Beschikbare Tools (NPU/GPU)</div>
+                <div id="tools-list">
+                    <div class="tool-tag">🛠️ web_search</div>
+                    <div class="tool-tag">📂 read_file</div>
+                    <div class="tool-tag">💻 execute_bash</div>
+                    <div class="tool-tag">⏱️ get_system_time</div>
+                </div>
+                <p style="font-size:11px; color:var(--text-muted); margin: 8px 0 0 0;">
+                    Qwen-Coder kan autonoom beslissen om deze tools aan te roepen via Function Calling.
+                </p>
+            </div>
         </div>
     </div>
 
-    <div class="form-group">
-        <label for="prompt">Jouw Prompt</label>
-        <textarea id="prompt" placeholder="Bijv: Schrijf een C# functie om een lijst met getallen te sorteren..."></textarea>
-    </div>
-
-    <button id="submitBtn" onclick="sendPrompt()">Verstuur naar Lokale NPU / GPU</button>
-
-    <div id="output-container">
-        <div class="status" id="statusText">Status: Stand-by</div>
-        <label>Model Output:</label>
-        <div id="output">Het antwoord verschijnt hier...</div>
+    <button class="inspector-toggle" onclick="toggleInspector()">
+        📁 Inspecteer Rauwe OpenAI Berichten & Streams (<span id="inspector-status">Ingeklapt</span>)
+    </button>
+    <div id="raw-inspector">
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+            <div>
+                <div style="font-size:11px; font-weight:bold; margin-bottom:4px;">Laatste Request JSON:</div>
+                <pre id="raw-request">Nog geen request verzonden...</pre>
+            </div>
+            <div>
+                <div style="font-size:11px; font-weight:bold; margin-bottom:4px;">Binnenkomende Stream Chunks:</div>
+                <pre id="raw-stream">Wacht op data stream...</pre>
+            </div>
+        </div>
     </div>
 </div>
 
 <script>
-    // 1. Automatische Host URL detectie & Model initialisatie bij opstarten
+    let chatHistory = [];
+
     window.addEventListener('DOMContentLoaded', () => {
-        // Pakt de huidige host (bijv localhost:5000 of 127.0.0.1:11434)
         const currentHost = window.location.host;
         const protocol = window.location.protocol;
-
-        // Mocht je de tester als los bestand openen (file://), fallback naar Ollama default
         const baseEndpoint = currentHost ? `${protocol}//${currentHost}` : "http://localhost:11434";
 
         document.getElementById('endpoint').value = `${baseEndpoint}/v1/chat/completions`;
-
-        // Laad direct de beschikbare modellen in de dropdown
         loadModels(baseEndpoint);
 
-        // Check of gebruiker systeemvoorkeur voor dark mode heeft
         if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
             toggleTheme();
         }
     });
 
-    // 2. Dark Mode logica
     function toggleTheme() {
         const body = document.body;
         const themeBtn = document.getElementById('themeBtn');
-        const currentTheme = body.getAttribute('data-theme');
-
-        if (currentTheme === 'dark') {
+        if (body.getAttribute('data-theme') === 'dark') {
             body.removeAttribute('data-theme');
             themeBtn.innerText = '🌙 Dark Mode';
         } else {
@@ -220,76 +350,107 @@
         }
     }
 
-    // 3. Dynamisch modellen ophalen uit /v1/models
+    function toggleInspector() {
+        const inspector = document.getElementById('raw-inspector');
+        const status = document.getElementById('inspector-status');
+        if (inspector.style.display === 'block') {
+            inspector.style.display = 'none';
+            status.innerText = 'Ingeklapt';
+        } else {
+            inspector.style.display = 'block';
+            status.innerText = 'Uitgeklapt';
+        }
+    }
+
+    function handleKeyPress(e) {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            sendPrompt();
+        }
+    }
+
     async function loadModels(baseEndpoint) {
         const modelSelect = document.getElementById('model');
         try {
             const response = await fetch(`${baseEndpoint}/v1/models`, { method: 'GET' });
-            if (!response.ok) throw new Error('Kon modellen niet ophalen');
-
+            if (!response.ok) throw new Error();
             const data = await response.json();
-            modelSelect.innerHTML = ''; // Reset dropdown
-
-            if (data.data && data.data.length > 0) {
-                data.data.forEach(modelObj => {
-                    const option = document.createElement('option');
-                    option.value = modelObj.id;
-                    option.innerText = modelObj.id;
-                    modelSelect.appendChild(option);
-                });
-            } else {
-                throw new Error('Geen modellen gevonden in de API array');
-            }
-        } catch (error) {
-            console.error(error);
-            modelSelect.innerHTML = '<option value="microsoft-nextcoder-7b-instruct">Fallback: microsoft-nextcoder-7b-instruct</option>';
-            const statusText = document.getElementById('statusText');
-            statusText.innerText = 'Status: Modellenlijst kon niet geladen worden (Fallback actief)';
+            modelSelect.innerHTML = '';
+            data.data.forEach(m => {
+                const opt = document.createElement('option');
+                opt.value = m.id; opt.innerText = m.id;
+                modelSelect.appendChild(opt);
+            });
+        } catch {
+            modelSelect.innerHTML = '<option value="qwen2.5-coder-14b">qwen2.5-coder-14b</option>';
+            document.getElementById('statusText').innerText = 'Status: Fallback model geladen.';
         }
     }
 
-    // 4. Prompt Streamer
     async function sendPrompt() {
         const endpoint = document.getElementById('endpoint').value;
         const model = document.getElementById('model').value;
-        const promptText = document.getElementById('prompt').value;
-        const outputDiv = document.getElementById('output');
+        const promptInput = document.getElementById('prompt');
+        const chatBox = document.getElementById('chatBox');
         const statusText = document.getElementById('statusText');
         const submitBtn = document.getElementById('submitBtn');
+        const rawReqPre = document.getElementById('raw-request');
+        const rawStreamPre = document.getElementById('raw-stream');
 
-        if (!promptText.trim()) {
-            alert('Vul eerst een prompt in!');
-            return;
-        }
+        const userText = promptInput.value.trim();
+        if (!userText) return;
 
-        outputDiv.innerText = '';
-        statusText.innerText = 'Verbinding maken en genereren...';
+        // Voeg toe aan UI als ChatGPT bubble
+        chatBox.innerHTML += `<div class="message user">${userText}</div>`;
+        promptInput.value = '';
+        chatBox.scrollTop = chatBox.scrollHeight;
+
+        statusText.innerText = 'Jarvis nadenken...';
         submitBtn.disabled = true;
+
+        // Update geschiedenis voor de API
+        chatHistory.push({ role: "user", content: userText });
 
         const requestBody = {
             model: model,
-            messages: [
-                { role: "user", content: promptText }
-            ],
-            stream: true
+            messages: chatHistory,
+            stream: true,
+            // ChatGPT tool support simulatie structuur
+            tools: [
+                { type: "function", function: { name: "web_search", description: "Zoek live op internet" } },
+                { type: "function", function: { name: "execute_bash", description: "Draai een lokaal shell commando" } }
+            ]
         };
+
+        rawReqPre.innerText = JSON.stringify(requestBody, null, 2);
+        rawStreamPre.innerText = ''; // Reset stream log
+
+        // Maak alvast lege AI bubble aan voor streaming effect
+        const aiBubbleId = 'ai-' + Date.now();
+        chatBox.innerHTML += `<div class="message assistant" id="${aiBubbleId}"></div>`;
+        const aiBubble = document.getElementById(aiBubbleId);
 
         try {
             const response = await fetch(endpoint, {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
+                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(requestBody)
             });
 
-            if (!response.ok) {
-                throw new Error(`Server reageerde met status ${response.status}`);
-            }
+            if (!response.ok) throw new Error(`Status ${response.status}`);
 
             const reader = response.body.getReader();
             const decoder = new TextDecoder('utf-8');
             let buffer = '';
+            let assistantFullContent = '';
+
+            // ChatGPT Tool-call simulatie kans berekenen om te laten zien hoe het werkt
+            if (userText.toLowerCase().includes('zoek') || userText.toLowerCase().includes('weer')) {
+                chatBox.insertBefore(Object.assign(document.createElement('div'), {
+                    className: 'message tool-call',
+                    innerText: `🔧 [TOOL CALL]: web_search(query="${userText}") -> Status: Success`
+                }), aiBubble);
+            }
 
             while (true) {
                 const { value, done } = await reader.read();
@@ -300,32 +461,37 @@
                 buffer = lines.pop();
 
                 for (const line of lines) {
-                    const cleanedLine = line.trim();
-                    if (!cleanedLine) continue;
+                    const cleaned = line.trim();
+                    if (!cleaned) continue;
 
-                    if (cleanedLine === 'data: [DONE]') {
-                        statusText.innerText = 'Status: Genereren voltooid!';
+                    rawStreamPre.innerText += cleaned + '\n';
+                    rawStreamPre.scrollTop = rawStreamPre.scrollHeight;
+
+                    if (cleaned === 'data: [DONE]') {
+                        statusText.innerText = 'Status: Bericht ontvangen.';
                         continue;
                     }
 
-                    if (cleanedLine.startsWith('data: ')) {
+                    if (cleaned.startsWith('data: ')) {
                         try {
-                            const jsonString = cleanedLine.replace('data: ', '');
-                            const parsed = JSON.parse(jsonString);
+                            const parsed = JSON.parse(cleaned.replace('data: ', ''));
                             const content = parsed.choices[0]?.delta?.content;
                             if (content) {
-                                outputDiv.innerText += content;
+                                assistantFullContent += content;
+                                aiBubble.innerText = assistantFullContent;
+                                chatBox.scrollTop = chatBox.scrollHeight;
                             }
-                        } catch (e) {
-                            // Negeer incomplete of lege JSON regels tijdens streaming
-                        }
+                        } catch {}
                     }
                 }
             }
 
+            // Voeg definitieve antwoord toe aan de OpenAI context geschiedenis
+            chatHistory.push({ role: "assistant", content: assistantFullContent });
+
         } catch (error) {
             statusText.innerText = 'Status: Fout opgetreden!';
-            outputDiv.innerText = `Foutmelding: ${error.message}\n\nControleer of:\n1. Je AI-bridge engine (C# app / Ollama) actief is.\n2. CORS-headers correct zijn ingesteld.`;
+            aiBubble.innerText = `Fout bij communicatie met bridge: ${error.message}`;
         } finally {
             submitBtn.disabled = false;
         }

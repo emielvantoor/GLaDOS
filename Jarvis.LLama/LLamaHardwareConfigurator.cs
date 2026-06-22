@@ -162,6 +162,12 @@ public static class LLamaHardwareConfigurator
         }
     }
 
+    /// <summary>
+    /// 
+    /// </summary>
+    /// <param name="configuration"></param>
+    /// <returns></returns>
+    /// <exception cref="ArgumentNullException"></exception>
     public static ModelParams CreateOptimizedParameters(IConfiguration configuration)
     {
         // 1. Dwing de configurator EERST de juiste .so/.dll paden te registreren!
@@ -180,7 +186,9 @@ public static class LLamaHardwareConfigurator
         {
             ContextSize = contextSize,
             Threads = cpuCores,
-            GpuLayerCount = _useGpu ? 99 : 0
+            GpuLayerCount = _useGpu ? 99 : 0,
+            TypeK = GGMLType.GGML_TYPE_Q8_0,
+            TypeV = GGMLType.GGML_TYPE_Q8_0,
         };
     }
 }
