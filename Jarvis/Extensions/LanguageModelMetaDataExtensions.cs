@@ -1,4 +1,5 @@
-﻿using Jarvis.Core.Models;
+﻿using Jarvis.Core.Interfaces;
+using Jarvis.Core.Models;
 using Jarvis.Models;
 
 namespace Jarvis.Extensions;
@@ -34,5 +35,26 @@ public static class LanguageModelMetaDataExtensions
             IsBlocking = permission.IsBlocking,
             Organization = permission.Organization
         };
+    }
+
+    /// <summary>
+    /// 
+    /// </summary>
+    /// <param name="role"></param>
+    /// <returns></returns>
+    public static AgentRole ToDomainRole(string role)
+    {
+        return role.ToLower() switch
+        {
+            "system" => AgentRole.System,
+            "assistant" => AgentRole.Assistant,
+            "tool" => AgentRole.Tool,
+            _ => AgentRole.User
+        };
+    }
+
+    public static AgentMessage ToDomainModel(this ChatMessage message)
+    {
+        return new AgentMessage(ToDomainRole(message.Role), message.Content);
     }
 }
