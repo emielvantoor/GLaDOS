@@ -1,4 +1,5 @@
 ﻿using System.Text;
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using Jarvis.Core.Agents;
 using Jarvis.Core.Models;
@@ -136,9 +137,17 @@ public static class OpenAiEndpoints
     //     }
     // }
 
-    private static async Task<IResult> HandleChatCompletions(IModelManager modelManager, ChatCompletionRequest request, JarvisAgent agent, CancellationToken token)
+    /// <summary>
+    /// Handles chat completions by processing the request, retrieving the model, and running the agent to generate the response.
+    /// </summary>
+    /// <param name="modelManager">The model manager to retrieve and initialize the language model.</param>
+    /// <param name="request">The chat completion request containing the messages.</param>
+    /// <param name="agent">The agent to handle the complete interaction.</param>
+    /// <param name="token">The cancellation token to handle asynchronous operations.</param>
+    /// <returns>A task that represents the asynchronous operation. Returns a stream of chat completion chunks or an error result.</returns>
+    private static async Task<IResult> HandleChatCompletions(IModelManager modelManager, ChatCompletionRequest request,
+        JarvisAgent agent, CancellationToken token)
     {
-    
         if (request?.Messages == null || !request.Messages.Any())
         {
             return Results.BadRequest("Invalide request of lege berichtenlijst.");
@@ -157,43 +166,63 @@ public static class OpenAiEndpoints
         // De agent handelt nu autonoom de complete interactie af!
         var agentResultStream = agent.RunAsync(model, [.. request.Messages.Select(message => message.ToDomainModel())], token);
     
-        // Stream het resultaat direct terug naar je ChatGPT HTML pagina
-        return Results.Stream(async stream => {
-            await using var writer = new StreamWriter(stream);
-    
-            // Zorg ervoor dat de StreamWriter expliciet \n gebruikt als regeleinde (voorkomt \r\n op Windows)
-            writer.NewLine = "\n";
+        // Gebruik de juiste encoder om HTML/Markdown escaping te minimaliseren
+        var serializerOptions = new JsonSerializerOptions
+        {
+            Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+        };
 
+// Genereer één unieke ID voor de gehele sessie/request
+        string chunkId = $"chatcmpl-{Guid.NewGuid()}";
+        long createdTimestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        string modelName = request.Model ?? "local-model"; // Zorg dat de modelnaam matcht
+
+        return Results.Stream(async stream => {
+            await using var writer = new StreamWriter(stream) { NewLine = "\n" };
+    
             await foreach (var text in agentResultStream)
             {
-                // Voeg index: 0 toe, dit verwachten veel IDE-plugins
-                var chunk = new { 
+                if (text == null) continue;
+
+                // Bouw exact de structuur na waar Rider om vraagt
+                var openAIChunk = new {
+                    id = chunkId,
+                    @object = "chat.completion.chunk", // 'object' is een C# keyword, dus @ gebruiken
+                    created = createdTimestamp,
+                    model = modelName,
                     choices = new[] { 
                         new { 
+                            index = 0,
                             delta = new { content = text },
-                            index = 0
+                            finish_reason = (string?)null
                         } 
                     } 
                 };
         
-                // WriteAsync in plaats van WriteLineAsync gebruiken om volledige controle te houden over de \n\n
-                await writer.WriteAsync($"data: {JsonSerializer.Serialize(chunk)}\n\n");
+                var json = JsonSerializer.Serialize(openAIChunk, serializerOptions);
+        
+                await writer.WriteAsync($"data: {json}\n\n");
                 await writer.FlushAsync(token);
             }
 
-            // Stuur de officiële finish_reason "stop" chunk vlak voor de [DONE] marker
-            var finalChunk = new { 
+            // Optioneel: stuur de officiële afsluitende chunk met finish_reason "stop"
+            var finalChunk = new {
+                id = chunkId,
+                @object = "chat.completion.chunk",
+                created = createdTimestamp,
+                model = modelName,
                 choices = new[] { 
                     new { 
-                        delta = new { }, 
-                        index = 0, 
-                        finish_reason = "stop" 
+                        index = 0,
+                        delta = new { },
+                        finish_reason = "stop"
                     } 
                 } 
             };
-            await writer.WriteAsync($"data: {JsonSerializer.Serialize(finalChunk)}\n\n");
+            var finalJson = JsonSerializer.Serialize(finalChunk, serializerOptions);
+            await writer.WriteAsync($"data: {finalJson}\n\n");
 
-            // Sluit netjes af met [DONE]
+            // Sluit af met de OpenAI-standaard marker
             await writer.WriteAsync("data: [DONE]\n\n");
             await writer.FlushAsync(token);
         }, "text/event-stream");
