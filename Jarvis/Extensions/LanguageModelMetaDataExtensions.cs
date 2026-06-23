@@ -40,10 +40,10 @@ public static class LanguageModelMetaDataExtensions
     }
 
     /// <summary>
-    /// 
+    /// Converts a string representation of an agent role to the corresponding AgentRole enum value.
     /// </summary>
-    /// <param name="role"></param>
-    /// <returns></returns>
+    /// <param name="role">The string representation of the agent role.</param>
+    /// <returns>The corresponding AgentRole enum value.</returns>
     public static AgentRole ToDomainRole(string role)
     {
         return role.ToLower() switch
@@ -58,5 +58,10 @@ public static class LanguageModelMetaDataExtensions
     public static AgentMessage ToDomainModel(this ChatMessage message)
     {
         return new AgentMessage(ToDomainRole(message.Role), message.Content);
+    }
+
+    public static AgentToolDefinition ToDomainModel(this ChatCompletionTool tool)
+    {
+        return new AgentToolDefinition(tool.Function.Name, tool.Function.Description, tool.Function.Parameters);
     }
 }

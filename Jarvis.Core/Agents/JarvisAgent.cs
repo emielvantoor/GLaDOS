@@ -17,71 +17,81 @@ public class JarvisAgent
         _tools = tools.ToDictionary(t => t.Name);
     }
 
-    public async IAsyncEnumerable<string> RunAsync(
-        LanguageModel model,
-        List<AgentMessage> chatHistory,
-        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+  public async IAsyncEnumerable<string> RunAsync(
+    LanguageModel model,
+    List<AgentMessage> chatHistory,
+    List<AgentToolDefinition>? externalTools = null, // NIEUW: Accepteer Rider's dynamische tools
+    [EnumeratorCancellation] CancellationToken cancellationToken = default)
+{
+    // 1. Combineer je eigen geïnjecteerde tools met de dynamische tools van Rider
+    var toolDefinitions = _tools.Values
+        .Select(t => new AgentToolDefinition(t.Name, t.Description, t.Parameters))
+        .ToList();
+
+    if (externalTools != null)
     {
-        int maxIterations = 5;
-        int currentIteration = 0;
-        bool keepRunning = true;
+        toolDefinitions.AddRange(externalTools);
+    }
 
-        var toolDefinitions = _tools.Values.Select(t => new AgentToolDefinition(t.Name, t.Description, t.Parameters))
-            .ToList();
+    int maxIterations = 5;
+    int currentIteration = 0;
+    bool keepRunning = true;
 
-        while (keepRunning && currentIteration < maxIterations)
+    while (keepRunning && currentIteration < maxIterations)
+    {
+        currentIteration++;
+
+        var responseStream = model.GenerateChatResponseAsync(chatHistory, toolDefinitions, cancellationToken);
+
+        bool isToolCallDetected = false;
+        string? activeToolName = null;
+        string? activeToolArgs = null;
+
+        await foreach (var chunk in responseStream)
         {
-            currentIteration++;
-
-            var responseStream = model.GenerateChatResponseAsync(chatHistory, toolDefinitions, cancellationToken);
-
-            // CRUCIAAL: Reset deze vlaggen bij ELKE nieuwe denk-ronde van de loop!
-            bool isToolCallDetected = false;
-            string? activeToolName = null;
-            string? activeToolArgs = null;
-
-            await foreach (var chunk in responseStream)
+            if (cancellationToken.IsCancellationRequested) break;
+            
+            if (chunk.IsToolCall)
             {
-                if (cancellationToken.IsCancellationRequested)
-                {
-                    break;
-                }
-                
-                if (chunk.IsToolCall)
-                {
-                    isToolCallDetected = true;
-                    activeToolName = chunk.ToolName;
-                    activeToolArgs = chunk.ToolArgs;
-                    continue; // Spring naar volgende chunk, stream niks naar de UI!
-                }
-
-                // Stream ALLEEN naar de UI als er in deze specifieke ronde GEEN tool call bezig is
-                if (!isToolCallDetected && !string.IsNullOrEmpty(chunk.Text))
-                {
-                    yield return chunk.Text;
-                }
+                isToolCallDetected = true;
+                activeToolName = chunk.ToolName;
+                activeToolArgs = chunk.ToolArgs;
+                continue; 
             }
 
-            // Als de GPU klaar is met praten/denken en een tool_call heeft klaargezet:
-            if (isToolCallDetected && !string.IsNullOrEmpty(activeToolName) &&
-                _tools.TryGetValue(activeToolName, out var tool))
+            if (!isToolCallDetected && !string.IsNullOrEmpty(chunk.Text))
             {
-                // 1. Sla de beslissing van de assistent op
-                chatHistory.Add(new AgentMessage(AgentRole.Assistant, "", activeToolName, activeToolArgs));
+                yield return chunk.Text;
+            }
+        }
 
-                // 2. Voer de tool geruisloos uit in C# (zonder te yielden naar de UI!)
+        // Als er een tool call is gedetecteerd:
+        if (isToolCallDetected && !string.IsNullOrEmpty(activeToolName))
+        {
+            // CHECK: Is dit een INTERNE tool van Jarvis?
+            if (_tools.TryGetValue(activeToolName, out var tool))
+            {
+                chatHistory.Add(new AgentMessage(AgentRole.Assistant, "", activeToolName, activeToolArgs));
                 var jsonArgs = JsonNode.Parse(activeToolArgs ?? "{}")!.AsObject();
                 string toolOutput = await tool.ExecuteAsync(jsonArgs);
-
-                // 3. Voeg het resultaat toe aan de geschiedenis
                 chatHistory.Add(new AgentMessage(AgentRole.Tool, toolOutput));
-
-                // 4. Blijf in de while-loop zodat het model in de volgende ronde de tijd kan vertalen naar tekst!
-                continue;
+                
+                continue; // Blijf intern loopen
             }
-
-            // Als het model in deze ronde gewoon tekst heeft gespugd zonder tools, zijn we helemaal klaar.
-            keepRunning = false;
+            else
+            {
+                // EXTENSIE: Dit is een EXTERNE tool van Rider!
+                // We kunnen dit niet zelf uitvoeren. We moeten de loop direct BREKEN 
+                // en een speciaal signaal (bijv. een geprepareerde JSON-string) terug 'yielden' naar de Web API.
+                
+                string toolCallPayload = $"__TOOL_CALL__:{activeToolName}|{activeToolArgs}";
+                yield return toolCallPayload;
+                
+                break; // Stop de loop, geef de controle terug aan Rider via de controller!
+            }
         }
+
+        keepRunning = false;
     }
+}
 }

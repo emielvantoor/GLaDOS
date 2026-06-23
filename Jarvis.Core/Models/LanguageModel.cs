@@ -13,14 +13,6 @@ public abstract class LanguageModel
     
     protected abstract Task OnInitializeAsync();
     
-    public IAsyncEnumerable<(string Text, int Percent)> GenerateResponseAsync(string formattedPrompt, CancellationToken cancellationToken = default)
-    {
-        return OnGenerateResponseAsync(formattedPrompt, cancellationToken);
-    }
-    
-    protected abstract IAsyncEnumerable<(string Text, int Percent)> OnGenerateResponseAsync(string formattedPrompt, CancellationToken cancellationToken = default);
-    
-    
 // De streaming methode die de Agent gebruikt om rollen, geschiedenis en tools te verwerken
     public IAsyncEnumerable<ChatResponseChunk> GenerateChatResponseAsync(
         List<AgentMessage> history, 

@@ -190,9 +190,9 @@ public static class LLamaHardwareConfigurator
                 ? int.TryParse(configuration["Jarvis:GpuLayerCount"], out var gpuLayerCount) 
                     ? gpuLayerCount : 99
                 : 0,
-            TypeK = GGMLType.GGML_TYPE_Q8_0,
-            TypeV = GGMLType.GGML_TYPE_Q8_0,
-            FlashAttention = true
+            // TypeK = GGMLType.GGML_TYPE_Q8_0,
+            // TypeV = GGMLType.GGML_TYPE_Q8_0,
+            FlashAttention = false
         };
     }
 }
