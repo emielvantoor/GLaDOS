@@ -21,8 +21,8 @@ public class LLamaLanguageModel : LanguageModel, IDisposable
     private readonly ModelParams _params;
     private LLamaWeights? _weights;
     private LLamaContext? _context;
-    private InteractiveExecutor? _executor;
     private bool _isDisposed;
+    private bool _initalized;
 
     public override LanguageModelMetaData ModelMetaData { get; }
 
@@ -35,49 +35,17 @@ public class LLamaLanguageModel : LanguageModel, IDisposable
 
     protected override Task OnInitializeAsync()
     {
+        if (_initalized)
+        {
+            return Task.CompletedTask;
+        }
+
         // De hardware configurator heeft _params al optimaal gevuld (ContextSize, BatchSize, Q8_0 cache, GPU)
         _weights = LLamaWeights.LoadFromFile(_params);
         _context = _weights.CreateContext(_params);
-        _executor = new InteractiveExecutor(_context);
-
+        _initalized = true;
+        
         return Task.CompletedTask;
-    }
-
-    protected override async IAsyncEnumerable<(string Text, int Percent)> OnGenerateResponseAsync(
-        string formattedPrompt,
-        [EnumeratorCancellation] CancellationToken cancellationToken = default)
-    {
-        if (_executor == null)
-        {
-            throw new InvalidOperationException(
-                "Het model is nog niet geïnitialiseerd. Roep eerst InitializeAsync() aan.");
-        }
-
-        var inferenceParams = new InferenceParams()
-        {
-            MaxTokens = 1024,
-            SamplingPipeline = new DefaultSamplingPipeline()
-            {
-                Temperature = 0.5f,
-                Seed = (uint)Random.Shared.Next(1, 100000)
-            },
-            AntiPrompts = new List<string>
-            {
-                "<|end|>",
-                "<|end|>\n",
-                "<|im_end|>",
-                "<|user|>",
-                "<|system|>",
-                "<|assistant|>",
-                "User:",
-                "\nUser:"
-            }
-        };
-
-        await foreach (var token in _executor.InferAsync(formattedPrompt, inferenceParams, cancellationToken))
-        {
-            yield return (token, 0);
-        }
     }
 
     protected override async IAsyncEnumerable<ChatResponseChunk> OnGenerateChatResponseAsync(
@@ -85,11 +53,6 @@ public class LLamaLanguageModel : LanguageModel, IDisposable
         List<AgentToolDefinition> tools,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
-        if (_executor == null)
-        {
-            throw new InvalidOperationException("Het model is nog niet geïnitialiseerd.");
-        }
-
         // 1. Formatteer de geschiedenis naar de vlekkeloze Engelse ChatML structuur voor Qwen
         string formattedPrompt = FormatHistoryToChatML(history, tools);
 
@@ -110,7 +73,9 @@ public class LLamaLanguageModel : LanguageModel, IDisposable
         int bracketCount = 0;
         int totalTokensProcessed = 0;
 
-        await foreach (var token in _executor.InferAsync(formattedPrompt, inferenceParams, cancellationToken))
+        var executor = new StatelessExecutor(_weights!, _params);
+        
+        await foreach (var token in executor.InferAsync(formattedPrompt, inferenceParams, cancellationToken))
         {
             totalTokensProcessed++;
 
@@ -179,6 +144,8 @@ public class LLamaLanguageModel : LanguageModel, IDisposable
                 }
             }
         }
+        
+        executor.Context.Dispose();
     }
 
     private bool TryParseToolCall(string jsonString, out string name, out string args)

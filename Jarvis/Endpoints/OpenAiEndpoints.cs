@@ -148,82 +148,101 @@ public static class OpenAiEndpoints
     /// <param name="agent">The agent to handle the interaction.</param>
     /// <param name="context">The HTTP context for the request.</param>
     /// <returns>An asynchronous result representing the chat completion response.</returns>
-    private static async Task<IResult> HandleChatCompletions(IModelManager modelManager,
-        JarvisAgent agent, HttpContext context)
+private static async Task<IResult> HandleChatCompletions(IModelManager modelManager,
+    JarvisAgent agent, HttpContext context)
+{
+    // Dit is het échte live-signaal van Rider
+    var token = context.RequestAborted;
+
+    try
     {
-        // Dit is het échte live-signaal van Rider
-        var token = context.RequestAborted;
+        await _llmLock.WaitAsync(token);
+    }
+    catch (OperationCanceledException)
+    {
+        return Results.BadRequest("Operation cancelled");
+    }
 
+    Console.WriteLine("Handling Chat Completions");
+
+    // 1. Lees het request handmatig als een stream uit de HTTP body
+    ChatCompletionRequest? request = null;
+    try
+    {
+        request = await JsonSerializer.DeserializeAsync<ChatCompletionRequest>(
+            context.Request.Body,
+            cancellationToken: token);
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"Fout bij het lezen van Rider request stream: {ex.Message}");
+        _llmLock.Release(); // Vergeet de lock niet vrij te geven bij een vroege crash
+        return Results.BadRequest("Invalide JSON of stream afgebroken.");
+    }
+
+    if (request?.Messages == null || !request.Messages.Any())
+    {
+        _llmLock.Release();
+        return Results.BadRequest("Invalide request of lege berichtenlijst.");
+    }
+
+    LanguageModel model;
+    try
+    {
+        model = await modelManager.GetAndInitializeModel(request.Model);
+    }
+    catch (Exception ex)
+    {
+        _llmLock.Release();
+        return Results.Problem($"Fout bij laden van model: {ex.Message}");
+    }
+
+    // Zet de tools om (omgerekend naar null-safe lijsten voor .NET 8/9 expressies)
+    var domainMessages = request.Messages.Select(message => message.ToDomainModel()).ToList();
+    var domainTools = request.Tools?.Select(tool => tool.ToDomainModel()).ToList() ?? new();
+
+    // De agent handelt nu autonoom de complete interactie af!
+    var agentResultStream = agent.RunAsync(model, domainMessages, domainTools, token);
+
+    // Gebruik de juiste encoder om HTML/Markdown escaping te minimaliseren
+    var serializerOptions = new JsonSerializerOptions
+    {
+        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+    };
+
+    // Genereer één unieke ID voor de gehele sessie/request
+    string chunkId = $"chatcmpl-{Guid.NewGuid()}";
+    long createdTimestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+    string modelName = request.Model ?? "local-model";
+
+    return Results.Stream(async stream =>
+    {
         try
         {
-            await _llmLock.WaitAsync(token);
-        }
-        catch (OperationCanceledException)
-        {
-            return Results.BadRequest("Operation cancelled");
-        }
+            await using var writer = new StreamWriter(stream) { NewLine = "\n" };
+            bool toolCallTriggered = false;
 
-        Console.WriteLine("Handling Chat Completions");
-
-        // 1. Lees het request handmatig als een stream uit de HTTP body
-        ChatCompletionRequest? request = null;
-        try
-        {
-            // Hiermee stream je de binnenkomende JSON-data van Rider direct naar de deserializer
-            request = await JsonSerializer.DeserializeAsync<ChatCompletionRequest>(
-                context.Request.Body,
-                cancellationToken: token);
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"Fout bij het lezen van Rider request stream: {ex.Message}");
-            return Results.BadRequest("Invalide JSON of stream afgebroken.");
-        }
-
-        if (request?.Messages == null || !request.Messages.Any())
-        {
-            return Results.BadRequest("Invalide request of lege berichtenlijst.");
-        }
-
-        LanguageModel model;
-        try
-        {
-            model = await modelManager.GetAndInitializeModel(request.Model);
-        }
-        catch (Exception ex)
-        {
-            return Results.Problem($"Fout bij laden van model: {ex.Message}");
-        }
-
-        // De agent handelt nu autonoom de complete interactie af!
-        var agentResultStream =
-            agent.RunAsync(model, [.. request.Messages.Select(message => message.ToDomainModel())], token);
-
-        // Gebruik de juiste encoder om HTML/Markdown escaping te minimaliseren
-        var serializerOptions = new JsonSerializerOptions
-        {
-            Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
-        };
-
-        // Genereer één unieke ID voor de gehele sessie/request
-        string chunkId = $"chatcmpl-{Guid.NewGuid()}";
-        long createdTimestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-        string modelName = request.Model ?? "local-model"; // Zorg dat de modelnaam matcht
-
-
-        return Results.Stream(async stream =>
-        {
-            try
+            await foreach (var text in agentResultStream)
             {
-                await using var writer = new StreamWriter(stream) { NewLine = "\n" };
+                if (token.IsCancellationRequested) break;
 
-                await foreach (var text in agentResultStream)
+                // INTERCEPTIE: Check of de agent een externe tool call van Rider heeft gegenereerd
+                if (!string.IsNullOrEmpty(text) && text.StartsWith("__TOOL_CALL__:"))
                 {
-                    // Bouw exact de structuur na waar Rider om vraagt
-                    var openAIChunk = new
+                    toolCallTriggered = true;
+                    
+                    // Format parseren: "__TOOL_CALL__:tool_name|{arguments}"
+                    var payload = text["__TOOL_CALL__:".Length..];
+                    var separatorIndex = payload.IndexOf('|');
+                    
+                    string toolName = separatorIndex >= 0 ? payload[..separatorIndex] : payload;
+                    string toolArgs = separatorIndex >= 0 ? payload[(separatorIndex + 1)..] : "{}";
+
+                    // Bouw de officiële OpenAI Tool Call Chunk voor de IDE
+                    var toolCallChunk = new
                     {
                         id = chunkId,
-                        @object = "chat.completion.chunk", // 'object' is een C# keyword, dus @ gebruiken
+                        @object = "chat.completion.chunk",
                         created = createdTimestamp,
                         model = modelName,
                         choices = new[]
@@ -231,19 +250,61 @@ public static class OpenAiEndpoints
                             new
                             {
                                 index = 0,
-                                delta = new { content = text },
-                                finish_reason = (string?)null
+                                delta = new
+                                {
+                                    tool_calls = new[]
+                                    {
+                                        new
+                                        {
+                                            index = 0,
+                                            id = $"call_{Guid.NewGuid():n}", // Genereer een schone, unieke hex-string
+                                            type = "function",
+                                            function = new
+                                            {
+                                                name = toolName,
+                                                arguments = toolArgs
+                                            }
+                                        }
+                                    }
+                                },
+                                finish_reason = "tool_calls" // Dit triggert de executie binnen Rider
                             }
                         }
                     };
 
-                    var json = JsonSerializer.Serialize(openAIChunk, serializerOptions);
-
-                    await writer.WriteAsync($"data: {json}\n\n");
+                    var jsonTool = JsonSerializer.Serialize(toolCallChunk, serializerOptions);
+                    await writer.WriteAsync($"data: {jsonTool}\n\n");
                     await writer.FlushAsync(token);
+                    
+                    break; // Breek de loop direct af; Rider krijgt nu de leiding over de workflow!
                 }
 
-                // Optioneel: stuur de officiële afsluitende chunk met finish_reason "stop"
+                // Normale text-generation chunks streamen
+                var openAIChunk = new
+                {
+                    id = chunkId,
+                    @object = "chat.completion.chunk",
+                    created = createdTimestamp,
+                    model = modelName,
+                    choices = new[]
+                    {
+                        new
+                        {
+                            index = 0,
+                            delta = new { content = text },
+                            finish_reason = (string?)null
+                        }
+                    }
+                };
+
+                var json = JsonSerializer.Serialize(openAIChunk, serializerOptions);
+                await writer.WriteAsync($"data: {json}\n\n");
+                await writer.FlushAsync(token);
+            }
+
+            // Alleen de reguliere "stop" chunks versturen als er géén tool call is afgehandeld
+            if (!toolCallTriggered && !token.IsCancellationRequested)
+            {
                 var finalChunk = new
                 {
                     id = chunkId,
@@ -262,18 +323,21 @@ public static class OpenAiEndpoints
                 };
                 var finalJson = JsonSerializer.Serialize(finalChunk, serializerOptions);
                 await writer.WriteAsync($"data: {finalJson}\n\n");
+            }
 
-                // Sluit af met de OpenAI-standaard marker
-                await writer.WriteAsync("data: [DONE]\n\n");
-                await writer.FlushAsync(token);
-            }
-            finally
-            {
-                // CRUCIAAL: Laat de lock pas los als de stream HELEMAAL klaar is of is afgebroken!
-                _llmLock.Release();
-            }
-        }, "text/event-stream");
-    }
+            // Sluit de SSE stream netjes af volgens protocol
+            await writer.WriteAsync("data: [DONE]\n\n");
+            await writer.FlushAsync(token);
+        }
+        finally
+        {
+            // Lock en resources vrijgeven
+            _llmLock.Release();
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+        }
+    }, "text/event-stream");
+}
 
     private static IResult GetModels(IModelManager modelManager)
     {
