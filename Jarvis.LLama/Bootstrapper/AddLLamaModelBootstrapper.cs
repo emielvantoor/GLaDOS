@@ -22,7 +22,7 @@ public static class AddLLamaModelBootstrapper
             
             ContextLength =  8192,
             
-            MaxOutputTokens =  1024,
+            MaxOutputTokens =  -1,
     
             Permission = [
                 new LanguageModelPermission

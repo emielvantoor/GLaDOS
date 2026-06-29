@@ -20,6 +20,7 @@ public class JarvisAgent
   public async IAsyncEnumerable<string> RunAsync(
     LanguageModel model,
     List<AgentMessage> chatHistory,
+    ChatOptions options,
     List<AgentToolDefinition>? externalTools = null, // NIEUW: Accepteer Rider's dynamische tools
     [EnumeratorCancellation] CancellationToken cancellationToken = default)
 {
@@ -41,7 +42,7 @@ public class JarvisAgent
     {
         currentIteration++;
 
-        var responseStream = model.GenerateChatResponseAsync(chatHistory, toolDefinitions, cancellationToken);
+        var responseStream = model.GenerateChatResponseAsync(chatHistory, options, toolDefinitions, cancellationToken);
 
         bool isToolCallDetected = false;
         string? activeToolName = null;

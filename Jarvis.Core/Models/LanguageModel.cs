@@ -16,14 +16,16 @@ public abstract class LanguageModel
 // De streaming methode die de Agent gebruikt om rollen, geschiedenis en tools te verwerken
     public IAsyncEnumerable<ChatResponseChunk> GenerateChatResponseAsync(
         List<AgentMessage> history, 
+        ChatOptions options,
         List<AgentToolDefinition> tools, 
         CancellationToken cancellationToken = default)
     {
-        return OnGenerateChatResponseAsync(history, tools, cancellationToken);
+        return OnGenerateChatResponseAsync(history, options, tools, cancellationToken);
     }
     
     protected abstract IAsyncEnumerable<ChatResponseChunk> OnGenerateChatResponseAsync(
         List<AgentMessage> history, 
+        ChatOptions options,
         List<AgentToolDefinition> tools, 
         CancellationToken cancellationToken = default);
 }
