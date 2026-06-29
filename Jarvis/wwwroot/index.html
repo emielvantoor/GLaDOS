@@ -95,7 +95,6 @@
             .layout-grid { grid-template-columns: 1fr; }
         }
 
-        /* ChatGPT Chat logica */
         .chat-box {
             border: 1px solid var(--border-color);
             border-radius: 8px;
@@ -133,7 +132,6 @@
             border-bottom-left-radius: 2px;
         }
 
-        /* Tool Call UI */
         .message.tool-call {
             background-color: #fef3c7;
             color: #92400e;
@@ -143,6 +141,7 @@
             font-family: monospace;
             font-size: 12px;
             max-width: 90%;
+            padding: 8px 12px;
         }
         [data-theme="dark"] .message.tool-call {
             background-color: #78350f;
@@ -150,7 +149,6 @@
             border: 1px dashed #d97706;
         }
 
-        /* Sidebar / Info panel */
         .sidebar {
             display: flex;
             flex-direction: column;
@@ -218,7 +216,6 @@
         button#submitBtn:hover { background-color: #1d4ed8; }
         button#submitBtn:disabled { background-color: #94a3b8; }
 
-        /* Raw Inspector component */
         .inspector-toggle {
             margin-top: 20px;
             background: none;
@@ -251,6 +248,11 @@
             border: 1px solid var(--border-color);
             margin: 0;
         }
+
+        #model-info p {
+            margin: 4px 0;
+            font-size: 12px;
+        }
     </style>
 </head>
 <body>
@@ -279,15 +281,27 @@
             <div class="panel">
                 <div class="panel-title">Configuratie</div>
                 <div style="margin-bottom: 10px;">
-                    <label style="font-size:11px;">Endpoint</label>
-                    <input type="text" id="endpoint" style="padding:5px; font-size:11px;">
+                    <label style="font-size:11px; display:block; margin-bottom:2px;">Endpoint</label>
+                    <input type="text" id="endpoint" style="padding:5px; font-size:11px; width:100%; box-sizing:border-box;">
                 </div>
-                <div>
-                    <label style="font-size:11px;">Actief Model</label>
-                    <select id="model" style="padding:5px; font-size:11px;">
+                <div style="margin-bottom: 10px;">
+                    <label style="font-size:11px; display:block; margin-bottom:2px;">Actief Model</label>
+                    <select id="model" style="padding:5px; font-size:11px; width:100%;">
                         <option value="">Laden...</option>
                     </select>
                 </div>
+                <div>
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2px;">
+                        <label style="font-size:11px;">Creativiteit (Temp)</label>
+                        <span id="tempValue" style="font-size:11px; font-weight: bold; color: var(--chat-user-bg);">0.7</span>
+                    </div>
+                    <input type="range" id="temperature" min="0.0" max="2.0" step="0.1" value="0.7" style="width: 100%; margin: 0;" oninput="updateTempVal(this.value)">
+                </div>
+            </div>
+
+            <div class="panel">
+                <div class="panel-title">Model Informatie</div>
+                <div id="model-info" style="word-break: break-all;">Wacht op model selectie...</div>
             </div>
 
             <div class="panel">
@@ -324,14 +338,17 @@
 
 <script>
     let chatHistory = [];
+    let baseEndpoint = ""; // Globally scoped tracking variable
 
     window.addEventListener('DOMContentLoaded', () => {
         const currentHost = window.location.host;
         const protocol = window.location.protocol;
-        const baseEndpoint = currentHost ? `${protocol}//${currentHost}` : "http://localhost:11434";
+
+        // Dynamically compute baseline URL context
+        baseEndpoint = currentHost ? `${protocol}//${currentHost}` : "http://localhost:11434";
 
         document.getElementById('endpoint').value = `${baseEndpoint}/v1/chat/completions`;
-        loadModels(baseEndpoint);
+        loadModels();
 
         if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
             toggleTheme();
@@ -369,27 +386,64 @@
         }
     }
 
-    async function loadModels(baseEndpoint) {
+    function updateTempVal(val) {
+        document.getElementById('tempValue').innerText = parseFloat(val).toFixed(1);
+    }
+
+    async function fetchModelInfo(modelName) {
+        const modelInfoDiv = document.getElementById('model-info');
+        modelInfoDiv.innerHTML = 'Loading model info...';
+
+        try {
+            const response = await fetch(`${baseEndpoint}/v1/models/${encodeURIComponent(modelName)}`, { method: 'GET' });
+            if (!response.ok) throw new Error();
+            const data = await response.json();
+
+            // Render cleanly and check structure variations safely
+            modelInfoDiv.innerHTML = `
+                <p><strong>ID:</strong> ${data.id || modelName}</p>
+                <p><strong>Object:</strong> ${data.object || 'model'}</p>
+                <p><strong>Owned By:</strong> ${data.owned_by || 'local'}</p>
+                ${data.created ? `<p><strong>Created:</strong> ${new Date(data.created * 1000).toLocaleDateString()}</p>` : ''}
+            `;
+        } catch {
+            modelInfoDiv.innerHTML = `<span style="color:var(--status-color); font-size:12px;">Geen aanvullende metadata gevonden voor ${modelName}.</span>`;
+        }
+    }
+
+    async function loadModels() {
         const modelSelect = document.getElementById('model');
         try {
             const response = await fetch(`${baseEndpoint}/v1/models`, { method: 'GET' });
             if (!response.ok) throw new Error();
             const data = await response.json();
             modelSelect.innerHTML = '';
-            data.data.forEach(m => {
-                const opt = document.createElement('option');
-                opt.value = m.id; opt.innerText = m.id;
-                modelSelect.appendChild(opt);
-            });
-        } catch {
+
+            if (data.data && data.data.length > 0) {
+                data.data.forEach(m => {
+                    const opt = document.createElement('option');
+                    opt.value = m.id; opt.innerText = m.id;
+                    modelSelect.appendChild(opt);
+                });
+                fetchModelInfo(data.data[0].id);
+            } else {
+                throw new Error("No models returned");
+            }
+        } catch (err) {
             modelSelect.innerHTML = '<option value="qwen2.5-coder-14b">qwen2.5-coder-14b</option>';
             document.getElementById('statusText').innerText = 'Status: Fallback model geladen.';
+            fetchModelInfo('qwen2.5-coder-14b');
         }
+
+        modelSelect.addEventListener('change', (e) => {
+            fetchModelInfo(e.target.value);
+        });
     }
 
     async function sendPrompt() {
         const endpoint = document.getElementById('endpoint').value;
         const model = document.getElementById('model').value;
+        const temp = parseFloat(document.getElementById('temperature').value);
         const promptInput = document.getElementById('prompt');
         const chatBox = document.getElementById('chatBox');
         const statusText = document.getElementById('statusText');
@@ -400,7 +454,6 @@
         const userText = promptInput.value.trim();
         if (!userText) return;
 
-        // Voeg toe aan UI als ChatGPT bubble
         chatBox.innerHTML += `<div class="message user">${userText}</div>`;
         promptInput.value = '';
         chatBox.scrollTop = chatBox.scrollHeight;
@@ -408,14 +461,13 @@
         statusText.innerText = 'Jarvis nadenken...';
         submitBtn.disabled = true;
 
-        // Update geschiedenis voor de API
         chatHistory.push({ role: "user", content: userText });
 
         const requestBody = {
             model: model,
             messages: chatHistory,
+            temperature: temp,
             stream: true,
-            // ChatGPT tool support simulatie structuur
             tools: [
                 { type: "function", function: { name: "web_search", description: "Zoek live op internet" } },
                 { type: "function", function: { name: "execute_bash", description: "Draai een lokaal shell commando" } }
@@ -423,14 +475,20 @@
         };
 
         rawReqPre.innerText = JSON.stringify(requestBody, null, 2);
-        rawStreamPre.innerText = ''; // Reset stream log
+        rawStreamPre.innerText = '';
 
-        // Maak alvast lege AI bubble aan voor streaming effect
         const aiBubbleId = 'ai-' + Date.now();
         chatBox.innerHTML += `<div class="message assistant" id="${aiBubbleId}"></div>`;
         const aiBubble = document.getElementById(aiBubbleId);
 
         try {
+            if (userText.toLowerCase().includes('zoek') || userText.toLowerCase().includes('weer')) {
+                chatBox.insertBefore(Object.assign(document.createElement('div'), {
+                    className: 'message tool-call',
+                    innerText: `🔧 [TOOL CALL]: web_search(query="${userText}") -> Status: Success`
+                }), aiBubble);
+            }
+
             const response = await fetch(endpoint, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -443,14 +501,6 @@
             const decoder = new TextDecoder('utf-8');
             let buffer = '';
             let assistantFullContent = '';
-
-            // ChatGPT Tool-call simulatie kans berekenen om te laten zien hoe het werkt
-            if (userText.toLowerCase().includes('zoek') || userText.toLowerCase().includes('weer')) {
-                chatBox.insertBefore(Object.assign(document.createElement('div'), {
-                    className: 'message tool-call',
-                    innerText: `🔧 [TOOL CALL]: web_search(query="${userText}") -> Status: Success`
-                }), aiBubble);
-            }
 
             while (true) {
                 const { value, done } = await reader.read();
@@ -486,7 +536,6 @@
                 }
             }
 
-            // Voeg definitieve antwoord toe aan de OpenAI context geschiedenis
             chatHistory.push({ role: "assistant", content: assistantFullContent });
 
         } catch (error) {

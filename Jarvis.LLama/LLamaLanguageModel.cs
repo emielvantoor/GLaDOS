@@ -22,7 +22,7 @@ public class LLamaLanguageModel : LanguageModel, IDisposable
     private LLamaWeights? _weights;
     private LLamaContext? _context;
     private bool _isDisposed;
-    private bool _initalized;
+    private bool _initialized;
 
     public override LanguageModelMetaData ModelMetaData { get; }
 
@@ -35,7 +35,7 @@ public class LLamaLanguageModel : LanguageModel, IDisposable
 
     protected override Task OnInitializeAsync()
     {
-        if (_initalized)
+        if (_initialized)
         {
             return Task.CompletedTask;
         }
@@ -43,13 +43,14 @@ public class LLamaLanguageModel : LanguageModel, IDisposable
         // De hardware configurator heeft _params al optimaal gevuld (ContextSize, BatchSize, Q8_0 cache, GPU)
         _weights = LLamaWeights.LoadFromFile(_params);
         _context = _weights.CreateContext(_params);
-        _initalized = true;
+        _initialized = true;
         
         return Task.CompletedTask;
     }
 
     protected override async IAsyncEnumerable<ChatResponseChunk> OnGenerateChatResponseAsync(
         List<AgentMessage> history,
+        ChatOptions chatOptions,
         List<AgentToolDefinition> tools,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
@@ -61,7 +62,7 @@ public class LLamaLanguageModel : LanguageModel, IDisposable
             MaxTokens = ModelMetaData.MaxOutputTokens, // Ruimer voor complexere code-antwoorden
             SamplingPipeline = new DefaultSamplingPipeline()
             {
-                Temperature = 0.4f, // Iets ademruimte om makkelijker op te starten na een tool response,
+                Temperature = chatOptions.Temperature ?? 0.5f, // Iets ademruimte om makkelijker op te starten na een tool response,
                 Seed = (uint)Random.Shared.Next(1, 100000), // Dynamisch om executor/cache-loops te voorkomen
             },
             AntiPrompts = ["<|im_end|>"] // Alleen stoppen als de beurt ÉCHT voorbij is
