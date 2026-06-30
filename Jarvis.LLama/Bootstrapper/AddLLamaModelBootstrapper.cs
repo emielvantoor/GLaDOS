@@ -11,7 +11,7 @@ public static class AddLLamaModelBootstrapper
         var nextCoderMetaData = new LanguageModelMetaData
         {
             // De unieke identifier die je plugin meestuurt in het 'model' veld van de API request
-            Id = "microsoft-nextcoder-7b-instruct", 
+            Id = "qwen2.5-coder-7b-instruct", 
     
             Object = "model",
     
@@ -45,10 +45,9 @@ public static class AddLLamaModelBootstrapper
         
         services.AddSingleton<LanguageModel, LLamaLanguageModel>(provider =>
         {
-            const string modelPath = "C:\\Users\\Emiel\\Downloads\\NextCoder-7B-Q5_K_M.gguf";
             var modelParams = provider.GetRequiredService<ModelParams>();
             nextCoderMetaData.ContextLength = modelParams.ContextSize.HasValue ? (int) modelParams.ContextSize.Value : 0;
-            return new LLamaLanguageModel(modelPath, nextCoderMetaData, modelParams);
+            return new LLamaLanguageModel(nextCoderMetaData, modelParams);
         });
     }
 
