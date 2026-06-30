@@ -208,7 +208,7 @@ public class LLamaLanguageModel : LanguageModel, IDisposable
 
                 sb.Append(JsonSerializer.Serialize(toolSchema) + "\n");
                 sb.Append(
-                    "When you want to use a tool, you must invoke it using the official tool_calls API structure. Never output the JSON tool call as markdown code blocks in the chat response.");
+                    "When you want to use a tool, you must invoke it using the official tool_calls API structure. Never output the JSON tool call as markdown code blocks in the chat response. !!NEVER do ```json in front tool calls!!");
                 sb.Append(
                     "When you want to execute a tool, you must use the <tool_call> tags. Do never describe the tool in chat why you would choice this tool.");
             }

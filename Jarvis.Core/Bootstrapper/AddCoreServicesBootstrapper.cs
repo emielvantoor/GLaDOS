@@ -12,5 +12,6 @@ public static class AddCoreServicesBootstrapper
         services.AddSingleton<IModelManager, ModelManager>();
         services.AddSingleton<JarvisAgent>();
         services.AddSingleton<IJarvisTool, SystemTimeTool>();
+        services.AddSingleton<IJarvisTool, TemperatureTool>();
     }
 }
