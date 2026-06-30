@@ -1,12 +1,7 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Runtime.CompilerServices;
+﻿using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using System.Threading;
-using System.Threading.Tasks;
 using Jarvis.Core.Interfaces;
 using Jarvis.Core.Models;
 using LLama;
@@ -65,7 +60,7 @@ public class LLamaLanguageModel : LanguageModel, IDisposable
 
         var inferenceParams = new InferenceParams
         {
-            MaxTokens = ModelMetaData.MaxOutputTokens, // Ruimer voor complexere code-antwoorden
+            MaxTokens = chatOptions.MaxTokenLength ?? ModelMetaData.MaxOutputTokens, // Ruimer voor complexere code-antwoorden
             SamplingPipeline = new DefaultSamplingPipeline()
             {
                 Temperature = chatOptions.Temperature ?? 0.5f, // Iets ademruimte om makkelijker op te starten na een tool response,

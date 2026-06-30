@@ -1,20 +1,28 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Runtime.CompilerServices;
-using System.Text;
+using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Threading;
+using System.Threading.Tasks;
 using Jarvis.Core.Interfaces;
 using Jarvis.Core.Models;
 using Jarvis.Core.Tools;
+using Microsoft.Extensions.Logging;
 
 namespace Jarvis.Core.Agents;
 
 public class JarvisAgent
 {
     private readonly Dictionary<string, IJarvisTool> _tools;
+    private readonly ILogger<JarvisAgent> _logger;
 
     // Alleen de tools worden via DI geïnjecteerd
-    public JarvisAgent(IEnumerable<IJarvisTool> tools)
+    public JarvisAgent(IEnumerable<IJarvisTool> tools, ILogger<JarvisAgent> logger)
     {
         _tools = tools.ToDictionary(t => t.Name);
+        _logger = logger;
     }
 
     /// <summary>
@@ -37,6 +45,9 @@ public class JarvisAgent
         List<AgentToolDefinition>? externalTools = null, // NIEUW: Accepteer Rider's dynamische tools
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
+        // Log the start of the RunAsync method
+        _logger.LogInformation("Starting JarvisAgent.RunAsync");
+
         // 1. Combineer je eigen geïnjecteerde tools met de dynamische tools van Rider
         var toolDefinitions = _tools.Values
             .Select(t => new AgentToolDefinition(t.Name, t.Description, t.Parameters))
@@ -91,22 +102,26 @@ public class JarvisAgent
                     string toolOutput = await tool.ExecuteAsync(jsonArgs);
                     chatHistory.Add(new AgentMessage(AgentRole.Tool, toolOutput));
 
+                    _logger.LogInformation("Tool {ToolName} executed successfully", activeToolName);
                     continue; // Blijf intern loopen
                 }
                 else
                 {
                     // EXTENSIE: Dit is een EXTERNE tool van Rider!
-                    // We kunnen dit niet zelf uitvoeren. We moeten de loop direct BREKEN 
+                    // We kunnen dit niet zelf uitvoeren. We moeten de loop direct BREKEN
                     // en een speciaal signaal (bijv. een geprepareerde JSON-string) terug 'yielden' naar de Web API.
 
                     string toolCallPayload = $"__TOOL_CALL__:{activeToolName}|{activeToolArgs}";
                     yield return toolCallPayload;
 
+                    _logger.LogInformation("External tool call detected: {ToolName}", activeToolName);
                     break; // Stop de loop, geef de controle terug aan Rider via de controller!
                 }
             }
 
             keepRunning = false;
         }
+
+        _logger.LogInformation("Finished JarvisAgent.RunAsync");
     }
 }
