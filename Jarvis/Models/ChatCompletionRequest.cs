@@ -24,5 +24,8 @@ namespace Jarvis.Models
         // NIEUW: Temperature setting for controlling randomness
         [JsonPropertyName("temperature")]
         public float? Temperature { get; set; }
+        
+        [JsonPropertyName("max_tokens")]
+        public int? MaxTokenLength { get; set; } 
     }
 }

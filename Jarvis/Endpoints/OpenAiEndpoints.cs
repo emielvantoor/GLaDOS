@@ -74,7 +74,8 @@ public static class OpenAiEndpoints
 
         var agentResultStream = agent.RunAsync(model, domainMessages, new ChatOptions
         {
-            Temperature = request.Temperature
+            Temperature = request.Temperature,
+            MaxTokenLength = request.MaxTokenLength
         }, domainTools, token);
 
         var serializerOptions = new JsonSerializerOptions
