@@ -17,7 +17,7 @@ namespace Jarvis.LLama;
 
 public class LLamaLanguageModel : LanguageModel, IDisposable
 {
-    private readonly string _modelPath;
+    private Grammar? _grammer;
     private readonly ModelParams _params;
     private LLamaWeights? _weights;
     private LLamaContext? _context;
@@ -26,10 +26,9 @@ public class LLamaLanguageModel : LanguageModel, IDisposable
 
     public override LanguageModelMetaData ModelMetaData { get; }
 
-    public LLamaLanguageModel(string modelPath, LanguageModelMetaData metaData, ModelParams @params)
+    public LLamaLanguageModel(LanguageModelMetaData metaData, ModelParams @params)
     {
         _params = @params;
-        _modelPath = modelPath ?? throw new ArgumentNullException(nameof(modelPath));
         ModelMetaData = metaData ?? throw new ArgumentNullException(nameof(metaData));
     }
 
@@ -43,6 +42,13 @@ public class LLamaLanguageModel : LanguageModel, IDisposable
         // De hardware configurator heeft _params al optimaal gevuld (ContextSize, BatchSize, Q8_0 cache, GPU)
         _weights = LLamaWeights.LoadFromFile(_params);
         _context = _weights.CreateContext(_params);
+
+        var grammerFile = _params.ModelPath.Replace(".gguf", ".gbnf");
+        if (File.Exists(grammerFile))
+        {
+            _grammer = new Grammar(File.ReadAllText(grammerFile), "root");
+        }
+        
         _initialized = true;
         
         return Task.CompletedTask;
@@ -64,8 +70,9 @@ public class LLamaLanguageModel : LanguageModel, IDisposable
             {
                 Temperature = chatOptions.Temperature ?? 0.5f, // Iets ademruimte om makkelijker op te starten na een tool response,
                 Seed = (uint)Random.Shared.Next(1, 100000), // Dynamisch om executor/cache-loops te voorkomen
+                Grammar = _grammer
             },
-            AntiPrompts = ["<|im_end|>"] // Alleen stoppen als de beurt ÉCHT voorbij is
+            AntiPrompts = ["<|im_end|>", "</tool_call>"], // Alleen stoppen als de beurt ÉCHT voorbij is
         };
 
         var textBuffer = new StringBuilder();
@@ -204,7 +211,11 @@ public class LLamaLanguageModel : LanguageModel, IDisposable
                     parameters = t.Parameters
                 });
 
-                sb.Append(JsonSerializer.Serialize(toolSchema));
+                sb.Append(JsonSerializer.Serialize(toolSchema) + "\n");
+                sb.Append(
+                    "When you want to use a tool, you must invoke it using the official tool_calls API structure. Never output the JSON tool call as markdown code blocks in the chat response.");
+                sb.Append(
+                    "When you want to execute a tool, you must use the <tool_call> tags. Do never describe the tool in chat why you would choice this tool.");
             }
 
             sb.Append("<|im_end|>\n");

@@ -1,4 +1,5 @@
 ﻿using System.Text.Json.Serialization;
+using Jarvis.Converters;
 
 namespace Jarvis.Models;
 
@@ -8,6 +9,7 @@ public class ChatMessage
     public string Role { get; set; } = string.Empty; // "user", "assistant", "system", of "tool"
 
     [JsonPropertyName("content")]
+    [JsonConverter(typeof(OpenAIContentConverter))]
     public string? Content { get; set; }
 
     // NIEUW: Als de rol "assistant" is, kan het model hiermee aangeven welke tool hij wil aanroepen

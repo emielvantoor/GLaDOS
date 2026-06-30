@@ -192,7 +192,7 @@ public static class LLamaHardwareConfigurator
                 : 0,
             // TypeK = GGMLType.GGML_TYPE_Q8_0,
             // TypeV = GGMLType.GGML_TYPE_Q8_0,
-            // FlashAttention = true
+            // FlashAttention = true,
         };
     }
 }

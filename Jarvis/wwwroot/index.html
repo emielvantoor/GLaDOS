@@ -338,13 +338,13 @@
 
 <script>
     let chatHistory = [];
-    let baseEndpoint = ""; // Globally scoped tracking variable
+    let baseEndpoint = "";
+    let alwaysAllowSearch = false;
 
     window.addEventListener('DOMContentLoaded', () => {
         const currentHost = window.location.host;
         const protocol = window.location.protocol;
 
-        // Dynamically compute baseline URL context
         baseEndpoint = currentHost ? `${protocol}//${currentHost}` : "http://localhost:11434";
 
         document.getElementById('endpoint').value = `${baseEndpoint}/v1/chat/completions`;
@@ -399,7 +399,6 @@
             if (!response.ok) throw new Error();
             const data = await response.json();
 
-            // Render cleanly and check structure variations safely
             modelInfoDiv.innerHTML = `
                 <p><strong>ID:</strong> ${data.id || modelName}</p>
                 <p><strong>Object:</strong> ${data.object || 'model'}</p>
@@ -441,27 +440,81 @@
     }
 
     async function sendPrompt() {
-        const endpoint = document.getElementById('endpoint').value;
-        const model = document.getElementById('model').value;
-        const temp = parseFloat(document.getElementById('temperature').value);
         const promptInput = document.getElementById('prompt');
         const chatBox = document.getElementById('chatBox');
-        const statusText = document.getElementById('statusText');
-        const submitBtn = document.getElementById('submitBtn');
-        const rawReqPre = document.getElementById('raw-request');
-        const rawStreamPre = document.getElementById('raw-stream');
-
         const userText = promptInput.value.trim();
+
         if (!userText) return;
 
         chatBox.innerHTML += `<div class="message user">${userText}</div>`;
         promptInput.value = '';
         chatBox.scrollTop = chatBox.scrollHeight;
 
-        statusText.innerText = 'Jarvis nadenken...';
+        chatHistory.push({ role: "user", content: userText });
+
+        const needsSearch = userText.toLowerCase().includes('zoek') || userText.toLowerCase().includes('weer');
+
+        if (needsSearch && !alwaysAllowSearch) {
+            askSearchPermission(userText);
+        } else {
+            executeAiRequest(needsSearch, userText);
+        }
+    }
+
+    function askSearchPermission(query) {
+        const chatBox = document.getElementById('chatBox');
+        const statusText = document.getElementById('statusText');
+        const submitBtn = document.getElementById('submitBtn');
+
+        statusText.innerText = 'Status: Wacht op toestemming voor web_search...';
         submitBtn.disabled = true;
 
-        chatHistory.push({ role: "user", content: userText });
+        const permissionId = 'perm-' + Date.now();
+        const permHtml = `
+            <div class="message tool-call" id="${permissionId}" style="align-self: flex-start; max-width: 80%;">
+                <p style="margin: 0 0 10px 0; font-weight: bold;">🛡️ Toestemming vereist</p>
+                <p style="margin: 0 0 10px 0;">Jarvis wilt <strong>web_search(query="${query}")</strong> uitvoeren. Ga je akkoord?</p>
+                <div style="display: flex; gap: 8px;">
+                    <button onclick="handlePermissionResponse('${permissionId}', 'yes', '${encodeURIComponent(query)}')" style="background:#10b981; color:white; border:none; padding:6px 12px; border-radius:4px; cursor:pointer; font-size:12px; font-weight:bold;">Yes</button>
+                    <button onclick="handlePermissionResponse('${permissionId}', 'no', '${encodeURIComponent(query)}')" style="background:#ef4444; color:white; border:none; padding:6px 12px; border-radius:4px; cursor:pointer; font-size:12px; font-weight:bold;">No</button>
+                    <button onclick="handlePermissionResponse('${permissionId}', 'always', '${encodeURIComponent(query)}')" style="background:#2563eb; color:white; border:none; padding:6px 12px; border-radius:4px; cursor:pointer; font-size:12px; font-weight:bold;">Always during this chat</button>
+                </div>
+            </div>
+        `;
+
+        chatBox.innerHTML += permHtml;
+        chatBox.scrollTop = chatBox.scrollHeight;
+    }
+
+    function handlePermissionResponse(elementId, choice, encodedQuery) {
+        const permElement = document.getElementById(elementId);
+        const query = decodeURIComponent(encodedQuery);
+
+        if (choice === 'always') {
+            alwaysAllowSearch = true;
+        }
+
+        if (choice === 'yes' || choice === 'always') {
+            permElement.innerHTML = `🔧 [TOOL CALL]: web_search(query="${query}") -> Status: Goedgekeurd`;
+            executeAiRequest(true, query);
+        } else {
+            permElement.innerHTML = `❌ [TOOL CALL]: web_search(query="${query}") -> Status: Geweigerd door gebruiker`;
+            executeAiRequest(false, query);
+        }
+    }
+
+    async function executeAiRequest(searchExecuted, query) {
+        const endpoint = document.getElementById('endpoint').value;
+        const model = document.getElementById('model').value;
+        const temp = parseFloat(document.getElementById('temperature').value);
+        const chatBox = document.getElementById('chatBox');
+        const statusText = document.getElementById('statusText');
+        const submitBtn = document.getElementById('submitBtn');
+        const rawReqPre = document.getElementById('raw-request');
+        const rawStreamPre = document.getElementById('raw-stream');
+
+        statusText.innerText = 'Jarvis nadenken...';
+        submitBtn.disabled = true;
 
         const requestBody = {
             model: model,
@@ -469,8 +522,40 @@
             temperature: temp,
             stream: true,
             tools: [
-                { type: "function", function: { name: "web_search", description: "Zoek live op internet" } },
-                { type: "function", function: { name: "execute_bash", description: "Draai een lokaal shell commando" } }
+                {
+                    type: "function",
+                    function: {
+                        name: "web_search",
+                        description: "Search on the internet or visit a page on the internet",
+                        parameters: {
+                            type: "object",
+                            properties: {
+                                query: {
+                                    type: "string",
+                                    description: "The search query or URL to fetch."
+                                }
+                            },
+                            required: ["query"]
+                        }
+                    }
+                },
+                {
+                    type: "function",
+                    function: {
+                        name: "execute_bash",
+                        description: "Execute a local bash command",
+                        parameters: {
+                            type: "object",
+                            properties: {
+                                command: {
+                                    type: "string",
+                                    description: "The bash command line to run."
+                                }
+                            },
+                            required: ["command"]
+                        }
+                    }
+                }
             ]
         };
 
@@ -482,13 +567,6 @@
         const aiBubble = document.getElementById(aiBubbleId);
 
         try {
-            if (userText.toLowerCase().includes('zoek') || userText.toLowerCase().includes('weer')) {
-                chatBox.insertBefore(Object.assign(document.createElement('div'), {
-                    className: 'message tool-call',
-                    innerText: `🔧 [TOOL CALL]: web_search(query="${userText}") -> Status: Success`
-                }), aiBubble);
-            }
-
             const response = await fetch(endpoint, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -499,8 +577,10 @@
 
             const reader = response.body.getReader();
             const decoder = new TextDecoder('utf-8');
+
             let buffer = '';
             let assistantFullContent = '';
+            let pendingToolCall = null;
 
             while (true) {
                 const { value, done } = await reader.read();
@@ -518,29 +598,77 @@
                     rawStreamPre.scrollTop = rawStreamPre.scrollHeight;
 
                     if (cleaned === 'data: [DONE]') {
-                        statusText.innerText = 'Status: Bericht ontvangen.';
+                        statusText.innerText = 'Status: Stream klaar.';
                         continue;
                     }
 
                     if (cleaned.startsWith('data: ')) {
                         try {
                             const parsed = JSON.parse(cleaned.replace('data: ', ''));
-                            const content = parsed.choices[0]?.delta?.content;
-                            if (content) {
-                                assistantFullContent += content;
+                            const delta = parsed.choices[0]?.delta;
+
+                            if (!delta) continue;
+
+                            // 1. Handle Regular Text Response
+                            if (delta.content) {
+                                assistantFullContent += delta.content;
                                 aiBubble.innerText = assistantFullContent;
                                 chatBox.scrollTop = chatBox.scrollHeight;
                             }
-                        } catch {}
+
+                            // 2. Handle Streaming Tool Calls
+                            if (delta.tool_calls && delta.tool_calls.length > 0) {
+                                const tc = delta.tool_calls[0];
+
+                                if (!pendingToolCall) {
+                                    pendingToolCall = {
+                                        id: tc.id,
+                                        name: tc.function?.name,
+                                        arguments: tc.function?.arguments || ""
+                                    };
+                                } else {
+                                    if (tc.function?.arguments) {
+                                        pendingToolCall.arguments += tc.function.arguments;
+                                    }
+                                }
+                            }
+                        } catch (e) {
+                            console.error("Fout bij parsen chunk:", e);
+                        }
                     }
                 }
             }
 
-            chatHistory.push({ role: "assistant", content: assistantFullContent });
+            // After stream ends, check if the model requested a tool call
+            if (pendingToolCall) {
+                if (!assistantFullContent && aiBubble) {
+                    aiBubble.remove();
+                }
+
+                statusText.innerText = `Status: Tool aangeroepen (${pendingToolCall.name})`;
+
+                let parsedArgs = {};
+                try {
+                    parsedArgs = JSON.parse(pendingToolCall.arguments);
+                } catch {
+                    parsedArgs = { query: pendingToolCall.arguments }; // Fallback
+                }
+
+                if (pendingToolCall.name === 'web_search') {
+                    askSearchPermission(parsedArgs.query || "nu.nl");
+                } else if (pendingToolCall.name === 'execute_bash') {
+                    chatBox.innerHTML += `<div class="message tool-call">💻 Model wil bash uitvoeren: ${parsedArgs.command}</div>`;
+                    chatBox.scrollTop = chatBox.scrollHeight;
+                }
+            } else {
+                chatHistory.push({ role: "assistant", content: assistantFullContent });
+            }
 
         } catch (error) {
             statusText.innerText = 'Status: Fout opgetreden!';
-            aiBubble.innerText = `Fout bij communicatie met bridge: ${error.message}`;
+            if (aiBubble) {
+                aiBubble.innerText = `Fout bij communicatie met bridge: ${error.message}`;
+            }
         } finally {
             submitBtn.disabled = false;
         }
