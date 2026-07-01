@@ -4,6 +4,12 @@ using Jarvis.LLama;
 using Jarvis.LLama.Bootstrapper;
 using Microsoft.AspNetCore.Http.HttpResults;
 
+// Environment.SetEnvironmentVariable("GGML_VK_DISABLE_COOPMAT", "1");
+// Environment.SetEnvironmentVariable("GGML_VK_DISABLE_GRAPH_OPTIMIZE", "1");
+
+// Environment.SetEnvironmentVariable("HIP_VISIBLE_DEVICES", "1");
+// Environment.SetEnvironmentVariable("HSA_OVERRIDE_GFX_VERSION", "11.0.0");
+
 var builder = WebApplication.CreateSlimBuilder(args);
 
 LLamaHardwareConfigurator.Configure(builder.Configuration);

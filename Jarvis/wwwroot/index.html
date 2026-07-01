@@ -142,6 +142,7 @@
             font-size: 12px;
             max-width: 90%;
             padding: 8px 12px;
+            margin: 4px 0;
         }
         [data-theme="dark"] .message.tool-call {
             background-color: #78350f;
@@ -253,6 +254,28 @@
             margin: 4px 0;
             font-size: 12px;
         }
+
+        .think-container {
+            background: var(--bg-color);
+            border: 1px solid var(--border-color);
+            padding: 10px;
+            border-radius: 6px;
+            margin: 6px 0;
+            font-size: 13px;
+            color: var(--text-muted);
+        }
+        .think-container summary {
+            cursor: pointer;
+            font-weight: 600;
+            outline: none;
+            user-select: none;
+            color: var(--status-color);
+        }
+        .think-content {
+            margin-top: 6px;
+            font-style: italic;
+            white-space: pre-wrap;
+        }
     </style>
 </head>
 <body>
@@ -341,12 +364,14 @@
     let baseEndpoint = "";
     let alwaysAllowSearch = false;
 
+    // Globale tracking variabelen voor de actieve berichtenstroom
+    let currentAiBubbleElement = null;
+    let currentBubbleContentBuffer = "";
+
     window.addEventListener('DOMContentLoaded', () => {
         const currentHost = window.location.host;
         const protocol = window.location.protocol;
-
         baseEndpoint = currentHost ? `${protocol}//${currentHost}` : "http://localhost:11434";
-
         document.getElementById('endpoint').value = `${baseEndpoint}/v1/chat/completions`;
         loadModels();
 
@@ -390,15 +415,63 @@
         document.getElementById('tempValue').innerText = parseFloat(val).toFixed(1);
     }
 
+    // Uniforme verwerking en transformatie van <think> tags naar details elementen
+    function formatAssistantMessage(text) {
+        let escaped = text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+        if (escaped.includes('&lt;think&gt;')) {
+            const parts = escaped.split('&lt;think&gt;');
+            const beforeThink = parts[0];
+            const rest = parts[1] || '';
+
+            if (rest.includes('&lt;/think&gt;')) {
+                const thinkParts = rest.split('&lt;/think&gt;');
+                return `${beforeThink}<details class="think-container"><summary>💭 Overweging (Ingeklapt)</summary><div class="think-content">${thinkParts[0]}</div></details>${thinkParts[1]}`;
+            } else {
+                return `${beforeThink}<details open class="think-container"><summary>🧠 Aan het nadenken...</summary><div class="think-content">${rest}</div></details>`;
+            }
+        }
+        return escaped;
+    }
+
+    // Maakt een gloednieuwe schone tekstbubbel aan in de chatBox
+    function createNewAssistantBubble() {
+        const chatBox = document.getElementById('chatBox');
+        const bubbleId = 'ai-' + Date.now();
+        chatBox.innerHTML += `<div class="message assistant" id="${bubbleId}"></div>`;
+        currentAiBubbleElement = document.getElementById(bubbleId);
+        currentBubbleContentBuffer = "";
+    }
+
+    // Voegt streaming content toe en regelt breekpunten bij systeemberichten uit C#
+    function appendAssistantContent(content) {
+        const chatBox = document.getElementById('chatBox');
+
+        // Check of dit een systeembericht van de C# agent is
+        if (content.startsWith('\n[Systeem:')) {
+            chatBox.innerHTML += `<div class="message tool-call">${content.trim()}</div>`;
+            createNewAssistantBubble(); // Forceer een frisse bubbel voor de volgende iteratie
+            chatBox.scrollTop = chatBox.scrollHeight;
+            return;
+        }
+
+        // Indien er nog geen actieve bubbel bestaat, maak deze aan
+        if (!currentAiBubbleElement) {
+            createNewAssistantBubble();
+        }
+
+        currentBubbleContentBuffer += content;
+        currentAiBubbleElement.innerHTML = formatAssistantMessage(currentBubbleContentBuffer);
+        chatBox.scrollTop = chatBox.scrollHeight;
+    }
+
     async function fetchModelInfo(modelName) {
         const modelInfoDiv = document.getElementById('model-info');
         modelInfoDiv.innerHTML = 'Loading model info...';
-
         try {
             const response = await fetch(`${baseEndpoint}/v1/models/${encodeURIComponent(modelName)}`, { method: 'GET' });
             if (!response.ok) throw new Error();
             const data = await response.json();
-
             modelInfoDiv.innerHTML = `
                 <p><strong>ID:</strong> ${data.id || modelName}</p>
                 <p><strong>Object:</strong> ${data.object || 'model'}</p>
@@ -516,6 +589,10 @@
         statusText.innerText = 'Jarvis nadenken...';
         submitBtn.disabled = true;
 
+        // Reset de globale element-verwijzingen voor de start van de nieuwe verzoekenreeks
+        currentAiBubbleElement = null;
+        currentBubbleContentBuffer = "";
+
         const requestBody = {
             model: model,
             messages: chatHistory,
@@ -530,10 +607,7 @@
                         parameters: {
                             type: "object",
                             properties: {
-                                query: {
-                                    type: "string",
-                                    description: "The search query or URL to fetch."
-                                }
+                                query: { type: "string", description: "The search query or URL to fetch." }
                             },
                             required: ["query"]
                         }
@@ -547,10 +621,7 @@
                         parameters: {
                             type: "object",
                             properties: {
-                                command: {
-                                    type: "string",
-                                    description: "The bash command line to run."
-                                }
+                                command: { type: "string", description: "The bash command line to run." }
                             },
                             required: ["command"]
                         }
@@ -561,10 +632,6 @@
 
         rawReqPre.innerText = JSON.stringify(requestBody, null, 2);
         rawStreamPre.innerText = '';
-
-        const aiBubbleId = 'ai-' + Date.now();
-        chatBox.innerHTML += `<div class="message assistant" id="${aiBubbleId}"></div>`;
-        const aiBubble = document.getElementById(aiBubbleId);
 
         try {
             const response = await fetch(endpoint, {
@@ -609,17 +676,13 @@
 
                             if (!delta) continue;
 
-                            // 1. Handle Regular Text Response
                             if (delta.content) {
                                 assistantFullContent += delta.content;
-                                aiBubble.innerText = assistantFullContent;
-                                chatBox.scrollTop = chatBox.scrollHeight;
+                                appendAssistantContent(delta.content);
                             }
 
-                            // 2. Handle Streaming Tool Calls
                             if (delta.tool_calls && delta.tool_calls.length > 0) {
                                 const tc = delta.tool_calls[0];
-
                                 if (!pendingToolCall) {
                                     pendingToolCall = {
                                         id: tc.id,
@@ -639,10 +702,9 @@
                 }
             }
 
-            // After stream ends, check if the model requested a tool call
             if (pendingToolCall) {
-                if (!assistantFullContent && aiBubble) {
-                    aiBubble.remove();
+                if (!assistantFullContent && currentAiBubbleElement) {
+                    currentAiBubbleElement.remove();
                 }
 
                 statusText.innerText = `Status: Tool aangeroepen (${pendingToolCall.name})`;
@@ -651,7 +713,7 @@
                 try {
                     parsedArgs = JSON.parse(pendingToolCall.arguments);
                 } catch {
-                    parsedArgs = { query: pendingToolCall.arguments }; // Fallback
+                    parsedArgs = { query: pendingToolCall.arguments };
                 }
 
                 if (pendingToolCall.name === 'web_search') {
@@ -666,8 +728,8 @@
 
         } catch (error) {
             statusText.innerText = 'Status: Fout opgetreden!';
-            if (aiBubble) {
-                aiBubble.innerText = `Fout bij communicatie met bridge: ${error.message}`;
+            if (currentAiBubbleElement) {
+                currentAiBubbleElement.innerText = `Fout bij communicatie met bridge: ${error.message}`;
             }
         } finally {
             submitBtn.disabled = false;
