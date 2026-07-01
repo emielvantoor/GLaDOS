@@ -11,7 +11,7 @@ public static class AddLLamaModelBootstrapper
         var nextCoderMetaData = new LanguageModelMetaData
         {
             // De unieke identifier die je plugin meestuurt in het 'model' veld van de API request
-            Id = "qwen2.5-coder-7b-instruct", 
+            Id = "Qwen3VL-8B-Instruct-Q4_K_M", 
     
             Object = "model",
     

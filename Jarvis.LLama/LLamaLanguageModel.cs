@@ -43,9 +43,9 @@ public class LLamaLanguageModel : LanguageModel, IDisposable
         {
             _grammer = new Grammar(File.ReadAllText(grammerFile), "root");
         }
-        
+
         _initialized = true;
-        
+
         return Task.CompletedTask;
     }
 
@@ -77,7 +77,7 @@ public class LLamaLanguageModel : LanguageModel, IDisposable
         int totalTokensProcessed = 0;
 
         var executor = new StatelessExecutor(_weights!, _params);
-        
+
         await foreach (var token in executor.InferAsync(formattedPrompt, inferenceParams, cancellationToken))
         {
             totalTokensProcessed++;
@@ -86,6 +86,11 @@ public class LLamaLanguageModel : LanguageModel, IDisposable
             {
                 textBuffer.Append(token);
                 string currentText = textBuffer.ToString();
+                var index = currentText.IndexOf("</think>", StringComparison.Ordinal);
+                if (index != -1)
+                {
+                    currentText = currentText.Substring(index + 8).Trim();
+                }
 
 // Maak currentText schoon van witruimte om de ECHTE start te controleren
                 string trimmedText = currentText.TrimStart();
@@ -147,7 +152,7 @@ public class LLamaLanguageModel : LanguageModel, IDisposable
                 }
             }
         }
-        
+
         executor.Context.Dispose();
     }
 
@@ -208,7 +213,7 @@ public class LLamaLanguageModel : LanguageModel, IDisposable
 
                 sb.Append(JsonSerializer.Serialize(toolSchema) + "\n");
                 sb.Append(
-                    "When you want to use a tool, you must invoke it using the official tool_calls API structure. Never output the JSON tool call as markdown code blocks in the chat response. !!NEVER do ```json in front tool calls!!");
+                    "When you want to use a tool, you must invoke it using the official tool_calls API structure. Never output the JSON tool call as markdown code blocks in the chat response. !!NEVER put ```json in front of tool calls!!");
                 sb.Append(
                     "When you want to execute a tool, you must use the <tool_call> tags. Do never describe the tool in chat why you would choice this tool.");
             }
