@@ -14,11 +14,8 @@ var builder = WebApplication.CreateSlimBuilder(args);
 
 LLamaHardwareConfigurator.Configure(builder.Configuration);
 
-builder.Services.AddSingleton(_ => 
-    LLamaHardwareConfigurator.CreateOptimizedParameters(builder.Configuration));
-
 builder.Services.AddCoreServices();
-builder.Services.AddLLamaModels();
+builder.Services.AddLLamaModels(builder.Configuration);
 
 builder.Services.ConfigureHttpJsonOptions(options =>
 {

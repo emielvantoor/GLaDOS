@@ -199,10 +199,16 @@ public static class LLamaHardwareConfigurator
 
     public static ModelParams CreateOptimizedParameters(IConfiguration configuration)
     {
-        Configure(configuration);
-
         var modelPath = configuration["Jarvis:ModelPath"] ??
                         throw new ArgumentNullException("ModelPath is niet ingesteld in appsettings.json");
+        
+        return CreateOptimizedParameters(configuration, modelPath);
+    }
+
+    public static ModelParams CreateOptimizedParameters(IConfiguration configuration, string modelPath)
+    {
+        Configure(configuration);
+
         var contextSize = uint.TryParse(configuration["Jarvis:ContextSize"], out var size) ? size : 3072;
 
         var cpuCores = Environment.ProcessorCount / 2;
