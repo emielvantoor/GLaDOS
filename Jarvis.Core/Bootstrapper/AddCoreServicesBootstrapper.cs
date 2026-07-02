@@ -1,4 +1,6 @@
 ﻿using Jarvis.Core.Agents;
+using Jarvis.Core.Protocols;
+using Jarvis.Core.Routing;
 using Jarvis.Core.Services;
 using Jarvis.Core.Tools;
 using Microsoft.Extensions.DependencyInjection;
@@ -10,6 +12,9 @@ public static class AddCoreServicesBootstrapper
     public static void AddCoreServices(this IServiceCollection services)
     {
         services.AddSingleton<IModelManager, ModelManager>();
+        services.AddSingleton<IAgentProtocol, QwenProtocol>();
+        services.AddSingleton<ToolRegistry>();
+        services.AddSingleton<ToolRouter>();
         services.AddSingleton<JarvisAgent>();
         services.AddSingleton<IJarvisTool, SystemTimeTool>();
         services.AddSingleton<IJarvisTool, TemperatureTool>();

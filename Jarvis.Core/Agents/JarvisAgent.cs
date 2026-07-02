@@ -2,25 +2,32 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.CompilerServices;
-using System.Text.Json;
-using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
 using Jarvis.Core.Interfaces;
 using Jarvis.Core.Models;
-using Jarvis.Core.Tools;
+using Jarvis.Core.Protocols;
+using Jarvis.Core.Routing;
 using Microsoft.Extensions.Logging;
 
 namespace Jarvis.Core.Agents;
 
 public class JarvisAgent
 {
-    private readonly Dictionary<string, IJarvisTool> _tools;
+    private readonly ToolRegistry _toolRegistry;
+    private readonly ToolRouter _toolRouter;
+    private readonly IAgentProtocol _protocol;
     private readonly ILogger<JarvisAgent> _logger;
 
-    public JarvisAgent(IEnumerable<IJarvisTool> tools, ILogger<JarvisAgent> logger)
+    public JarvisAgent(
+        ToolRegistry toolRegistry,
+        ToolRouter toolRouter,
+        IAgentProtocol protocol,
+        ILogger<JarvisAgent> logger)
     {
-        _tools = tools.ToDictionary(t => t.Name);
+        _toolRegistry = toolRegistry;
+        _toolRouter = toolRouter;
+        _protocol = protocol;
         _logger = logger;
     }
 
@@ -31,11 +38,9 @@ public class JarvisAgent
         List<AgentToolDefinition>? externalTools = null, 
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        _logger.LogInformation("Starting JarvisAgent.RunAsync");
+        _logger.LogInformation("Starting JarvisAgent.RunAsync with {Protocol} protocol", _protocol.Name);
 
-        var toolDefinitions = _tools.Values
-            .Select(t => new AgentToolDefinition(t.Name, t.Description, t.Parameters))
-            .ToList();
+        var toolDefinitions = _toolRegistry.GetDefinitions().ToList();
 
         if (externalTools != null)
         {
@@ -50,65 +55,45 @@ public class JarvisAgent
         {
             currentIteration++;
 
-            var responseStream =
-                model.GenerateChatResponseAsync(chatHistory, options, toolDefinitions, cancellationToken);
+            var prompt = _protocol.BuildPrompt(chatHistory, toolDefinitions);
+            var response = await model.GenerateResponseAsync(prompt, options, cancellationToken);
+            var toolCall = _protocol.ParseResponse(response).FirstOrDefault();
 
-            bool isToolCallDetected = false;
-            string? activeToolName = null;
-            string? activeToolArgs = null;
-
-            await foreach (var chunk in responseStream)
+            if (toolCall == null)
             {
-                if (cancellationToken.IsCancellationRequested) break;
-
-                if (chunk.IsToolCall)
+                var text = CleanAssistantText(response);
+                if (!string.IsNullOrEmpty(text))
                 {
-                    isToolCallDetected = true;
-                    activeToolName = chunk.ToolName;
-                    activeToolArgs = chunk.ToolArgs;
-                    continue;
+                    yield return text;
                 }
 
-                if (!isToolCallDetected && !string.IsNullOrEmpty(chunk.Text))
-                {
-                    yield return chunk.Text;
-                }
+                keepRunning = false;
+                continue;
             }
 
-            // Als er een tool call is gedetecteerd:
-            if (isToolCallDetected && !string.IsNullOrEmpty(activeToolName))
+            var toolResult = await _toolRouter.RouteAsync(toolCall);
+            var toolArgs = toolCall.Arguments?.ToJsonString() ?? "{}";
+
+            if (toolResult.IsExternal)
             {
-                // CHECK: Is dit een INTERNE tool van Jarvis?
-                if (_tools.TryGetValue(activeToolName, out var tool))
-                {
-                    // === NIEUW: Informeer de gebruiker via de stream ===
-                    yield return $"\n[Systeem: Executing internal tool '{activeToolName}' with arguments: {activeToolArgs}...]\n";
-
-                    chatHistory.Add(new AgentMessage(AgentRole.Assistant, "", activeToolName, activeToolArgs));
-                    var jsonArgs = JsonNode.Parse(activeToolArgs ?? "{}")!.AsObject();
-                    string toolOutput = await tool.ExecuteAsync(jsonArgs);
-                    chatHistory.Add(new AgentMessage(AgentRole.Tool, toolOutput));
-
-                    _logger.LogInformation("Tool {ToolName} executed successfully", activeToolName);
-                    continue; // Blijf intern loopen
-                }
-                else
-                {
-                    // EXTENSIE: Dit is een EXTERNE tool van Rider!
-                    // === NIEUW: Informeer de gebruiker via de stream ===
-                    yield return $"\n[Systeem: Delegating external tool '{activeToolName}' to client...]\n";
-
-                    string toolCallPayload = $"__TOOL_CALL__:{activeToolName}|{activeToolArgs}";
-                    yield return toolCallPayload;
-
-                    _logger.LogInformation("External tool call detected: {ToolName}", activeToolName);
-                    break; // Stop de loop, geef de controle terug aan Rider via de controller!
-                }
+                yield return $"\n[Systeem: Delegating external tool '{toolCall.ToolName}' to client...]\n";
+                yield return $"__TOOL_CALL__:{toolCall.ToolName}|{toolArgs}";
+                break;
             }
 
-            keepRunning = false;
+            yield return $"\n[Systeem: Executing internal tool '{toolCall.ToolName}' with arguments: {toolArgs}...]\n";
+
+            chatHistory.Add(new AgentMessage(AgentRole.Assistant, string.Empty, toolCall.ToolName, toolArgs));
+            chatHistory.Add(new AgentMessage(AgentRole.Tool, toolResult.Output, toolCall.ToolName, toolCall.RawCall));
         }
 
         _logger.LogInformation("Finished JarvisAgent.RunAsync");
+    }
+
+    private string CleanAssistantText(string response)
+    {
+        return _protocol is QwenProtocol qwenProtocol
+            ? qwenProtocol.StripThinking(response)
+            : response.Trim();
     }
 }

@@ -13,27 +13,17 @@ public abstract class LanguageModel
     
     protected abstract Task OnInitializeAsync();
     
-// De streaming methode die de Agent gebruikt om rollen, geschiedenis en tools te verwerken
-    public IAsyncEnumerable<ChatResponseChunk> GenerateChatResponseAsync(
-        List<AgentMessage> history, 
+    // Transport-only generation: protocols own prompt construction and response parsing.
+    public Task<string> GenerateResponseAsync(
+        string prompt,
         ChatOptions options,
-        List<AgentToolDefinition> tools, 
         CancellationToken cancellationToken = default)
     {
-        return OnGenerateChatResponseAsync(history, options, tools, cancellationToken);
+        return OnGenerateResponseAsync(prompt, options, cancellationToken);
     }
     
-    protected abstract IAsyncEnumerable<ChatResponseChunk> OnGenerateChatResponseAsync(
-        List<AgentMessage> history, 
+    protected abstract Task<string> OnGenerateResponseAsync(
+        string prompt,
         ChatOptions options,
-        List<AgentToolDefinition> tools, 
         CancellationToken cancellationToken = default);
 }
-
-// Het gestructureerde chunk-type dat door de stream heen vloeit
-public record ChatResponseChunk(
-    string Text, 
-    bool IsToolCall, 
-    string? ToolName = null, 
-    string? ToolArgs = null
-);
