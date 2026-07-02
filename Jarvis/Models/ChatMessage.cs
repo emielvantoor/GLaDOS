@@ -10,6 +10,7 @@ public class ChatMessage
 
     [JsonPropertyName("content")]
     [JsonConverter(typeof(OpenAIContentConverter))]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Content { get; set; }
 
     // NIEUW: Als de rol "assistant" is, kan het model hiermee aangeven welke tool hij wil aanroepen
@@ -27,6 +28,10 @@ public class ChatMessage
 
 public class ChatCompletionToolCall
 {
+    [JsonPropertyName("index")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? Index { get; set; }
+
     [JsonPropertyName("id")]
     public string Id { get; set; } = string.Empty; // Bijv: "call_abc123"
 
