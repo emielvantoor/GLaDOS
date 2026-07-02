@@ -1,37 +1,78 @@
 ﻿using Jarvis.Core.Models;
-using LLama.Common;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Jarvis.LLama.Bootstrapper;
 
 public static class AddLLamaModelBootstrapper
 {
-    public static void AddLLamaModels(this IServiceCollection services)
+    public static void AddLLamaModels(this IServiceCollection services, IConfiguration configuration)
     {
-        var nextCoderMetaData = new LanguageModelMetaData
+        foreach (var modelPath in GetModelPaths(configuration))
         {
-            Id = "local-gguf",
-    
+            services.AddSingleton<LanguageModel, LLamaLanguageModel>(_ =>
+            {
+                var modelParams = LLamaHardwareConfigurator.CreateOptimizedParameters(configuration, modelPath);
+                return new LLamaLanguageModel(CreateMetaData(modelParams.ModelPath, modelParams.ContextSize), modelParams);
+            });
+        }
+    }
+
+    private static IReadOnlyCollection<string> GetModelPaths(IConfiguration configuration)
+    {
+        var configuredPath = configuration["Jarvis:ModelPath"] ??
+                             throw new ArgumentNullException("ModelPath is niet ingesteld in appsettings.json");
+
+        if (Directory.Exists(configuredPath))
+        {
+            var modelPaths = Directory
+                .EnumerateFiles(configuredPath, "*.gguf", SearchOption.TopDirectoryOnly)
+                .Order(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+
+            if (modelPaths.Length == 0)
+            {
+                throw new FileNotFoundException($"Geen .gguf modellen gevonden in '{configuredPath}'.");
+            }
+
+            return modelPaths;
+        }
+
+        if (!File.Exists(configuredPath))
+        {
+            throw new FileNotFoundException($"ModelPath verwijst niet naar een bestaand bestand of map: '{configuredPath}'.");
+        }
+
+        if (!string.Equals(Path.GetExtension(configuredPath), ".gguf", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException($"ModelPath bestand moet een .gguf model zijn: '{configuredPath}'.");
+        }
+
+        return [configuredPath];
+    }
+
+    private static LanguageModelMetaData CreateMetaData(string modelPath, uint? contextSize)
+    {
+        var created = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+
+        return new LanguageModelMetaData
+        {
+            Id = Path.GetFileNameWithoutExtension(modelPath),
             Object = "model",
-    
-            // Unix timestamp van de release (bijvoorbeeld juni 2026 of de originele releasedatum)
-            Created = DateTimeOffset.UtcNow.ToUnixTimeSeconds(), 
-    
+            Created = created,
             OwnedBy = "local",
-            
-            ContextLength =  8192,
-            
-            MaxOutputTokens =  -1,
-    
-            Permission = [
+            ContextLength = contextSize.HasValue ? (int)contextSize.Value : 0,
+            MaxOutputTokens = -1,
+            Permission =
+            [
                 new LanguageModelPermission
                 {
                     Id = $"modelperm-{Guid.NewGuid()}",
                     Object = "model_permission",
-                    Created = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+                    Created = created,
                     AllowCreateEngine = true,
                     AllowSampling = true,
-                    AllowLogprobs = false, // LLamaSharp ondersteunt logprobs, maar voor basis code-completion vaak niet nodig
+                    AllowLogprobs = false,
                     AllowSearchIndices = false,
                     AllowView = true,
                     AllowFineTuning = false,
@@ -41,14 +82,5 @@ public static class AddLLamaModelBootstrapper
                 }
             ]
         };
-        
-        services.AddSingleton<LanguageModel, LLamaLanguageModel>(provider =>
-        {
-            var modelParams = provider.GetRequiredService<ModelParams>();
-            nextCoderMetaData.Id = Path.GetFileNameWithoutExtension(modelParams.ModelPath);
-            nextCoderMetaData.ContextLength = modelParams.ContextSize.HasValue ? (int) modelParams.ContextSize.Value : 0;
-            return new LLamaLanguageModel(nextCoderMetaData, modelParams);
-        });
     }
-
 }
