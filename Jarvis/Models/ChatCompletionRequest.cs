@@ -26,6 +26,9 @@ namespace Jarvis.Models
         public float? Temperature { get; set; }
         
         [JsonPropertyName("max_tokens")]
-        public int? MaxTokenLength { get; set; } 
+        public int? MaxTokenLength { get; set; }
+
+        [JsonPropertyName("max_completion_tokens")]
+        public int? MaxCompletionTokens { get; set; }
     }
 }

@@ -75,7 +75,7 @@ public static class OpenAiEndpoints
         var agentResultStream = agent.RunAsync(model, domainMessages, new ChatOptions
         {
             Temperature = request.Temperature,
-            MaxTokenLength = request.MaxTokenLength
+            MaxTokenLength = request.MaxCompletionTokens ?? request.MaxTokenLength
         }, domainTools, token);
 
         var serializerOptions = new JsonSerializerOptions
@@ -89,11 +89,19 @@ public static class OpenAiEndpoints
         long createdTimestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
         string modelName = request.Model ?? "local-model";
 
+        if (!request.Stream)
+        {
+            return await CreateBufferedResponse(
+                agentResultStream,
+                chunkId,
+                createdTimestamp,
+                modelName,
+                token);
+        }
+
         // 5. Response SSE Stream
         return Results.Stream(async stream =>
         {
-            var completeResponseBuffer = new StringBuilder();
-            
             try
             {
                 await using var writer = new StreamWriter(stream, Encoding.UTF8, leaveOpen: true) { NewLine = "\n" };
@@ -103,97 +111,53 @@ public static class OpenAiEndpoints
                 {
                     if (token.IsCancellationRequested) break;
 
-                    completeResponseBuffer.Append(text);
+                    if (IsInternalStatusMessage(text))
+                    {
+                        continue;
+                    }
                 
                     // Intercept and parse internal legacy __TOOL_CALL__ syntax
-                    if (!string.IsNullOrEmpty(text) && text.StartsWith("__TOOL_CALL__:"))
+                    if (TryParseToolCall(text, out var toolCall))
                     {
                         toolCallTriggered = true;
-                        var payload = text["__TOOL_CALL__:".Length..];
-                        var separatorIndex = payload.IndexOf('|');
-                    
-                        string toolName = separatorIndex >= 0 ? payload[..separatorIndex] : payload;
-                        string toolArgs = separatorIndex >= 0 ? payload[(separatorIndex + 1)..] : "{}";
-
-                        var toolCallChunk = new
-                        {
-                            id = chunkId,
-                            @object = "chat.completion.chunk",
-                            created = createdTimestamp,
-                            model = modelName,
-                            choices = new[]
-                            {
-                                new
-                                {
-                                    index = 0,
-                                    delta = new
-                                    {
-                                        tool_calls = new[]
-                                        {
-                                            new
-                                            {
-                                                index = 0,
-                                                id = $"call_{Guid.NewGuid():n}",
-                                                type = "function",
-                                                function = new { name = toolName, arguments = toolArgs }
-                                            }
-                                        }
-                                    },
-                                    finish_reason = "tool_calls"
-                                }
-                            }
-                        };
-
-                        var jsonTool = JsonSerializer.Serialize(toolCallChunk, serializerOptions);
-                        await writer.WriteAsync($"data: {jsonTool}\n\n");
-                        await writer.FlushAsync(token);
+                        await WriteSseAsync(
+                            writer,
+                            CreateChunk(
+                                chunkId,
+                                createdTimestamp,
+                                modelName,
+                                new ChatDelta { ToolCalls = [CreateStreamingToolCall(toolCall, 0)] }),
+                            serializerOptions,
+                            token);
+                        await WriteSseAsync(
+                            writer,
+                            CreateChunk(
+                                chunkId,
+                                createdTimestamp,
+                                modelName,
+                                new ChatDelta { Content = string.Empty },
+                                "tool_calls"),
+                            serializerOptions,
+                            token);
                         break; 
                     }
 
                     // Handle Standard Text Token Stream
-                    var openAIChunk = new
-                    {
-                        id = chunkId,
-                        @object = "chat.completion.chunk",
-                        created = createdTimestamp,
-                        model = modelName,
-                        choices = new[]
-                        {
-                            new
-                            {
-                                index = 0,
-                                delta = new { content = text },
-                                finish_reason = (string?)null
-                            }
-                        }
-                    };
-
-                    var json = JsonSerializer.Serialize(openAIChunk, serializerOptions);
-                    await writer.WriteAsync($"data: {json}\n\n");
-                    await writer.FlushAsync(token);
+                    await WriteSseAsync(
+                        writer,
+                        CreateChunk(chunkId, createdTimestamp, modelName, new ChatDelta { Content = text }),
+                        serializerOptions,
+                        token);
                 }
 
                 // Finalize text response chunk if a tool call was not triggered
                 if (!toolCallTriggered && !token.IsCancellationRequested)
                 {
-                    var finalChunk = new
-                    {
-                        id = chunkId,
-                        @object = "chat.completion.chunk",
-                        created = createdTimestamp,
-                        model = modelName,
-                        choices = new[]
-                        {
-                            new
-                            {
-                                index = 0,
-                                delta = new { },
-                                finish_reason = "stop"
-                            }
-                        }
-                    };
-                    var finalJson = JsonSerializer.Serialize(finalChunk, serializerOptions);
-                    await writer.WriteAsync($"data: {finalJson}\n\n");
+                    await WriteSseAsync(
+                        writer,
+                        CreateChunk(chunkId, createdTimestamp, modelName, new ChatDelta { Content = string.Empty }, "stop"),
+                        serializerOptions,
+                        token);
                 }
 
                 // Standard end of SSE protocol payload
@@ -206,6 +170,152 @@ public static class OpenAiEndpoints
                 _llmLock.Release();
             }
         }, "text/event-stream");
+    }
+
+    private static async Task<IResult> CreateBufferedResponse(
+        IAsyncEnumerable<string> agentResultStream,
+        string responseId,
+        long createdTimestamp,
+        string modelName,
+        CancellationToken token)
+    {
+        var responseBuffer = new StringBuilder();
+
+        try
+        {
+            await foreach (var text in agentResultStream.WithCancellation(token))
+            {
+                if (IsInternalStatusMessage(text))
+                {
+                    continue;
+                }
+
+                if (TryParseToolCall(text, out var toolCall))
+                {
+                    return Results.Ok(new ChatCompletionResponse
+                    {
+                        Id = responseId,
+                        Created = createdTimestamp,
+                        Model = modelName,
+                        Choices =
+                        [
+                            new ChatChoice
+                            {
+                                Message = new ChatMessage
+                                {
+                                    Role = "assistant",
+                                    ToolCalls = [toolCall]
+                                },
+                                FinishReason = "tool_calls"
+                            }
+                        ]
+                    });
+                }
+
+                responseBuffer.Append(text);
+            }
+
+            return Results.Ok(new ChatCompletionResponse
+            {
+                Id = responseId,
+                Created = createdTimestamp,
+                Model = modelName,
+                Choices =
+                [
+                    new ChatChoice
+                    {
+                        Message = new ChatMessage
+                        {
+                            Role = "assistant",
+                            Content = responseBuffer.ToString()
+                        },
+                        FinishReason = "stop"
+                    }
+                ]
+            });
+        }
+        finally
+        {
+            Console.WriteLine("Complete response generated.");
+            _llmLock.Release();
+        }
+    }
+
+    private static ChatCompletionChunk CreateChunk(
+        string id,
+        long created,
+        string model,
+        ChatDelta delta,
+        string? finishReason = null)
+    {
+        return new ChatCompletionChunk
+        {
+            Id = id,
+            Created = created,
+            Model = model,
+            Choices =
+            [
+                new ChatChunkChoice
+                {
+                    Delta = delta,
+                    FinishReason = finishReason
+                }
+            ]
+        };
+    }
+
+    private static async Task WriteSseAsync(
+        StreamWriter writer,
+        ChatCompletionChunk chunk,
+        JsonSerializerOptions serializerOptions,
+        CancellationToken token)
+    {
+        var json = JsonSerializer.Serialize(chunk, serializerOptions);
+        await writer.WriteAsync($"data: {json}\n\n");
+        await writer.FlushAsync(token);
+    }
+
+    private static bool TryParseToolCall(string? text, out ChatCompletionToolCall toolCall)
+    {
+        toolCall = new ChatCompletionToolCall();
+
+        if (string.IsNullOrEmpty(text) || !text.StartsWith("__TOOL_CALL__:", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var payload = text["__TOOL_CALL__:".Length..];
+        var separatorIndex = payload.IndexOf('|');
+
+        toolCall = new ChatCompletionToolCall
+        {
+            Id = $"call_{Guid.NewGuid():n}",
+            Type = "function",
+            Function = new ChatCompletionToolCallFunction
+            {
+                Name = separatorIndex >= 0 ? payload[..separatorIndex] : payload,
+                Arguments = separatorIndex >= 0 ? payload[(separatorIndex + 1)..] : "{}"
+            }
+        };
+
+        return true;
+    }
+
+    private static ChatCompletionToolCall CreateStreamingToolCall(ChatCompletionToolCall toolCall, int index)
+    {
+        return new ChatCompletionToolCall
+        {
+            Index = index,
+            Id = toolCall.Id,
+            Type = toolCall.Type,
+            Function = toolCall.Function
+        };
+    }
+
+    private static bool IsInternalStatusMessage(string? text)
+    {
+        return !string.IsNullOrWhiteSpace(text)
+               && text.TrimStart().StartsWith("[Systeem:", StringComparison.Ordinal);
     }
 
     private static IResult GetModels([FromServices] IModelManager modelManager)

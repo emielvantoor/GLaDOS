@@ -57,11 +57,11 @@ public static class LanguageModelMetaDataExtensions
 
     public static AgentMessage ToDomainModel(this ChatMessage message)
     {
-        return new AgentMessage(ToDomainRole(message.Role), message.Content);
+        return new AgentMessage(ToDomainRole(message.Role), message.Content ?? string.Empty);
     }
 
     public static AgentToolDefinition ToDomainModel(this ChatCompletionTool tool)
     {
-        return new AgentToolDefinition(tool.Function.Name, tool.Function.Description, tool.Function.Parameters);
+        return new AgentToolDefinition(tool.Function.Name, tool.Function.Description ?? string.Empty, tool.Function.Parameters);
     }
 }
