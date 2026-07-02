@@ -50,6 +50,9 @@ public class JarvisAgent
         int maxIterations = 5;
         int currentIteration = 0;
         bool keepRunning = true;
+        AgentToolResult? lastInternalToolResult = null;
+        bool yieldedAssistantText = false;
+        bool delegatedExternalTool = false;
 
         while (keepRunning && currentIteration < maxIterations)
         {
@@ -64,6 +67,7 @@ public class JarvisAgent
                 var text = CleanAssistantText(response);
                 if (!string.IsNullOrEmpty(text))
                 {
+                    yieldedAssistantText = true;
                     yield return text;
                 }
 
@@ -78,6 +82,7 @@ public class JarvisAgent
             {
                 yield return $"\n[Systeem: Delegating external tool '{toolCall.ToolName}' to client...]\n";
                 yield return $"__TOOL_CALL__:{toolCall.ToolName}|{toolArgs}";
+                delegatedExternalTool = true;
                 break;
             }
 
@@ -85,6 +90,12 @@ public class JarvisAgent
 
             chatHistory.Add(new AgentMessage(AgentRole.Assistant, string.Empty, toolCall.ToolName, toolArgs));
             chatHistory.Add(new AgentMessage(AgentRole.Tool, toolResult.Output, toolCall.ToolName, toolCall.RawCall));
+            lastInternalToolResult = toolResult;
+        }
+
+        if (!yieldedAssistantText && !delegatedExternalTool && lastInternalToolResult != null)
+        {
+            yield return lastInternalToolResult.Output;
         }
 
         _logger.LogInformation("Finished JarvisAgent.RunAsync");

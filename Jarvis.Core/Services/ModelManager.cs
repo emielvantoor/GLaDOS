@@ -4,7 +4,7 @@ namespace Jarvis.Core.Services;
 
 public class ModelManager(IEnumerable<LanguageModel> languageModels) : IModelManager
 {
-    private Dictionary<string, LanguageModel> languageModelCache = languageModels.ToDictionary(x => x.ModelMetaData.Id);
+    private readonly Dictionary<string, LanguageModel> languageModelCache = languageModels.ToDictionary(x => x.ModelMetaData.Id);
     
     public ICollection<LanguageModelMetaData> GetAvailableModels()
     {
@@ -13,10 +13,16 @@ public class ModelManager(IEnumerable<LanguageModel> languageModels) : IModelMan
 
     public async Task<LanguageModel> GetAndInitializeModel(string modelName)
     {
-        var model = languageModelCache[modelName];
-        if (model == null)
+        if (!languageModelCache.TryGetValue(modelName, out var model))
         {
-            throw new KeyNotFoundException(modelName);
+            if (languageModelCache.Count == 1)
+            {
+                model = languageModelCache.Values.Single();
+            }
+            else
+            {
+                throw new KeyNotFoundException(modelName);
+            }
         }
 
         await model.InitializeAsync();
