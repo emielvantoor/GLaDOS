@@ -17,6 +17,7 @@ namespace Jarvis.Endpoints;
 public static class OpenAiEndpoints
 {
     private static readonly SemaphoreSlim _llmLock = new(1, 1);
+    private static readonly Encoding SseEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
 
     public static void MapOpenAiEndpoints(this IEndpointRouteBuilder app)
     {
@@ -104,8 +105,14 @@ public static class OpenAiEndpoints
         {
             try
             {
-                await using var writer = new StreamWriter(stream, Encoding.UTF8, leaveOpen: true) { NewLine = "\n" };
+                await using var writer = new StreamWriter(stream, SseEncoding, leaveOpen: true) { NewLine = "\n" };
                 bool toolCallTriggered = false;
+
+                await WriteSseAsync(
+                    writer,
+                    CreateChunk(chunkId, createdTimestamp, modelName, new ChatDelta { Role = "assistant" }),
+                    serializerOptions,
+                    token);
 
                 await foreach (var text in agentResultStream.WithCancellation(token))
                 {
@@ -135,7 +142,7 @@ public static class OpenAiEndpoints
                                 chunkId,
                                 createdTimestamp,
                                 modelName,
-                                new ChatDelta { Content = string.Empty },
+                                new ChatDelta(),
                                 "tool_calls"),
                             serializerOptions,
                             token);
@@ -155,7 +162,7 @@ public static class OpenAiEndpoints
                 {
                     await WriteSseAsync(
                         writer,
-                        CreateChunk(chunkId, createdTimestamp, modelName, new ChatDelta { Content = string.Empty }, "stop"),
+                        CreateChunk(chunkId, createdTimestamp, modelName, new ChatDelta(), "stop"),
                         serializerOptions,
                         token);
                 }

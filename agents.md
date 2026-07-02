@@ -1,3 +1,16 @@
+**Prompt:**  
+"Build the `Jarvis/Jarvis.csproj` project with the following optimized arguments:
+```bash
+dotnet build Jarvis/Jarvis.csproj --no-restore /p:AllowMissingPrunePackageData=true /p:NuGetAudit=false -m:1 -v:minimal
+```  
+**Purpose:**
+- `--no-restore`: Skips NuGet package restoration (useful if dependencies are already restored).
+- `/p:AllowMissingPrunePackageData=true`: Bypasses missing package data pruning checks.
+- `/p:NuGetAudit=false`: Disables NuGet audit for faster builds.
+- `-m:1`: Limits build to a single machine (for parallelism control).
+- `-v:minimal`: Reduces build output verbosity.
+
+
 Jarvis v2 – Agent Protocol Architecture
 Doel
 
@@ -336,3 +349,7 @@ Jarvis.LLama
     LLamaLanguageModel.cs
 
     LLamaModelLoader.cs
+
+
+When running dotnet build use the following arguments:
+dotnet build Jarvis/Jarvis.csproj --no-restore /p:AllowMissingPrunePackageData=true /p:NuGetAudit=false -m:1 -v:minimal
