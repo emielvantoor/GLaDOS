@@ -1,7 +1,7 @@
-﻿using System.Runtime.CompilerServices;
-using System.Text;
+﻿using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 using Jarvis.Core.Interfaces;
 using Jarvis.Core.Models;
 using LLama;
@@ -29,12 +29,8 @@ public class LLamaLanguageModel : LanguageModel, IDisposable
 
     protected override Task OnInitializeAsync()
     {
-        if (_initialized)
-        {
-            return Task.CompletedTask;
-        }
+        if (_initialized) return Task.CompletedTask;
 
-        // De hardware configurator heeft _params al optimaal gevuld (ContextSize, BatchSize, Q8_0 cache, GPU)
         _weights = LLamaWeights.LoadFromFile(_params);
         _context = _weights.CreateContext(_params);
 
@@ -45,7 +41,6 @@ public class LLamaLanguageModel : LanguageModel, IDisposable
         }
 
         _initialized = true;
-
         return Task.CompletedTask;
     }
 
@@ -53,195 +48,168 @@ public class LLamaLanguageModel : LanguageModel, IDisposable
         List<AgentMessage> history,
         ChatOptions chatOptions,
         List<AgentToolDefinition> tools,
-        [EnumeratorCancellation] CancellationToken cancellationToken)
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
     {
-        // 1. Formatteer de geschiedenis naar de vlekkeloze Engelse ChatML structuur voor Qwen
         string formattedPrompt = FormatHistoryToChatML(history, tools);
 
         var inferenceParams = new InferenceParams
         {
-            MaxTokens = chatOptions.MaxTokenLength ?? ModelMetaData.MaxOutputTokens, // Ruimer voor complexere code-antwoorden
+            MaxTokens = chatOptions.MaxTokenLength ?? ModelMetaData.MaxOutputTokens,
             SamplingPipeline = new DefaultSamplingPipeline()
             {
-                Temperature = chatOptions.Temperature ?? 0.5f, // Iets ademruimte om makkelijker op te starten na een tool response,
-                Seed = (uint)Random.Shared.Next(1, 100000), // Dynamisch om executor/cache-loops te voorkomen
+                Temperature = chatOptions.Temperature ?? 0.5f,
+                Seed = (uint)Random.Shared.Next(1, 100000),
                 Grammar = _grammer
             },
-            AntiPrompts = ["<|im_end|>", "</tool_call>"], // Alleen stoppen als de beurt ÉCHT voorbij is
+            AntiPrompts = ["<|im_end|>"],
         };
 
-        var textBuffer = new StringBuilder();
-        var toolBuffer = new StringBuilder();
-        bool isToolCallActive = false;
-        int bracketCount = 0;
-        int totalTokensProcessed = 0;
-
         var executor = new StatelessExecutor(_weights!, _params);
+        var fullResponseBuilder = new StringBuilder();
 
+        // 1. Verzamel de volledige output van de LLM als één string
         await foreach (var token in executor.InferAsync(formattedPrompt, inferenceParams, cancellationToken))
         {
-            totalTokensProcessed++;
-
-            if (!isToolCallActive)
-            {
-                textBuffer.Append(token);
-                string currentText = textBuffer.ToString();
-                var index = currentText.IndexOf("</think>", StringComparison.Ordinal);
-                if (index != -1)
-                {
-                    currentText = currentText.Substring(index + 8).Trim();
-                }
-
-// Maak currentText schoon van witruimte om de ECHTE start te controleren
-                string trimmedText = currentText.TrimStart();
-
-// Een directe JSON-start is ALLEEN valide als de opgebouwde tekst 
-// direct begint met '{' en GEEN markdown codeblock introduceert
-                bool isDirectJsonStart = trimmedText.StartsWith("{") && !trimmedText.Contains("`");
-
-                if (currentText.Contains("<tool_call>") || isDirectJsonStart)
-                {
-                    isToolCallActive = true;
-                    if (token.Contains("{"))
-                    {
-                        bracketCount += token.Count(c => c == '{');
-                    }
-
-                    toolBuffer.Append(token);
-                    continue;
-                }
-
-                // Gewone tekst (inclusief C# doc xml-tags en willekeurige accolades halverwege) streamt direct live
-                yield return new ChatResponseChunk(Text: token, IsToolCall: false);
-            }
-            else
-            {
-                // We zitten in een actieve tool-call. Buffer alles onzichtbaar voor de gebruiker
-                toolBuffer.Append(token);
-
-                bracketCount += token.Count(c => c == '{');
-                bracketCount -= token.Count(c => c == '}');
-
-                bool jsonIsComplete = bracketCount == 0 && toolBuffer.ToString().Contains("{");
-
-                // Als we met <tool_call> zijn begonnen wachten we op de sluit-tag. 
-                // Anders stoppen we zodra de accolades in balans zijn.
-                bool shouldCloseTool = toolBuffer.ToString().Contains("<tool_call>")
-                    ? token.Contains("</tool_call>")
-                    : jsonIsComplete;
-
-                if (shouldCloseTool)
-                {
-                    isToolCallActive = false;
-                    string rawOutput = toolBuffer.ToString();
-                    toolBuffer.Clear();
-
-                    // Maak de string grondig schoon van alle mogelijke Qwen-variaties
-                    string cleanJson = rawOutput
-                        .Replace("<tool_call>", "")
-                        .Replace("</tool_call>", "")
-                        .Replace("```json", "")
-                        .Replace("```", "")
-                        .Trim();
-
-                    if (TryParseToolCall(cleanJson, out string toolName, out string toolArgs))
-                    {
-                        yield return new ChatResponseChunk(Text: cleanJson, IsToolCall: true, ToolName: toolName,
-                            ToolArgs: toolArgs);
-                    }
-                }
-            }
+            cancellationToken.ThrowIfCancellationRequested();
+            fullResponseBuilder.Append(token);
         }
 
         executor.Context.Dispose();
+
+        string fullText = fullResponseBuilder.ToString().Trim();
+
+        // 2. Verwijder de <think>...</think> blokken volledig met Regex
+        fullText = Regex.Replace(fullText, @"<think>[\s\S]*?</think>", "").Trim();
+
+        // 3. Controleer of de output een Tool Call bevat
+        if (DetectToolCall(fullText, out string rawToolContent))
+        {
+            string normalized = NormalizeToolCall(rawToolContent);
+
+            if (TryParseToolCall(normalized, out var name, out var args))
+            {
+                yield return new ChatResponseChunk(
+                    Text: normalized,
+                    IsToolCall: true,
+                    ToolName: name,
+                    ToolArgs: args
+                );
+                yield break;
+            }
+        }
+
+        // 4. Geen tool call? Dan is het reguliere tekst
+        yield return new ChatResponseChunk(
+            Text: fullText,
+            IsToolCall: false
+        );
+    }
+
+    // =========================================================
+    // TOOL DETECTIE & PARSING (EENVOUDIGE REGEX / STRINGS)
+    // =========================================================
+
+    private bool DetectToolCall(string text, out string toolContent)
+    {
+        toolContent = "";
+
+        // Check <tool_call>...</tool_call>
+        var xmlMatch = Regex.Match(text, @"<tool_call>([\s\S]*?)</tool_call>");
+        if (xmlMatch.Success)
+        {
+            toolContent = xmlMatch.Groups[1].Value.Trim();
+            return true;
+        }
+
+        // Check [tool_call:...]
+        var bracketMatch = Regex.Match(text, @"\[tool_call:([\s\S]*?)\]");
+        if (bracketMatch.Success)
+        {
+            toolContent = bracketMatch.Groups[1].Value.Trim();
+            return true;
+        }
+
+        // Check of de gehele tekst platte JSON is die een tool call representeert
+        if (text.StartsWith("{") && text.EndsWith("}") && text.Contains("\"name\""))
+        {
+            toolContent = text;
+            return true;
+        }
+
+        return false;
+    }
+
+    private string NormalizeToolCall(string raw)
+    {
+        return raw
+            .Replace("```json", "")
+            .Replace("```", "")
+            .Trim();
     }
 
     private bool TryParseToolCall(string jsonString, out string name, out string args)
     {
         name = "";
         args = "";
+
         try
         {
             var node = JsonNode.Parse(jsonString);
-            if (node != null)
-            {
-                name = node["name"]?.ToString() ?? node["function"]?["name"]?.ToString() ?? "";
+            if (node == null) return false;
 
-                var argsNode = node["arguments"];
-                args = argsNode is JsonObject ? argsNode.ToJsonString() : argsNode?.ToString() ?? "{}";
+            name = node["name"]?.ToString()
+                ?? node["function"]?["name"]?.ToString()
+                ?? "";
 
-                return !string.IsNullOrEmpty(name);
-            }
+            var argsNode = node["arguments"];
+            args = argsNode is JsonObject
+                ? argsNode.ToJsonString()
+                : argsNode?.ToString() ?? "{}";
+
+            return !string.IsNullOrEmpty(name);
         }
         catch
         {
-            // Foutieve JSON gegenereerd door het model, faal geruisloos
+            return false;
         }
-
-        return false;
     }
+
+    // =========================================================
+    // CHATML FORMATTER
+    // =========================================================
 
     private string FormatHistoryToChatML(List<AgentMessage> history, List<AgentToolDefinition> tools)
     {
         var sb = new StringBuilder();
 
-        // 1. Systeemprompt met Engelse instructies en OpenAI-compatibele tool-definities
         if (history.All(m => m.Role != AgentRole.System))
         {
             sb.Append("<|im_start|>system\n");
-            sb.Append("You are Jarvis, an autonomous AI assistant operating on local hardware. ");
-            sb.Append("Fulfill the user's requests as accurately as possible. ");
+            sb.Append("You are Jarvis, an autonomous AI assistant.\n");
 
-            if (tools != null && tools.Any())
+            if (tools?.Any() == true)
             {
-                sb.Append("### TOOL USAGE RULES:\n");
-                sb.Append(
-                    "- If the user asks a general question, greets you (e.g., 'hello', 'hi'), or asks for something that does NOT require a tool, you MUST respond with normal conversational text. Do NOT invoke any tools.\n");
-                sb.Append(
-                    "- Only invoke a tool if the user's request directly requires it (for example, asking for the current time or date).\n");
-                sb.Append(
-                    "- To invoke a tool, you must respond EXCLUSIVELY with a JSON object containing 'name' and 'arguments'. Do not write conversational text when invoking tools.\n\n");
-
-                sb.Append("Available tools:\n");
-
-                var toolSchema = tools.Select(t => new
+                sb.Append("TOOLS:\n");
+                sb.Append(JsonSerializer.Serialize(tools.Select(t => new
                 {
                     name = t.Name,
                     description = t.Description,
                     parameters = t.Parameters
-                });
+                })));
 
-                sb.Append(JsonSerializer.Serialize(toolSchema) + "\n");
-                sb.Append(
-                    "When you want to use a tool, you must invoke it using the official tool_calls API structure. Never output the JSON tool call as markdown code blocks in the chat response. !!NEVER put ```json in front of tool calls!!");
-                sb.Append(
-                    "When you want to execute a tool, you must use the <tool_call> tags. Do never describe the tool in chat why you would choice this tool.");
+                sb.Append("\nReturn ONLY valid tool calls when needed.\n");
+                sb.Append("Tool calls may appear after reasoning blocks (<think>...</think>).");
             }
 
             sb.Append("<|im_end|>\n");
         }
 
-        // 2. Loop door de complete chatgeschiedenis heen
         foreach (var message in history)
         {
             switch (message.Role)
             {
                 case AgentRole.System:
-                    sb.Append($"<|im_start|>system\n{message.Content}");
-
-                    if (tools?.Count > 0 && !message.Content.Contains("\"tools\""))
-                    {
-                        sb.Append("\n\nYou have access to the following functions/tools:\n");
-                        var toolSchema = tools.Select(t => new
-                        {
-                            name = t.Name,
-                            description = t.Description,
-                            parameters = t.Parameters
-                        });
-                        sb.Append(JsonSerializer.Serialize(toolSchema));
-                    }
-
-                    sb.Append("<|im_end|>\n");
+                    sb.Append($"<|im_start|>system\n{message.Content}<|im_end|>\n");
                     break;
 
                 case AgentRole.User:
@@ -249,33 +217,23 @@ public class LLamaLanguageModel : LanguageModel, IDisposable
                     break;
 
                 case AgentRole.Assistant:
-                    // Als dit een tool-call was, herstellen we de JSON exact in de geschiedenis
                     if (!string.IsNullOrEmpty(message.ToolCallName))
                     {
-                        sb.Append(
-                            $"<|im_start|>assistant\n<tool_call>{{\"name\":\"{message.ToolCallName}\",\"arguments\":{message.ToolCallArgs}}}</tool_call><|im_end|>\n");
+                        sb.Append($"<|im_start|>assistant\n<tool_call>{{\"name\":\"{message.ToolCallName}\",\"arguments\":{message.ToolCallArgs}}}</tool_call><|im_end|>\n");
                     }
                     else
                     {
                         sb.Append($"<|im_start|>assistant\n{message.Content}<|im_end|>\n");
                     }
-
                     break;
 
                 case AgentRole.Tool:
-                    // De officiële ChatML manier voor Qwen om een tool resultaat te verwerken
-                    sb.Append(
-                        $"<|im_start|>user\n<tool_response>\n{message.Content}\n</tool_response><|im_end|>\n");
+                    sb.Append($"<|im_start|>user\n<tool_response>\n{message.Content}\n</tool_response><|im_end|>\n");
                     break;
-
-                default:
-                    throw new ArgumentOutOfRangeException();
             }
         }
 
-        // 3. Open de assistent tag met een newline zodat de GPU direct weet waar hij moet beginnen te typen
         sb.Append("<|im_start|>assistant\n");
-
         return sb.ToString();
     }
 
