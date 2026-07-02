@@ -21,6 +21,7 @@ public class QwenProtocol : IAgentProtocol
         {
             sb.Append("<|im_start|>system\n");
             sb.Append("You are Jarvis, an autonomous AI assistant.\n");
+            sb.Append("When a tool result is provided, use that result to answer the user in plain text. Do not call the same tool again unless the user asks for another lookup.\n");
 
             if (tools.Any())
             {
@@ -32,7 +33,8 @@ public class QwenProtocol : IAgentProtocol
                     parameters = t.Parameters
                 })));
 
-                sb.Append("\nReturn ONLY valid tool calls when needed.\n");
+                sb.Append("\nReturn ONLY valid tool calls when a tool is needed.\n");
+                sb.Append("Use this format: <tool_call>{\"name\":\"tool_name\",\"arguments\":{}}</tool_call>\n");
                 sb.Append("Tool calls may appear after reasoning blocks (<think>...</think>).\n");
             }
 
@@ -99,7 +101,7 @@ public class QwenProtocol : IAgentProtocol
 
     public string BuildToolResponse(AgentToolCall toolCall, string toolResult)
     {
-        return $"<tool_response>\n{toolResult}\n</tool_response>";
+        return $"<tool_response name=\"{toolCall.ToolName}\">\n{toolResult}\n</tool_response>\nAnswer the user now using this tool result. Do not emit another tool call unless more data is required.";
     }
 
     public string StripThinking(string response)
@@ -122,6 +124,15 @@ public class QwenProtocol : IAgentProtocol
         if (bracketMatch.Success)
         {
             toolContent = bracketMatch.Groups[1].Value.Trim();
+            return true;
+        }
+
+        var functionCallMatch = Regex.Match(
+            text,
+            @"(?<!\w)(?<name>[A-Za-z_][\w.-]*)\s*\((?<args>[\s\S]*?)\)\s*$");
+        if (functionCallMatch.Success)
+        {
+            toolContent = functionCallMatch.Value.Trim();
             return true;
         }
 
@@ -179,6 +190,11 @@ public class QwenProtocol : IAgentProtocol
             return true;
         }
 
+        if (TryParseFunctionStyleToolCall(raw, toolCall))
+        {
+            return true;
+        }
+
         var splitIndex = raw.IndexOf(' ');
         var toolName = splitIndex < 0 ? raw.Trim() : raw[..splitIndex].Trim();
         var arguments = splitIndex < 0 ? "{}" : raw[(splitIndex + 1)..].Trim();
@@ -190,6 +206,30 @@ public class QwenProtocol : IAgentProtocol
 
         toolCall.ToolName = toolName;
         toolCall.Arguments = TryParseJsonNode(arguments) ?? new JsonObject { ["value"] = arguments };
+        return true;
+    }
+
+    private static bool TryParseFunctionStyleToolCall(string raw, AgentToolCall toolCall)
+    {
+        var functionMatch = Regex.Match(
+            raw.Trim(),
+            @"^(?<name>[A-Za-z_][\w.-]*)\s*\((?<args>[\s\S]*?)\)$");
+
+        if (!functionMatch.Success)
+        {
+            return false;
+        }
+
+        toolCall.ToolName = functionMatch.Groups["name"].Value;
+
+        var rawArgs = functionMatch.Groups["args"].Value.Trim();
+        if (string.IsNullOrEmpty(rawArgs))
+        {
+            toolCall.Arguments = new JsonObject();
+            return true;
+        }
+
+        toolCall.Arguments = TryParseJsonNode(rawArgs) ?? ParseLooseArguments($"arguments: {{{rawArgs}}}");
         return true;
     }
 
@@ -244,6 +284,7 @@ public class QwenProtocol : IAgentProtocol
 
             var name = node["name"]?.ToString()
                 ?? node["tool"]?.ToString()
+                ?? node["tool_name"]?.ToString()
                 ?? node["function"]?["name"]?.ToString()
                 ?? string.Empty;
 

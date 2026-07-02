@@ -10,15 +10,14 @@ public static class AddLLamaModelBootstrapper
     {
         var nextCoderMetaData = new LanguageModelMetaData
         {
-            // De unieke identifier die je plugin meestuurt in het 'model' veld van de API request
-            Id = "Qwen3VL-8B-Instruct-Q4_K_M", 
+            Id = "local-gguf",
     
             Object = "model",
     
             // Unix timestamp van de release (bijvoorbeeld juni 2026 of de originele releasedatum)
             Created = DateTimeOffset.UtcNow.ToUnixTimeSeconds(), 
     
-            OwnedBy = "microsoft",
+            OwnedBy = "local",
             
             ContextLength =  8192,
             
@@ -46,6 +45,7 @@ public static class AddLLamaModelBootstrapper
         services.AddSingleton<LanguageModel, LLamaLanguageModel>(provider =>
         {
             var modelParams = provider.GetRequiredService<ModelParams>();
+            nextCoderMetaData.Id = Path.GetFileNameWithoutExtension(modelParams.ModelPath);
             nextCoderMetaData.ContextLength = modelParams.ContextSize.HasValue ? (int) modelParams.ContextSize.Value : 0;
             return new LLamaLanguageModel(nextCoderMetaData, modelParams);
         });
