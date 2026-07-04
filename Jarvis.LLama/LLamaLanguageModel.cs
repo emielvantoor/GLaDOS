@@ -27,6 +27,7 @@ public class LLamaLanguageModel : LanguageModel, IDisposable
     protected override Task OnInitializeAsync()
     {
         if (_initialized) return Task.CompletedTask;
+        ObjectDisposedException.ThrowIf(_isDisposed, this);
 
         _weights = LLamaWeights.LoadFromFile(_params);
         _context = _weights.CreateContext(_params);
@@ -73,12 +74,28 @@ public class LLamaLanguageModel : LanguageModel, IDisposable
         return fullResponseBuilder.ToString().Trim();
     }
 
+    protected override Task OnUnloadAsync()
+    {
+        _context?.Dispose();
+        _context = null;
+
+        _weights?.Dispose();
+        _weights = null;
+
+        _grammer = null;
+        _initialized = false;
+
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+
+        return Task.CompletedTask;
+    }
+
     public void Dispose()
     {
         if (_isDisposed) return;
 
-        _context?.Dispose();
-        _weights?.Dispose();
+        OnUnloadAsync().GetAwaiter().GetResult();
         _isDisposed = true;
 
         GC.SuppressFinalize(this);
