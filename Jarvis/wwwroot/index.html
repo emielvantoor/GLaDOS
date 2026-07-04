@@ -15,18 +15,19 @@
     </div>
 
     <div class="layout-grid">
-        <div>
+        <main class="chat-main">
             <div class="chat-box" id="chatBox">
                 <div class="message assistant">Hallo Emiel! Ik ben klaar om je te assisteren via je lokale hardware. Vraag me gerust iets!</div>
             </div>
 
-            <div class="status" id="statusText">Status: Stand-by</div>
-
-            <div class="input-area">
-                <textarea id="prompt" placeholder="Stuur een bericht naar Jarvis of plak hier je HTML code... (Shift+Enter voor nieuwe regel)"></textarea>
-                <button id="submitBtn">Verstuur</button>
+            <div class="composer">
+                <div class="status" id="statusText">Status: Stand-by</div>
+                <div class="input-area">
+                    <textarea id="prompt" placeholder="Stuur een bericht naar Jarvis of plak hier je HTML code... (Shift+Enter voor nieuwe regel)"></textarea>
+                    <button id="submitBtn">Verstuur</button>
+                </div>
             </div>
-        </div>
+        </main>
 
         <div class="sidebar">
             <div class="panel">
@@ -58,10 +59,6 @@
             <div class="panel">
                 <div class="panel-title">Beschikbare Tools (NPU/GPU)</div>
                 <div id="tools-list">
-                    <div class="tool-tag">🛠️ web_search</div>
-                    <div class="tool-tag">📂 read_file</div>
-                    <div class="tool-tag">💻 execute_bash</div>
-                    <div class="tool-tag">⏱️ get_system_time</div>
                 </div>
                 <p class="tools-note">
                     Qwen-Coder kan autonoom beslissen om deze tools aan te roepen via Function Calling.
@@ -87,6 +84,7 @@
     </div>
 </div>
 
+<script src="js/tools/index.js"></script>
 <script src="js/site.js"></script>
 
 </body>
