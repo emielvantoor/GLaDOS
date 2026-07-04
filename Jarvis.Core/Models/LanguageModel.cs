@@ -12,6 +12,16 @@ public abstract class LanguageModel
     }
     
     protected abstract Task OnInitializeAsync();
+
+    public async Task UnloadAsync()
+    {
+        await OnUnloadAsync();
+    }
+
+    protected virtual Task OnUnloadAsync()
+    {
+        return Task.CompletedTask;
+    }
     
     // Transport-only generation: protocols own prompt construction and response parsing.
     public Task<string> GenerateResponseAsync(

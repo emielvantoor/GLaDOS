@@ -5,6 +5,8 @@ namespace Jarvis.Core.Services;
 public class ModelManager(IEnumerable<LanguageModel> languageModels) : IModelManager
 {
     private readonly Dictionary<string, LanguageModel> languageModelCache = languageModels.ToDictionary(x => x.ModelMetaData.Id);
+    private readonly SemaphoreSlim modelSwitchLock = new(1, 1);
+    private string? currentModelName;
     
     public ICollection<LanguageModelMetaData> GetAvailableModels()
     {
@@ -13,20 +15,36 @@ public class ModelManager(IEnumerable<LanguageModel> languageModels) : IModelMan
 
     public async Task<LanguageModel> GetAndInitializeModel(string modelName)
     {
-        if (!languageModelCache.TryGetValue(modelName, out var model))
+        await modelSwitchLock.WaitAsync();
+        try
         {
-            if (languageModelCache.Count == 1)
+            if (!languageModelCache.TryGetValue(modelName, out var model))
             {
-                model = languageModelCache.Values.Single();
+                if (languageModelCache.Count == 1)
+                {
+                    model = languageModelCache.Values.Single();
+                }
+                else
+                {
+                    throw new KeyNotFoundException(modelName);
+                }
             }
-            else
+
+            if (currentModelName is not null &&
+                !string.Equals(currentModelName, model.ModelMetaData.Id, StringComparison.Ordinal))
             {
-                throw new KeyNotFoundException(modelName);
+                await languageModelCache[currentModelName].UnloadAsync();
+                currentModelName = null;
             }
+
+            await model.InitializeAsync();
+            currentModelName = model.ModelMetaData.Id;
+
+            return model;
         }
-
-        await model.InitializeAsync();
-
-        return model;
+        finally
+        {
+            modelSwitchLock.Release();
+        }
     }
 }
