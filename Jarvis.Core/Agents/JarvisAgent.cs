@@ -62,7 +62,8 @@ public class JarvisAgent
         {
             currentIteration++;
 
-            var prompt = _protocol.BuildPrompt(chatHistory, toolDefinitions);
+            var promptHistory = ApplyContextSize(chatHistory, toolDefinitions, options.ContextSize);
+            var prompt = _protocol.BuildPrompt(promptHistory, toolDefinitions);
             var response = await model.GenerateResponseAsync(prompt, options, cancellationToken);
             var toolCall = _protocol.ParseResponse(response).FirstOrDefault();
 
@@ -107,6 +108,56 @@ public class JarvisAgent
         }
 
         _logger.LogInformation("Finished JarvisAgent.RunAsync");
+    }
+
+    private List<AgentMessage> ApplyContextSize(
+        List<AgentMessage> chatHistory,
+        IReadOnlyList<AgentToolDefinition> toolDefinitions,
+        int? contextSize)
+    {
+        if (contextSize is not > 0)
+        {
+            return chatHistory;
+        }
+
+        var promptHistory = chatHistory.ToList();
+        while (promptHistory.Count > 1 &&
+               EstimateTokenCount(_protocol.BuildPrompt(promptHistory, toolDefinitions)) > contextSize.Value)
+        {
+            if (!RemoveOldestNonSystemMessage(promptHistory))
+            {
+                break;
+            }
+        }
+
+        return promptHistory;
+    }
+
+    private static bool RemoveOldestNonSystemMessage(List<AgentMessage> messages)
+    {
+        var removableIndex = messages.FindIndex(message => message.Role != AgentRole.System);
+        if (removableIndex < 0 || removableIndex == messages.Count - 1)
+        {
+            return false;
+        }
+
+        messages.RemoveAt(removableIndex);
+
+        var firstNonSystemIndex = messages.FindIndex(message => message.Role != AgentRole.System);
+        while (firstNonSystemIndex >= 0 &&
+               firstNonSystemIndex < messages.Count - 1 &&
+               messages[firstNonSystemIndex].Role is AgentRole.Assistant or AgentRole.Tool)
+        {
+            messages.RemoveAt(firstNonSystemIndex);
+            firstNonSystemIndex = messages.FindIndex(message => message.Role != AgentRole.System);
+        }
+
+        return true;
+    }
+
+    private static int EstimateTokenCount(string text)
+    {
+        return (int)Math.Ceiling(text.Length / 4.0);
     }
 
     private string CleanAssistantText(string response)
