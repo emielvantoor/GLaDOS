@@ -5,6 +5,8 @@ public record AgentMessage(AgentRole Role, string Content, string? ToolCallName 
 public class ChatOptions
 {
     public float? Temperature { get; set; }
+
+    public int? ContextSize { get; set; }
     
     public int? MaxTokenLength { get; set; }
 }

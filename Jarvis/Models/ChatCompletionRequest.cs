@@ -24,6 +24,12 @@ namespace Jarvis.Models
         // NIEUW: Temperature setting for controlling randomness
         [JsonPropertyName("temperature")]
         public float? Temperature { get; set; }
+
+        /// <summary>
+        /// No supported by OpenAI. When chat history is full. First message will drop off exect the system instruction
+        /// </summary>
+        [JsonPropertyName("context_size")]
+        public int? ContextSize { get; set; }
         
         [JsonPropertyName("max_tokens")]
         public int? MaxTokenLength { get; set; }
