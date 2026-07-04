@@ -13,6 +13,7 @@
     let currentAiHistoryId = null;
     let currentBubbleContentBuffer = "";
     let pendingPermissionPromptElement = null;
+    let pendingPermissionPromptMessageId = null;
     const minContextSize = 1024;
     const maxContextSize = 32768;
     const contextSizeStep = 1024;
@@ -266,6 +267,7 @@
         }
 
         chatHistory.forEach((message) => {
+            if (isToolCallCoveredByUiMessage(message)) return;
             chatBox.appendChild(createStoredMessageElement(message));
         });
 
@@ -346,7 +348,9 @@
     }
 
     function getRequestMessages() {
-        return chatHistory.map(({ _id, ...message }) => message);
+        return chatHistory
+            .filter((message) => !message.ui_only)
+            .map(({ _id, ui_only, ...message }) => message);
     }
 
     function removeFromChatHistory(messageId) {
@@ -364,8 +368,13 @@
             linkedToolCallIds.add(message.tool_call_id);
         }
 
+        if (message?.ui_only && message.tool_call_id) {
+            linkedToolCallIds.add(message.tool_call_id);
+        }
+
         chatHistory = chatHistory.filter((candidate) => {
             if (candidate._id === messageId) return false;
+            if (candidate.ui_only && linkedToolCallIds.has(candidate.tool_call_id)) return false;
             if (candidate.role === "tool" && linkedToolCallIds.has(candidate.tool_call_id)) return false;
             if (candidate.role === "assistant" && Array.isArray(candidate.tool_calls)) {
                 return !candidate.tool_calls.some((toolCall) => linkedToolCallIds.has(toolCall?.id));
@@ -427,7 +436,7 @@
     }
 
     function getChatContextUsage() {
-        return chatHistory.reduce((total, message) => {
+        return getRequestMessages().reduce((total, message) => {
             return total + estimateTokenCount(`${message.role}\n${message.content || ""}`);
         }, 0);
     }
@@ -574,7 +583,31 @@
         return div;
     }
 
+    function createUiHistoryMessage(content, options = {}) {
+        return {
+            _id: createMessageId(),
+            role: "tool-call",
+            content,
+            ui_only: true,
+            tool_call_id: options.toolCallId || "",
+            permission_status: options.permissionStatus || "",
+            invocation: options.invocation || "",
+            pending_tool_call: options.pendingToolCall || null,
+            pending_tool_args: options.pendingToolArgs || null
+        };
+    }
+
     function createStoredMessageElement(message) {
+        if (message.ui_only && message.permission_status === "pending") {
+            return createPermissionPromptElement(message);
+        }
+
+        if (message.ui_only || message.role === "tool-call") {
+            const element = createMessageElement("tool-call", message.content, { historyId: message._id });
+            element.dataset.toolCallId = message.tool_call_id || "";
+            return element;
+        }
+
         if (message.role === "assistant" && Array.isArray(message.tool_calls) && message.tool_calls.length > 0) {
             return createToolCallMessageElement(message);
         }
@@ -620,6 +653,101 @@
         } catch {
             return { query: rawArguments };
         }
+    }
+
+    function isToolCallCoveredByUiMessage(message) {
+        if (message.role !== "assistant" || !Array.isArray(message.tool_calls)) return false;
+
+        return message.tool_calls.some((toolCall) =>
+            toolCall?.id &&
+            chatHistory.some((candidate) => candidate.ui_only && candidate.tool_call_id === toolCall.id));
+    }
+
+    function createPermissionPromptElement(message, resolve = null) {
+        const permDiv = document.createElement('div');
+        permDiv.className = 'message tool-call permission-prompt';
+        permDiv.dataset.historyId = message._id;
+        permDiv.innerHTML = `
+            <p class="permission-text permission-title">🛡️ Permission required</p>
+            <p class="permission-text">Jarvis wants to run <strong>${escapeHtml(message.invocation || message.content)}</strong>. Do you approve?</p>
+            <div class="permission-actions">
+                <button class="permission-button yes" data-choice="yes">Yes</button>
+                <button class="permission-button no" data-choice="no">No</button>
+                <button class="permission-button always" data-choice="always">Always during this chat</button>
+            </div>
+        `;
+
+        permDiv.querySelectorAll('.permission-button').forEach((button) => {
+            button.addEventListener('click', () => handlePermissionChoice(message, button.dataset.choice, permDiv, resolve));
+        });
+
+        return permDiv;
+    }
+
+    async function handlePermissionChoice(message, choice, permDiv, resolve = null) {
+        const approved = choice === 'yes' || choice === 'always';
+        const pendingToolCall = getPendingToolCall(message);
+        const toolName = pendingToolCall?.name || "";
+
+        if (choice === 'always' && toolName) {
+            alwaysAllowTools.add(toolName);
+        }
+
+        const permissionContent = approved
+            ? `🔧 [TOOL CALL]: ${message.invocation} -> Status: Approved`
+            : `❌ [TOOL CALL]: ${message.invocation} -> Status: Denied by user`;
+
+        Object.assign(message, {
+            content: permissionContent,
+            permission_status: approved ? "approved" : "denied"
+        });
+        persistActiveChat();
+        updateContextUsage();
+
+        permDiv.innerHTML = approved
+            ? `🔧 [TOOL CALL]: ${escapeHtml(message.invocation)} -> Status: Approved`
+            : `❌ [TOOL CALL]: ${escapeHtml(message.invocation)} -> Status: Denied by user`;
+        addMessageActions(permDiv);
+
+        pendingPermissionPromptElement = approved ? permDiv : null;
+        pendingPermissionPromptMessageId = approved ? message._id : null;
+        document.getElementById('statusText').innerText = approved && toolName
+            ? `Status: Tool approved (${toolName})`
+            : `Status: Tool denied${toolName ? ` (${toolName})` : ""}`;
+        document.getElementById('submitBtn').disabled = false;
+
+        if (resolve) {
+            resolve(approved);
+            return;
+        }
+
+        if (!approved) return;
+
+        try {
+            await JarvisTools.executeApprovedToolCall(pendingToolCall, message.pending_tool_args || {}, {
+                addToolMessage,
+                requestToolPermission,
+                executeInternalTool,
+                executeAiRequest,
+                escapeHtml
+            });
+        } catch (error) {
+            document.getElementById('statusText').innerText = `Status: Failed to resume tool (${error.message})`;
+            addToolMessage(`Tool ${toolName || "unknown"} failed after approval: ${error.message}`);
+        }
+    }
+
+    function getPendingToolCall(message) {
+        if (message.pending_tool_call?.name) {
+            return message.pending_tool_call;
+        }
+
+        const invocationMatch = /^([A-Za-z_][\w.-]*)\(/.exec(message.invocation || "");
+        if (invocationMatch) {
+            return { name: invocationMatch[1] };
+        }
+
+        return { name: "" };
     }
 
     function toggleInspector() {
@@ -729,10 +857,24 @@
 
     function addToolMessage(message, historyId = null) {
         const chatBox = document.getElementById('chatBox');
-        const options = historyId ? { historyId } : {};
-        const toolDiv = createMessageElement('tool-call', message, options);
+        let resolvedHistoryId = historyId;
+
+        if (!resolvedHistoryId) {
+            const historyMessage = createUiHistoryMessage(message);
+            chatHistory.push(historyMessage);
+            persistActiveChat();
+            updateContextUsage();
+            resolvedHistoryId = historyMessage._id;
+        }
+
+        const toolDiv = createMessageElement('tool-call', message, { historyId: resolvedHistoryId });
         chatBox.appendChild(toolDiv);
         chatBox.scrollTop = chatBox.scrollHeight;
+
+        if (!historyId && pendingPermissionPromptElement) {
+            pendingPermissionPromptElement = null;
+            pendingPermissionPromptMessageId = null;
+        }
     }
 
     async function fetchModelInfo(modelName) {
@@ -809,7 +951,7 @@
         executeAiRequest();
     }
 
-    function requestToolPermission(tool, args) {
+    function requestToolPermission(tool, args, toolCall = null) {
         const chatBox = document.getElementById('chatBox');
         const statusText = document.getElementById('statusText');
         const submitBtn = document.getElementById('submitBtn');
@@ -821,45 +963,19 @@
         statusText.innerText = `Status: Waiting for permission to use ${tool.name}...`;
         submitBtn.disabled = true;
 
-        const permissionId = 'perm-' + Date.now();
         const invocation = formatToolInvocation(tool.name, args);
-
-        const permDiv = document.createElement('div');
-        permDiv.className = 'message tool-call permission-prompt';
-        permDiv.id = permissionId;
-
-        permDiv.innerHTML = `
-            <p class="permission-text permission-title">🛡️ Permission required</p>
-            <p class="permission-text">Jarvis wants to run <strong>${escapeHtml(invocation)}</strong>. Do you approve?</p>
-            <div class="permission-actions">
-                <button class="permission-button yes" data-choice="yes">Yes</button>
-                <button class="permission-button no" data-choice="no">No</button>
-                <button class="permission-button always" data-choice="always">Always during this chat</button>
-            </div>
-        `;
+        const permissionMessage = createUiHistoryMessage(`Permission required: ${invocation}`, {
+            permissionStatus: "pending",
+            invocation,
+            pendingToolCall: toolCall || { name: tool.name },
+            pendingToolArgs: args || {}
+        });
+        chatHistory.push(permissionMessage);
+        persistActiveChat();
+        updateContextUsage();
 
         return new Promise((resolve) => {
-            permDiv.querySelectorAll('.permission-button').forEach((button) => {
-                button.addEventListener('click', () => {
-                    const approved = button.dataset.choice === 'yes' || button.dataset.choice === 'always';
-
-                    if (button.dataset.choice === 'always') {
-                        alwaysAllowTools.add(tool.name);
-                    }
-
-                    permDiv.innerHTML = approved
-                        ? `🔧 [TOOL CALL]: ${escapeHtml(invocation)} -> Status: Approved`
-                        : `❌ [TOOL CALL]: ${escapeHtml(invocation)} -> Status: Denied by user`;
-                    addMessageActions(permDiv);
-                    pendingPermissionPromptElement = approved ? permDiv : null;
-                    statusText.innerText = approved
-                        ? `Status: Tool approved (${tool.name})`
-                        : `Status: Tool denied (${tool.name})`;
-                    submitBtn.disabled = false;
-                    resolve(approved);
-                });
-            });
-
+            const permDiv = createPermissionPromptElement(permissionMessage, resolve);
             chatBox.appendChild(permDiv);
             chatBox.scrollTop = chatBox.scrollHeight;
         });
@@ -934,9 +1050,15 @@
         updateContextUsage();
 
         if (pendingPermissionPromptElement) {
-            pendingPermissionPromptElement.dataset.historyId = toolCallMessage._id;
             pendingPermissionPromptElement.dataset.toolCallId = toolCallId;
+            const permissionMessage = chatHistory.find((message) => message._id === pendingPermissionPromptMessageId);
+            if (permissionMessage) {
+                permissionMessage.tool_call_id = toolCallId;
+                persistActiveChat();
+            }
+
             pendingPermissionPromptElement = null;
+            pendingPermissionPromptMessageId = null;
         } else {
             document.getElementById('chatBox').appendChild(createToolCallMessageElement(toolCallMessage));
         }

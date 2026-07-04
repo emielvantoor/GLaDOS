@@ -45,12 +45,18 @@
         };
 
         if (toolMetadata.permitted === "User") {
-            const approved = await context.requestToolPermission(toolMetadata, args);
+            const approved = await context.requestToolPermission(toolMetadata, args, toolCall);
             if (!approved) {
                 context.addToolMessage(`Tool ${toolMetadata.name} was denied by user.`);
                 return;
             }
         }
+
+        await executeApprovedToolCall(toolCall, args, context);
+    }
+
+    async function executeApprovedToolCall(toolCall, args, context) {
+        const tool = tools.find(candidate => candidate.name === toolCall.name);
 
         if (!tool || !tool.handle) {
             await context.executeInternalTool(toolCall, args);
@@ -72,6 +78,7 @@
         register,
         getOpenAiTools,
         handleToolCall,
+        executeApprovedToolCall,
         renderToolList
     };
 })();
