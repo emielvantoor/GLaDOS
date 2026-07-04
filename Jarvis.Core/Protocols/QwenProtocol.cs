@@ -35,6 +35,9 @@ public class QwenProtocol : IAgentProtocol
 
                 sb.Append("\nReturn ONLY valid tool calls when a tool is needed.\n");
                 sb.Append("Use this format: <tool_call>{\"name\":\"tool_name\",\"arguments\":{}}</tool_call>\n");
+                sb.Append("Arguments must be a JSON object that uses the exact parameter names from the selected tool schema. Do not wrap a single argument in a generic \"value\" property unless the schema requires \"value\".\n");
+                sb.Append("Example: if a tool requires \"file_path\", use {\"file_path\":\"/path/to/file\"}, not {\"value\":\"/path/to/file\"}.\n");
+                sb.Append("When calling a tool, output only the tool call. Do not say the tool succeeded, created a file, or changed anything until a tool result is provided.\n");
                 sb.Append("Tool calls may appear after reasoning blocks (<think>...</think>).\n");
             }
 
@@ -127,20 +130,43 @@ public class QwenProtocol : IAgentProtocol
             return true;
         }
 
+        var openBracketMatch = Regex.Match(text, @"\[tool_call:\s*(?<content>[\s\S]*)", RegexOptions.IgnoreCase);
+        if (openBracketMatch.Success)
+        {
+            toolContent = openBracketMatch.Groups["content"].Value.Trim();
+            return true;
+        }
+
+        var namedJsonMatch = Regex.Match(
+            text,
+            @"^\s*(?<name>[A-Za-z_]\w*)\s+(?<args>\{[\s\S]*\})\s*$");
+        if (namedJsonMatch.Success)
+        {
+            toolContent = namedJsonMatch.Value.Trim();
+            return true;
+        }
+
         var functionCallMatch = Regex.Match(
             text,
-            @"(?<!\w)(?<name>[A-Za-z_][\w.-]*)\s*\((?<args>[\s\S]*?)\)\s*$");
+            @"(?<![\w.])(?<name>[A-Za-z_]\w*)\s*\((?<args>[^\r\n]*?)\)\s*$");
         if (functionCallMatch.Success)
         {
             toolContent = functionCallMatch.Value.Trim();
             return true;
         }
 
-        var fencedJsonMatch = Regex.Match(text, @"```(?:json)?\s*([\s\S]*?)```", RegexOptions.IgnoreCase);
-        if (fencedJsonMatch.Success)
+        var fencedBlockMatch = Regex.Match(
+            text,
+            @"```(?<language>[A-Za-z0-9_-]*)\s*\r?\n(?<content>[\s\S]*?)```",
+            RegexOptions.IgnoreCase);
+        if (fencedBlockMatch.Success)
         {
-            var fencedContent = fencedJsonMatch.Groups[1].Value.Trim();
-            if (ContainsToolIdentifier(fencedContent))
+            var language = fencedBlockMatch.Groups["language"].Value;
+            var fencedContent = fencedBlockMatch.Groups["content"].Value.Trim();
+            if ((string.IsNullOrEmpty(language) || language.Equals("json", StringComparison.OrdinalIgnoreCase)) &&
+                fencedContent.StartsWith("{", StringComparison.Ordinal) &&
+                fencedContent.EndsWith("}", StringComparison.Ordinal) &&
+                ContainsToolIdentifier(fencedContent))
             {
                 toolContent = fencedContent;
                 return true;
@@ -160,8 +186,10 @@ public class QwenProtocol : IAgentProtocol
 
     private static bool ContainsToolIdentifier(string text)
     {
-        return text.Contains("name", StringComparison.OrdinalIgnoreCase) ||
-               text.Contains("tool", StringComparison.OrdinalIgnoreCase);
+        return Regex.IsMatch(
+            text,
+            @"[""'](?:name|tool|tool_name|function)[""']\s*:",
+            RegexOptions.IgnoreCase);
     }
 
     private static string NormalizeToolCall(string raw)
@@ -181,6 +209,11 @@ public class QwenProtocol : IAgentProtocol
         };
 
         if (TryParseJsonToolCall(raw, toolCall))
+        {
+            return true;
+        }
+
+        if (TryParseQwenCliStyleToolCall(raw, toolCall))
         {
             return true;
         }
@@ -209,11 +242,79 @@ public class QwenProtocol : IAgentProtocol
         return true;
     }
 
+    private static bool TryParseQwenCliStyleToolCall(string raw, AgentToolCall toolCall)
+    {
+        var pathMatch = Regex.Match(
+            raw,
+            @"^(?<name>[A-Za-z_]\w*)\s+for\s+path\s+['""](?<path>[^'""]+)['""](?<tail>[\s\S]*)$",
+            RegexOptions.IgnoreCase);
+
+        if (!pathMatch.Success)
+        {
+            return false;
+        }
+
+        toolCall.ToolName = pathMatch.Groups["name"].Value;
+        var arguments = new JsonObject
+        {
+            ["file_path"] = pathMatch.Groups["path"].Value
+        };
+
+        var tail = pathMatch.Groups["tail"].Value;
+        var contentMatch = Regex.Match(
+            tail,
+            @"\bwith\s+content\s*:\s*(?<content>[\s\S]*)",
+            RegexOptions.IgnoreCase);
+
+        if (contentMatch.Success)
+        {
+            arguments["content"] = NormalizeNumberedContent(contentMatch.Groups["content"].Value);
+        }
+
+        toolCall.Arguments = arguments;
+        return true;
+    }
+
+    private static string NormalizeNumberedContent(string rawContent)
+    {
+        var lines = rawContent.Replace("\r\n", "\n").Split('\n');
+        var contentLines = new List<string>();
+        var sawNumberedLine = false;
+
+        foreach (var line in lines)
+        {
+            var numberedLine = Regex.Match(line, @"^\s*\d+\s?(?<content>.*)$");
+            if (numberedLine.Success)
+            {
+                sawNumberedLine = true;
+                contentLines.Add(numberedLine.Groups["content"].Value.TrimEnd());
+                continue;
+            }
+
+            if (sawNumberedLine)
+            {
+                if (string.IsNullOrWhiteSpace(line))
+                {
+                    continue;
+                }
+
+                break;
+            }
+
+            if (!string.IsNullOrWhiteSpace(line))
+            {
+                contentLines.Add(line.Trim());
+            }
+        }
+
+        return string.Join('\n', contentLines).TrimEnd();
+    }
+
     private static bool TryParseFunctionStyleToolCall(string raw, AgentToolCall toolCall)
     {
         var functionMatch = Regex.Match(
             raw.Trim(),
-            @"^(?<name>[A-Za-z_][\w.-]*)\s*\((?<args>[\s\S]*?)\)$");
+            @"^(?<name>[A-Za-z_]\w*)\s*\((?<args>[^\r\n]*?)\)$");
 
         if (!functionMatch.Success)
         {

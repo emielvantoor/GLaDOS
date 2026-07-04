@@ -57,6 +57,26 @@ public static class LanguageModelMetaDataExtensions
 
     public static AgentMessage ToDomainModel(this ChatMessage message)
     {
+        var role = ToDomainRole(message.Role);
+
+        if (role == AgentRole.Assistant && message.ToolCalls is { Count: > 0 })
+        {
+            var toolCall = message.ToolCalls[0];
+            return new AgentMessage(
+                role,
+                message.Content ?? string.Empty,
+                toolCall.Function.Name,
+                toolCall.Function.Arguments);
+        }
+
+        if (role == AgentRole.Tool)
+        {
+            return new AgentMessage(
+                role,
+                message.Content ?? string.Empty,
+                message.Name);
+        }
+
         return new AgentMessage(ToDomainRole(message.Role), message.Content ?? string.Empty);
     }
 
