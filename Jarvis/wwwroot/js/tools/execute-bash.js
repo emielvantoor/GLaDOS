@@ -1,6 +1,7 @@
 JarvisTools.register({
     name: "execute_bash",
     icon: "💻",
+    permitted: "User",
     schema: {
         name: "execute_bash",
         description: "Execute a local bash command",

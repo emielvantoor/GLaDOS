@@ -30,7 +30,8 @@ public class QwenProtocol : IAgentProtocol
                 {
                     name = t.Name,
                     description = t.Description,
-                    parameters = t.Parameters
+                    parameters = t.Parameters,
+                    permitted = t.Permitted.ToString()
                 })));
 
                 sb.Append("\nReturn ONLY valid tool calls when a tool is needed.\n");

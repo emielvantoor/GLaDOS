@@ -11,6 +11,8 @@ public class SystemTimeTool : IJarvisTool
     public string Description =>
         "Retrieves the current local system date, time, and day of the week. Use this whenever the user asks for the current time or date.";
 
+    public ToolPermission Permitted => ToolPermission.Automatic;
+
     // Dit geeft nu netjes het OpenAI-compatibele schema terug als JsonObject
     public JsonObject Parameters => new JsonObject
     {

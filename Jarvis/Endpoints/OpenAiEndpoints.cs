@@ -3,9 +3,11 @@ using System.Globalization;
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Jarvis.Core.Agents;
 using Jarvis.Core.Interfaces;
 using Jarvis.Core.Models;
+using Jarvis.Core.Routing;
 using Jarvis.Core.Services;
 using Jarvis.Extensions;
 using Jarvis.Models;
@@ -28,7 +30,38 @@ public static class OpenAiEndpoints
         v1Group.MapGet("/models/{model}", GetSpecificModel);
         v1Group.MapGet("/models", GetModels);
         v1Group.MapGet("/runtime/memory", GetRuntimeMemoryUsage);
+        v1Group.MapPost("/tools/execute", ExecuteApprovedTool);
         v1Group.MapPost("/chat/completions", HandleChatCompletions);
+    }
+
+    private static async Task<IResult> ExecuteApprovedTool(
+        [FromServices] ToolRegistry toolRegistry,
+        [FromBody] ToolExecutionRequest? request,
+        HttpContext context)
+    {
+        if (request == null || string.IsNullOrWhiteSpace(request.Name))
+        {
+            return Results.BadRequest(new { error = new { message = "Tool name is required.", type = "invalid_request_error" } });
+        }
+
+        if (!toolRegistry.TryGetInternalTool(request.Name, out var tool))
+        {
+            return Results.NotFound(new { error = new { message = $"Tool '{request.Name}' not found.", type = "not_found_error" } });
+        }
+
+        try
+        {
+            var output = await tool.ExecuteAsync(request.Arguments ?? new JsonObject());
+            return Results.Ok(new ToolExecutionResponse(request.Name, output));
+        }
+        catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested)
+        {
+            return Results.StatusCode(StatusCodes.Status499ClientClosedRequest);
+        }
+        catch (Exception ex)
+        {
+            return Results.Problem(detail: $"Failed to execute tool '{request.Name}': {ex.Message}", statusCode: 500);
+        }
     }
 
     /// <summary>
@@ -297,6 +330,28 @@ public static class OpenAiEndpoints
 
         var payload = text["__TOOL_CALL__:".Length..];
         var separatorIndex = payload.IndexOf('|');
+        var name = separatorIndex >= 0 ? payload[..separatorIndex] : payload;
+        var arguments = separatorIndex >= 0 ? payload[(separatorIndex + 1)..] : "{}";
+
+        if (separatorIndex < 0 && payload.TrimStart().StartsWith('{'))
+        {
+            try
+            {
+                var node = JsonNode.Parse(payload);
+                var parsedName = node?["name"]?.ToString()
+                    ?? node?["function"]?["name"]?.ToString();
+
+                if (!string.IsNullOrWhiteSpace(parsedName))
+                {
+                    name = parsedName;
+                    arguments = (node?["arguments"] ?? node?["function"]?["arguments"])?.ToJsonString() ?? "{}";
+                }
+            }
+            catch (JsonException)
+            {
+                // Fall back to the legacy payload parsing below.
+            }
+        }
 
         toolCall = new ChatCompletionToolCall
         {
@@ -304,8 +359,8 @@ public static class OpenAiEndpoints
             Type = "function",
             Function = new ChatCompletionToolCallFunction
             {
-                Name = separatorIndex >= 0 ? payload[..separatorIndex] : payload,
-                Arguments = separatorIndex >= 0 ? payload[(separatorIndex + 1)..] : "{}"
+                Name = name,
+                Arguments = arguments
             }
         };
 
@@ -328,6 +383,10 @@ public static class OpenAiEndpoints
         return !string.IsNullOrWhiteSpace(text)
                && text.TrimStart().StartsWith("[Systeem:", StringComparison.Ordinal);
     }
+
+    private sealed record ToolExecutionRequest(string Name, JsonObject? Arguments);
+
+    private sealed record ToolExecutionResponse(string Name, string Output);
 
     private static IResult GetModels([FromServices] IModelManager modelManager)
     {

@@ -1,6 +1,7 @@
 JarvisTools.register({
     name: "web_search",
     icon: "🛠️",
+    permitted: "User",
     schema: {
         name: "web_search",
         description: "Search on the internet or visit a page on the internet",
@@ -16,6 +17,6 @@ JarvisTools.register({
         }
     },
     handle(args, context) {
-        context.askSearchPermission(args.query || "nu.nl");
+        context.addToolMessage(`🛠️ web_search(query="${args.query || "nu.nl"}") approved.`);
     }
 });

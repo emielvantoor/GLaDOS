@@ -12,6 +12,8 @@ public class TemperatureTool : IJarvisTool
     public string Description =>
         "Retrieves the current CPU and GPU temperatures. Use this whenever the user asks for the current CPU or GPU temperatures";
 
+    public ToolPermission Permitted => ToolPermission.User;
+
     public JsonObject Parameters => new JsonObject
     {
         ["type"] = "object",

@@ -1,7 +1,7 @@
     let chatHistory = [];
     let nextMessageId = 1;
     let baseEndpoint = "";
-    let alwaysAllowSearch = false;
+    let alwaysAllowTools = new Set();
     const defaultContextSize = 32768;
     const chatsStorageKey = "jarvis-chats";
     const activeChatStorageKey = "jarvis-active-chat-id";
@@ -12,6 +12,7 @@
     let currentAiBubbleElement = null;
     let currentAiHistoryId = null;
     let currentBubbleContentBuffer = "";
+    let pendingPermissionPromptElement = null;
     const minContextSize = 1024;
     const maxContextSize = 32768;
     const contextSizeStep = 1024;
@@ -158,7 +159,7 @@
     function syncActiveChatHistory() {
         const chat = getActiveChat();
         chatHistory = chat ? chat.messages : [];
-        alwaysAllowSearch = false;
+        alwaysAllowTools = new Set();
     }
 
     function persistActiveChat() {
@@ -265,11 +266,7 @@
         }
 
         chatHistory.forEach((message) => {
-            const html = message.role === "assistant" ? formatAssistantMessage(message.content) : null;
-            chatBox.appendChild(createMessageElement(
-                message.role,
-                html || message.content,
-                { historyId: message._id, html: Boolean(html) }));
+            chatBox.appendChild(createStoredMessageElement(message));
         });
 
         chatBox.scrollTop = chatBox.scrollHeight;
@@ -354,7 +351,28 @@
 
     function removeFromChatHistory(messageId) {
         if (!messageId) return;
-        chatHistory = chatHistory.filter((message) => message._id !== messageId);
+        const message = chatHistory.find((candidate) => candidate._id === messageId);
+        const linkedToolCallIds = new Set();
+
+        if (message?.role === "assistant" && Array.isArray(message.tool_calls)) {
+            message.tool_calls.forEach((toolCall) => {
+                if (toolCall?.id) linkedToolCallIds.add(toolCall.id);
+            });
+        }
+
+        if (message?.role === "tool" && message.tool_call_id) {
+            linkedToolCallIds.add(message.tool_call_id);
+        }
+
+        chatHistory = chatHistory.filter((candidate) => {
+            if (candidate._id === messageId) return false;
+            if (candidate.role === "tool" && linkedToolCallIds.has(candidate.tool_call_id)) return false;
+            if (candidate.role === "assistant" && Array.isArray(candidate.tool_calls)) {
+                return !candidate.tool_calls.some((toolCall) => linkedToolCallIds.has(toolCall?.id));
+            }
+
+            return true;
+        });
         persistActiveChat();
         updateContextUsage();
     }
@@ -525,11 +543,7 @@
         deleteButton.setAttribute('aria-label', 'Delete message');
         deleteButton.addEventListener('click', () => {
             removeFromChatHistory(messageElement.dataset.historyId);
-            if (chatHistory.length === 0) {
-                renderActiveChatMessages();
-            } else {
-                messageElement.remove();
-            }
+            renderActiveChatMessages();
         });
 
         actions.append(copyButton, deleteButton);
@@ -558,6 +572,54 @@
             addMessageActions(div);
         }
         return div;
+    }
+
+    function createStoredMessageElement(message) {
+        if (message.role === "assistant" && Array.isArray(message.tool_calls) && message.tool_calls.length > 0) {
+            return createToolCallMessageElement(message);
+        }
+
+        if (message.role === "tool") {
+            return createToolResultMessageElement(message);
+        }
+
+        const html = message.role === "assistant" ? formatAssistantMessage(message.content) : null;
+        return createMessageElement(
+            message.role,
+            html || message.content,
+            { historyId: message._id, html: Boolean(html) });
+    }
+
+    function createToolCallMessageElement(message) {
+        const toolCall = message.tool_calls[0];
+        const toolName = toolCall?.function?.name || message.name || "tool";
+        const args = parseToolCallArguments(toolCall?.function?.arguments);
+        const element = createMessageElement(
+            "tool-call",
+            `🔧 [TOOL CALL]: ${formatToolInvocation(toolName, args)} -> Status: Approved`,
+            { historyId: message._id });
+        element.dataset.toolCallId = toolCall?.id || "";
+        return element;
+    }
+
+    function createToolResultMessageElement(message) {
+        const element = createMessageElement(
+            "tool-call",
+            `🔧 ${message.name || "tool"} -> ${message.content || ""}`,
+            { historyId: message._id });
+        element.dataset.toolCallId = message.tool_call_id || "";
+        return element;
+    }
+
+    function parseToolCallArguments(rawArguments) {
+        if (!rawArguments) return {};
+        if (typeof rawArguments === "object") return rawArguments;
+
+        try {
+            return JSON.parse(rawArguments);
+        } catch {
+            return { query: rawArguments };
+        }
     }
 
     function toggleInspector() {
@@ -665,9 +727,10 @@
         chatBox.scrollTop = chatBox.scrollHeight;
     }
 
-    function addToolMessage(message) {
+    function addToolMessage(message, historyId = null) {
         const chatBox = document.getElementById('chatBox');
-        const toolDiv = createMessageElement('tool-call', message);
+        const options = historyId ? { historyId } : {};
+        const toolDiv = createMessageElement('tool-call', message, options);
         chatBox.appendChild(toolDiv);
         chatBox.scrollTop = chatBox.scrollHeight;
     }
@@ -743,25 +806,23 @@
         persistActiveChat();
         updateContextUsage();
 
-        const lowerUserText = userText.toLowerCase();
-        const needsSearch = lowerUserText.includes('search') || lowerUserText.includes('weather') || lowerUserText.includes('zoek') || lowerUserText.includes('weer');
-
-        if (needsSearch && !alwaysAllowSearch) {
-            askSearchPermission(userText);
-        } else {
-            executeAiRequest(needsSearch, userText);
-        }
+        executeAiRequest();
     }
 
-    function askSearchPermission(query) {
+    function requestToolPermission(tool, args) {
         const chatBox = document.getElementById('chatBox');
         const statusText = document.getElementById('statusText');
         const submitBtn = document.getElementById('submitBtn');
 
-        statusText.innerText = 'Status: Waiting for permission to use web_search...';
+        if (alwaysAllowTools.has(tool.name)) {
+            return Promise.resolve(true);
+        }
+
+        statusText.innerText = `Status: Waiting for permission to use ${tool.name}...`;
         submitBtn.disabled = true;
 
         const permissionId = 'perm-' + Date.now();
+        const invocation = formatToolInvocation(tool.name, args);
 
         const permDiv = document.createElement('div');
         permDiv.className = 'message tool-call permission-prompt';
@@ -769,7 +830,7 @@
 
         permDiv.innerHTML = `
             <p class="permission-text permission-title">🛡️ Permission required</p>
-            <p class="permission-text">Jarvis wants to run <strong>web_search(query="${escapeHtml(query)}")</strong>. Do you approve?</p>
+            <p class="permission-text">Jarvis wants to run <strong>${escapeHtml(invocation)}</strong>. Do you approve?</p>
             <div class="permission-actions">
                 <button class="permission-button yes" data-choice="yes">Yes</button>
                 <button class="permission-button no" data-choice="no">No</button>
@@ -777,35 +838,139 @@
             </div>
         `;
 
-        permDiv.querySelectorAll('.permission-button').forEach((button) => {
-            button.addEventListener('click', () => {
-                handlePermissionResponse(permissionId, button.dataset.choice, query);
+        return new Promise((resolve) => {
+            permDiv.querySelectorAll('.permission-button').forEach((button) => {
+                button.addEventListener('click', () => {
+                    const approved = button.dataset.choice === 'yes' || button.dataset.choice === 'always';
+
+                    if (button.dataset.choice === 'always') {
+                        alwaysAllowTools.add(tool.name);
+                    }
+
+                    permDiv.innerHTML = approved
+                        ? `🔧 [TOOL CALL]: ${escapeHtml(invocation)} -> Status: Approved`
+                        : `❌ [TOOL CALL]: ${escapeHtml(invocation)} -> Status: Denied by user`;
+                    addMessageActions(permDiv);
+                    pendingPermissionPromptElement = approved ? permDiv : null;
+                    statusText.innerText = approved
+                        ? `Status: Tool approved (${tool.name})`
+                        : `Status: Tool denied (${tool.name})`;
+                    submitBtn.disabled = false;
+                    resolve(approved);
+                });
             });
+
+            chatBox.appendChild(permDiv);
+            chatBox.scrollTop = chatBox.scrollHeight;
+        });
+    }
+
+    function formatToolInvocation(toolName, args) {
+        const entries = Object.entries(args || {});
+
+        if (entries.length === 0) {
+            return `${toolName}()`;
+        }
+
+        const formattedArgs = entries
+            .map(([key, value]) => `${key}=${JSON.stringify(value)}`)
+            .join(", ");
+
+        return `${toolName}(${formattedArgs})`;
+    }
+
+    async function executeInternalTool(toolCall, args) {
+        const statusText = document.getElementById('statusText');
+        const normalizedToolCall = normalizeToolCall(toolCall, args);
+        const toolName = normalizedToolCall.name;
+        const toolCallId = toolCall.id || `call_${Date.now()}`;
+        const toolArgs = normalizedToolCall.args;
+
+        statusText.innerText = `Status: Executing tool (${toolName})`;
+
+        const response = await fetch(`${baseEndpoint}/v1/tools/execute`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                name: toolName,
+                arguments: toolArgs
+            })
         });
 
-        chatBox.appendChild(permDiv);
-        chatBox.scrollTop = chatBox.scrollHeight;
-    }
-
-    function handlePermissionResponse(elementId, choice, query) {
-        const permElement = document.getElementById(elementId);
-
-        if (choice === 'always') {
-            alwaysAllowSearch = true;
+        if (!response.ok) {
+            const message = `Tool ${toolName} failed with status ${response.status}.`;
+            addToolMessage(message);
+            return;
         }
 
-        if (choice === 'yes' || choice === 'always') {
-            permElement.innerHTML = `🔧 [TOOL CALL]: web_search(query="${escapeHtml(query)}") -> Status: Approved`;
-            addMessageActions(permElement);
-            executeAiRequest(true, query);
+        const result = await response.json();
+        const output = result.output || "";
+        const toolCallMessage = {
+            _id: createMessageId(),
+            role: "assistant",
+            content: "",
+            tool_calls: [
+                {
+                    id: toolCallId,
+                    type: "function",
+                    function: {
+                        name: toolName,
+                        arguments: JSON.stringify(toolArgs)
+                    }
+                }
+            ]
+        };
+        const toolResultMessage = {
+            _id: createMessageId(),
+            role: "tool",
+            name: toolName,
+            tool_call_id: toolCallId,
+            content: output
+        };
+
+        chatHistory.push(toolCallMessage);
+        chatHistory.push(toolResultMessage);
+        persistActiveChat();
+        updateContextUsage();
+
+        if (pendingPermissionPromptElement) {
+            pendingPermissionPromptElement.dataset.historyId = toolCallMessage._id;
+            pendingPermissionPromptElement.dataset.toolCallId = toolCallId;
+            pendingPermissionPromptElement = null;
         } else {
-            permElement.innerHTML = `❌ [TOOL CALL]: web_search(query="${escapeHtml(query)}") -> Status: Denied by user`;
-            addMessageActions(permElement);
-            executeAiRequest(false, query);
+            document.getElementById('chatBox').appendChild(createToolCallMessageElement(toolCallMessage));
         }
+
+        addToolMessage(`🔧 ${toolName} -> ${output}`, toolResultMessage._id);
+
+        await executeAiRequest();
     }
 
-    async function executeAiRequest(searchExecuted, query) {
+    function normalizeToolCall(toolCall, args) {
+        let toolName = toolCall.name;
+        let toolArgs = args || {};
+
+        if (typeof toolName === "string" && toolName.trim().startsWith("{")) {
+            try {
+                const parsed = JSON.parse(toolName);
+                toolName = parsed.name || parsed.function?.name || toolName;
+                toolArgs = parsed.arguments || parsed.function?.arguments || toolArgs;
+
+                if (typeof toolArgs === "string") {
+                    toolArgs = JSON.parse(toolArgs);
+                }
+            } catch {
+                // Keep the original tool call; the server will return a clear not-found error.
+            }
+        }
+
+        return {
+            name: toolName,
+            args: toolArgs || {}
+        };
+    }
+
+    async function executeAiRequest() {
         const endpoint = document.getElementById('endpoint').value;
         const model = document.getElementById('model').value;
         const temp = parseFloat(document.getElementById('temperature').value);
@@ -927,7 +1092,8 @@
 
                 await JarvisTools.handleToolCall(pendingToolCall, parsedArgs, {
                     addToolMessage,
-                    askSearchPermission,
+                    requestToolPermission,
+                    executeInternalTool,
                     executeAiRequest,
                     escapeHtml
                 });
