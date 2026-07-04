@@ -44,30 +44,55 @@
             <div class="panel">
                 <div class="panel-title">Configuration</div>
                 <div class="form-group">
-                    <label class="form-label">Endpoint</label>
+                    <div class="setting-label-row">
+                        <label class="form-label">Endpoint</label>
+                        <button type="button" class="info-tooltip" aria-label="Endpoint info" data-tooltip="The chat completions URL Jarvis sends OpenAI-compatible requests to.">?</button>
+                    </div>
                     <input type="text" id="endpoint" class="form-control">
                 </div>
                 <div class="form-group">
-                    <label class="form-label">Active Model</label>
+                    <div class="setting-label-row">
+                        <label class="form-label">Active Model</label>
+                        <button type="button" class="info-tooltip" aria-label="Active model info" data-tooltip="The local model that will generate the assistant response.">?</button>
+                    </div>
                     <select id="model" class="form-control">
                         <option value="">Loading...</option>
                     </select>
                 </div>
                 <div>
                     <div class="range-header">
-                        <label class="range-label">Creativity (Temp)</label>
+                        <div class="setting-label-row">
+                            <label class="range-label">Creativity (Temp)</label>
+                            <button type="button" class="info-tooltip" aria-label="Temperature info" data-tooltip="Lower values are more predictable; higher values make responses more varied.">?</button>
+                        </div>
                         <span id="tempValue" class="range-value">0.7</span>
                     </div>
                     <input type="range" id="temperature" min="0.0" max="2.0" step="0.1" value="0.7" class="range-control">
                 </div>
                 <div class="form-group context-size-group">
-                    <label class="form-label" for="contextSize">Context Size</label>
-                    <input type="number" id="contextSize" class="form-control" min="1" step="1" value="32768">
+                    <div class="range-header">
+                        <div class="setting-label-row">
+                            <label class="range-label" for="contextSize">Context Size</label>
+                            <button type="button" class="info-tooltip" aria-label="Context size info" data-tooltip="How many tokens the model can consider from the conversation and system context.">?</button>
+                        </div>
+                        <span id="contextSizeValue" class="range-value">32,768</span>
+                    </div>
+                    <input type="range" id="contextSize" min="1024" max="32768" step="1024" value="32768" class="range-control">
                     <div class="context-usage" id="contextUsage">0 / 32,768 tokens used</div>
                     <div class="context-memory" id="contextMemoryUsage">Memory: loading...</div>
                     <div class="context-meter" aria-hidden="true">
                         <div class="context-meter-fill" id="contextMeterFill"></div>
                     </div>
+                </div>
+                <div class="form-group">
+                    <div class="range-header">
+                        <div class="setting-label-row">
+                            <label class="range-label" for="maxCompletionTokens">Max Completion Tokens</label>
+                            <button type="button" class="info-tooltip" aria-label="Max completion tokens info" data-tooltip="The maximum number of tokens Jarvis may generate for the next answer.">?</button>
+                        </div>
+                        <span id="maxCompletionTokensValue" class="range-value">16,384</span>
+                    </div>
+                    <input type="range" id="maxCompletionTokens" min="256" max="16384" step="256" value="16384" class="range-control">
                 </div>
             </div>
 

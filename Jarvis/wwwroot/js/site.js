@@ -12,6 +12,11 @@
     let currentAiBubbleElement = null;
     let currentAiHistoryId = null;
     let currentBubbleContentBuffer = "";
+    const minContextSize = 1024;
+    const maxContextSize = 32768;
+    const contextSizeStep = 1024;
+    const minMaxCompletionTokens = 256;
+    const maxCompletionTokensStep = 256;
     const themeStorageKey = "jarvis-theme-mode";
     const themeModes = ["auto", "light", "dark"];
 
@@ -32,12 +37,13 @@
         document.getElementById('temperature').addEventListener('input', (event) => {
             updateTempVal(event.target.value);
         });
-        document.getElementById('contextSize').addEventListener('input', updateContextUsage);
+        document.getElementById('contextSize').addEventListener('input', updateTokenSettings);
+        document.getElementById('maxCompletionTokens').addEventListener('input', updateMaxCompletionTokensValue);
         document.getElementById('inspectorToggle').addEventListener('click', toggleInspector);
         initializeChats();
         JarvisTools.renderToolList(document.getElementById('tools-list'));
         loadModels();
-        updateContextUsage();
+        updateTokenSettings();
         refreshRuntimeMemoryUsage();
 
         applyTheme();
@@ -355,7 +361,46 @@
 
     function getContextSize() {
         const value = parseInt(document.getElementById('contextSize').value, 10);
-        return Number.isFinite(value) && value > 0 ? value : defaultContextSize;
+        return clampToStep(value, minContextSize, maxContextSize, contextSizeStep, defaultContextSize);
+    }
+
+    function getMaxCompletionTokens() {
+        const value = parseInt(document.getElementById('maxCompletionTokens').value, 10);
+        return clampToStep(value, minMaxCompletionTokens, getMaxCompletionTokensLimit(), maxCompletionTokensStep, getMaxCompletionTokensLimit());
+    }
+
+    function clampToStep(value, min, max, step, fallback) {
+        const safeValue = Number.isFinite(value) ? value : fallback;
+        const clamped = Math.min(Math.max(safeValue, min), max);
+        return Math.round(clamped / step) * step;
+    }
+
+    function getMaxCompletionTokensLimit(contextSize = getContextSize()) {
+        return Math.max(minMaxCompletionTokens, Math.floor(contextSize / 2 / maxCompletionTokensStep) * maxCompletionTokensStep);
+    }
+
+    function updateTokenSettings() {
+        const contextSize = getContextSize();
+        const contextInput = document.getElementById('contextSize');
+        const maxCompletionInput = document.getElementById('maxCompletionTokens');
+        const maxCompletionLimit = getMaxCompletionTokensLimit(contextSize);
+
+        contextInput.value = contextSize;
+        document.getElementById('contextSizeValue').innerText = formatNumber(contextSize);
+
+        maxCompletionInput.max = maxCompletionLimit;
+        if (getMaxCompletionTokens() > maxCompletionLimit) {
+            maxCompletionInput.value = maxCompletionLimit;
+        }
+
+        updateMaxCompletionTokensValue();
+        updateContextUsage();
+    }
+
+    function updateMaxCompletionTokensValue() {
+        const maxCompletionTokens = getMaxCompletionTokens();
+        document.getElementById('maxCompletionTokens').value = maxCompletionTokens;
+        document.getElementById('maxCompletionTokensValue').innerText = formatNumber(maxCompletionTokens);
     }
 
     function estimateTokenCount(text) {
@@ -636,7 +681,7 @@
             const data = await response.json();
             if (data.context_length && data.context_length > 0) {
                 document.getElementById('contextSize').value = data.context_length;
-                updateContextUsage();
+                updateTokenSettings();
             }
             modelInfoDiv.innerHTML = `
                 <p><strong>ID:</strong> ${data.id || modelName}</p>
@@ -765,6 +810,7 @@
         const model = document.getElementById('model').value;
         const temp = parseFloat(document.getElementById('temperature').value);
         const contextSize = getContextSize();
+        const maxCompletionTokens = getMaxCompletionTokens();
         const chatBox = document.getElementById('chatBox');
         const statusText = document.getElementById('statusText');
         const submitBtn = document.getElementById('submitBtn');
@@ -787,6 +833,10 @@
             stream: true,
             tools: JarvisTools.getOpenAiTools()
         };
+
+        if (maxCompletionTokens !== null) {
+            requestBody.max_completion_tokens = maxCompletionTokens;
+        }
 
         rawReqPre.innerText = JSON.stringify(requestBody, null, 2);
         rawStreamPre.innerText = '';
