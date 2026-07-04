@@ -488,10 +488,14 @@ button#submitBtn:disabled {
 .form-label,
 .range-label {
     display: block;
-    margin-bottom: 5px;
+    margin-bottom: 0;
     color: var(--text-muted);
     font-size: 12px;
     font-weight: 600;
+}
+
+.form-group > .form-label {
+    margin-bottom: 5px;
 }
 
 .form-control {
@@ -521,6 +525,92 @@ button#submitBtn:disabled {
     width: 100%;
     margin: 0;
     accent-color: var(--accent-color);
+}
+
+.setting-label-row {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 5px;
+    min-width: 0;
+}
+
+.info-tooltip {
+    position: relative;
+    width: 16px;
+    height: 16px;
+    display: inline-grid;
+    place-items: center;
+    flex: 0 0 auto;
+    border: 1px solid var(--border-color);
+    border-radius: 999px;
+    background: var(--surface-color);
+    color: var(--text-muted);
+    cursor: help;
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 1;
+    padding: 0;
+}
+
+.info-tooltip::after {
+    content: attr(data-tooltip);
+    position: absolute;
+    left: 50%;
+    top: calc(100% + 8px);
+    z-index: 20;
+    width: min(220px, calc(100vw - 48px));
+    padding: 8px 10px;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    background: var(--panel-color);
+    color: var(--text-main);
+    box-shadow: var(--shadow-soft);
+    font-size: 11px;
+    font-weight: 500;
+    line-height: 1.35;
+    text-align: left;
+    white-space: normal;
+    opacity: 0;
+    pointer-events: none;
+    transform: translate(-50%, 4px);
+    transition: opacity 0.12s, transform 0.12s;
+}
+
+.info-tooltip::before {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: calc(100% + 3px);
+    z-index: 21;
+    width: 8px;
+    height: 8px;
+    border-right: 1px solid var(--border-color);
+    border-bottom: 1px solid var(--border-color);
+    background: var(--panel-color);
+    opacity: 0;
+    pointer-events: none;
+    transform: translate(-50%, 4px) rotate(45deg);
+    transition: opacity 0.12s, transform 0.12s;
+}
+
+.info-tooltip:hover,
+.info-tooltip:focus-visible {
+    border-color: var(--accent-color);
+    color: var(--accent-color);
+}
+
+.info-tooltip:hover::before,
+.info-tooltip:hover::after,
+.info-tooltip:focus-visible::before,
+.info-tooltip:focus-visible::after {
+    opacity: 1;
+    transform: translate(-50%, 0) rotate(45deg);
+}
+
+.info-tooltip:hover::after,
+.info-tooltip:focus-visible::after {
+    transform: translate(-50%, 0);
 }
 
 .context-size-group {
