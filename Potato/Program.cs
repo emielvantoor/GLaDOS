@@ -64,7 +64,13 @@ class Program
                 "2. PHASE 2 (Adjustment): Run this phase ONLY if the user asks for changes or rejects the specification. " +
                 "   If the user approves the specification, SKIP Phase 2 entirely. " +
                 "   When Phase 2 is needed, show the ENTIRE adjusted specification again and ask for approval again.\n" +
-                "3. PHASE 3 (Approach): After the specification is approved, describe how you will solve it. " +
+                "3. PHASE 3 (Approach): After the specification is approved, describe how the task will be completed. " +
+                "   Focus on the concrete completion path, not another summary of the user's request. " +
+                "   State which available CLI tool or tools you intend to use and why. " +
+                "   Available tools are GetCurrentTime, ReadFileContent, and ExecuteShellCommandAsync. " +
+                "   If no direct available tool fits the task, say whether the task can be solved through ExecuteShellCommandAsync and what kind of shell action would be needed. " +
+                "   If neither a direct tool nor shell execution can solve it, say what is missing. " +
+                "   Do not emit tool-call JSON or exact shell commands in this phase. " +
                 "   For simple read-only or inspection tasks, the CLI may proceed to execution immediately after showing the approach. " +
                 "   For risky, destructive, write, install, delete, or multi-step tasks, ask the user to type 'execute' before continuing.\n" +
                 "4. PHASE 4 (Execution): Execute the approved approach through the CLI tools.")
@@ -74,6 +80,18 @@ class Program
         string? latestSpecification = null;
         string? latestApproach = null;
         string? latestUserRequest = null;
+
+        void ResetConversationState()
+        {
+            currentState = AgentState.Specifying;
+            latestSpecification = null;
+            latestApproach = null;
+            latestUserRequest = null;
+            if (chatHistory.Count > 1)
+            {
+                chatHistory.RemoveRange(1, chatHistory.Count - 1);
+            }
+        }
 
         while (true)
         {
@@ -96,6 +114,7 @@ class Program
                     currentModel => model = currentModel,
                     currentOpenAiClient => openAiClient = currentOpenAiClient,
                     currentClient => client = currentClient,
+                    ResetConversationState,
                     () => client))
             {
                 continue;
@@ -114,8 +133,13 @@ class Program
                         ChatRole.User,
                         "I approve the specification exactly as written. Skip the adjustment phase. " +
                         "Do not show Phase 2. Do not ask for approval again. " +
-                        "Show only Phase 3: Approach. Describe the approach you will use in a few bullet points. " +
-                        "If a shell command or tool is likely needed, describe that at a high level without emitting JSON or running anything. " +
+                        "Show only Phase 3: Approach. Describe how the task will be completed in a few bullet points. " +
+                        "Focus on the concrete completion path, not another summary of the user's request. " +
+                        "State which available CLI tool or tools you intend to use and why. " +
+                        "Available tools are GetCurrentTime, ReadFileContent, and ExecuteShellCommandAsync. " +
+                        "If no direct available tool fits the task, say whether the task can be solved through ExecuteShellCommandAsync and what kind of shell action would be needed. " +
+                        "If neither a direct tool nor shell execution can solve it, say what is missing. " +
+                        "Do not emit tool-call JSON or exact shell commands in this phase. " +
                         "If this is a simple read-only inspection task, do not ask me to type 'execute'. " +
                         "Only ask me to type 'execute' if the task is risky, destructive, modifies files, installs software, deletes data, or requires multiple dependent steps.\n\n" +
                         $"Approved specification:\n{latestSpecification ?? "(Use the latest specification from the conversation.)"}"));
@@ -141,6 +165,7 @@ class Program
                     chatHistory.Add(new ChatMessage(
                         ChatRole.User,
                         "Execute the approved approach now. Do not restate the plan.\n\n" +
+                        $"Original user request:\n{latestUserRequest ?? "(Use the latest user request from the conversation.)"}\n\n" +
                         $"Approved specification:\n{latestSpecification ?? "(Use the latest specification from the conversation.)"}\n\n" +
                         $"Approved approach:\n{latestApproach ?? "(Use the latest approach from the conversation.)"}"));
                 }
@@ -353,6 +378,7 @@ class Program
         Console.WriteLine("  /model          Show model selection and switch models");
         Console.WriteLine("  /cd [path]      Change the current working directory");
         Console.WriteLine("  /ask question   Ask a side question without changing chat history");
+        Console.WriteLine("  /abort          Cancel the current task and return to the main prompt");
         Console.WriteLine("  exit, quit      Close Potato Code");
         Console.WriteLine("  y, yes, ok      Approve the current specification");
         Console.WriteLine("  execute         Approve risky or multi-step execution");
@@ -365,6 +391,7 @@ class Program
         Action<string> setModel,
         Action<IChatClient> setOpenAiClient,
         Action<IChatClient> setClient,
+        Action resetConversationState,
         Func<IChatClient> getClient)
     {
         string trimmed = input.Trim();
@@ -394,6 +421,13 @@ class Program
 
             case "/ask":
                 await HandleSideQuestionCommandAsync(arguments, getClient());
+                return true;
+
+            case "/abort":
+                resetConversationState();
+                Console.ForegroundColor = ConsoleColor.Green;
+                Console.WriteLine("Aborted current task. Back at the main prompt.");
+                Console.ResetColor();
                 return true;
 
             default:
@@ -665,8 +699,8 @@ class Program
         var tools = new[]
         {
             $"{nameof(AgentTools.GetCurrentTime)}: use for current date or time. Arguments: {{}}.",
-            $"{nameof(AgentTools.ReadFileContent)}: use to read one known text file. Arguments: {{\"filePath\":\"/full/path/to/file\"}}.",
-            $"{nameof(AgentTools.ExecuteShellCommandAsync)}: use for filesystem, directory listing, OS, process, or shell tasks. Arguments: {{\"command\":\"command to execute\",\"workingDirectory\":\"optional directory\",\"timeoutSeconds\":60}}."
+            $"{nameof(AgentTools.ReadFileContent)}: use to read one known text file. Arguments: filePath must be an exact existing path from the user request or an attached file header.",
+            $"{nameof(AgentTools.ExecuteShellCommandAsync)}: use for filesystem, directory listing, OS, process, or shell tasks. Arguments: command is the shell command to execute, workingDirectory is optional, timeoutSeconds defaults to 60."
         };
 
         var builder = new StringBuilder();
@@ -683,6 +717,8 @@ class Program
 
         builder.AppendLine("Use the shell command tool for requests that require listing directories, inspecting files, checking the OS, running commands, or reading system state.");
         builder.AppendLine("Choose an appropriate command for the current operating system.");
+        builder.AppendLine("Never copy placeholder argument values. Do not use paths like /full/path/to/file, /full/path/to/program.cs, path/to/file, or example commands.");
+        builder.AppendLine("When reading an attached file, use the exact absolute path shown in the '--- begin file: ... ---' header.");
         builder.AppendLine("Do not print commands as prose. Do not wrap tool calls in Markdown fences. The CLI will show shell commands to the user for permission before running them.");
         builder.Append("If a listed tool matches the task, emit the tool call. Do not ask the user for an alternative method.");
         return builder.ToString();
@@ -908,8 +944,26 @@ public class AgentTools
     [Description("Reads the contents of a specific text file from disk.")]
     public string ReadFileContent([Description("The full path to the file.")] string filePath)
     {
+        if (IsPlaceholderPath(filePath))
+        {
+            return "Error: The file path is a placeholder. Use the exact absolute path from the user request or attached file header.";
+        }
+
         if (!File.Exists(filePath)) return $"Error: File '{filePath}' does not exist.";
         return File.ReadAllText(filePath);
+    }
+
+    private static bool IsPlaceholderPath(string? filePath)
+    {
+        if (string.IsNullOrWhiteSpace(filePath))
+        {
+            return true;
+        }
+
+        string normalized = filePath.Trim().Replace('\\', '/').ToLowerInvariant();
+        return normalized.Contains("/full/path/", StringComparison.Ordinal) ||
+               normalized.Contains("path/to/file", StringComparison.Ordinal) ||
+               normalized.Contains("program.cs", StringComparison.Ordinal) && normalized.StartsWith("/full/path", StringComparison.Ordinal);
     }
 
     [Description("Executes a shell command after showing it to the user and asking for permission. Uses PowerShell on Windows and Bash on other platforms.")]

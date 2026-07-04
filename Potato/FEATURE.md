@@ -37,7 +37,7 @@ The CLI uses a staged workflow:
    This phase only runs if the user rejects or changes the specification. If the user approves the specification, this phase is skipped.
 
 3. Approach
-   After approval, the agent explains how it will solve the task. It must not run tools or emit tool-call JSON in this phase.
+   After approval, the agent explains how the task will be completed. It names the available CLI tool or tools it intends to use and why. If no direct tool fits, it states whether the task can be solved through shell execution and what kind of shell action would be needed. It must not run tools, emit tool-call JSON, or print exact shell commands in this phase.
 
 4. Execution
    The CLI executes the approved approach through available tools.
@@ -96,6 +96,9 @@ Slash commands are handled by the CLI before a message is sent to the staged age
 
 - `/ask question`
   Sends a one-off side question to the selected model without adding the question or answer to the main staged conversation history.
+
+- `/abort`
+  Cancels the current staged task, clears the in-progress conversation history, and returns to the main prompt while keeping the selected model and working directory.
 
 ## Tools
 
