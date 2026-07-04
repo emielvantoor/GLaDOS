@@ -27,6 +27,14 @@ public class OpenAIContentConverter : JsonConverter<string>
                 {
                     textParts.Add(textProp.GetString() ?? string.Empty);
                 }
+                else if (TryReadImageUrl(element, out var imageUrl))
+                {
+                    textParts.Add($"[Image: {imageUrl}]");
+                }
+                else if (TryReadFileReference(element, out var fileReference))
+                {
+                    textParts.Add($"[File: {fileReference}]");
+                }
                 else if (element.ValueKind == JsonValueKind.String)
                 {
                     textParts.Add(element.GetString() ?? string.Empty);
@@ -46,5 +54,49 @@ public class OpenAIContentConverter : JsonConverter<string>
     public override void Write(Utf8JsonWriter writer, string value, JsonSerializerOptions options)
     {
         writer.WriteStringValue(value);
+    }
+
+    private static bool TryReadImageUrl(JsonElement element, out string imageUrl)
+    {
+        imageUrl = string.Empty;
+
+        if (!element.TryGetProperty("image_url", out var imageUrlElement))
+        {
+            return false;
+        }
+
+        if (imageUrlElement.ValueKind == JsonValueKind.String)
+        {
+            imageUrl = imageUrlElement.GetString() ?? string.Empty;
+        }
+        else if (imageUrlElement.ValueKind == JsonValueKind.Object &&
+                 imageUrlElement.TryGetProperty("url", out var urlElement))
+        {
+            imageUrl = urlElement.GetString() ?? string.Empty;
+        }
+
+        return !string.IsNullOrWhiteSpace(imageUrl);
+    }
+
+    private static bool TryReadFileReference(JsonElement element, out string fileReference)
+    {
+        fileReference = string.Empty;
+
+        if (!element.TryGetProperty("file", out var fileElement) ||
+            fileElement.ValueKind != JsonValueKind.Object)
+        {
+            return false;
+        }
+
+        if (fileElement.TryGetProperty("filename", out var filenameElement))
+        {
+            fileReference = filenameElement.GetString() ?? string.Empty;
+        }
+        else if (fileElement.TryGetProperty("file_id", out var fileIdElement))
+        {
+            fileReference = fileIdElement.GetString() ?? string.Empty;
+        }
+
+        return !string.IsNullOrWhiteSpace(fileReference);
     }
 }
