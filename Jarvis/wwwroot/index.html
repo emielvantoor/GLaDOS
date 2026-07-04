@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="nl">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -17,34 +17,36 @@
     <div class="layout-grid">
         <main class="chat-main">
             <div class="chat-box" id="chatBox">
-                <div class="message assistant">Hallo Emiel! Ik ben klaar om je te assisteren via je lokale hardware. Vraag me gerust iets!</div>
+                <div class="message assistant">
+                    <div class="message-content">Hello Emiel! I'm ready to assist you through your local hardware. Feel free to ask me anything!</div>
+                </div>
             </div>
 
             <div class="composer">
-                <div class="status" id="statusText">Status: Stand-by</div>
+                <div class="status" id="statusText">Status: Standby</div>
                 <div class="input-area">
-                    <textarea id="prompt" placeholder="Stuur een bericht naar Jarvis of plak hier je HTML code... (Shift+Enter voor nieuwe regel)"></textarea>
-                    <button id="submitBtn">Verstuur</button>
+                    <textarea id="prompt" placeholder="Send a message to Jarvis or paste your HTML code here... (Shift+Enter for a new line)"></textarea>
+                    <button id="submitBtn">Send</button>
                 </div>
             </div>
         </main>
 
         <div class="sidebar">
             <div class="panel">
-                <div class="panel-title">Configuratie</div>
+                <div class="panel-title">Configuration</div>
                 <div class="form-group">
                     <label class="form-label">Endpoint</label>
                     <input type="text" id="endpoint" class="form-control">
                 </div>
                 <div class="form-group">
-                    <label class="form-label">Actief Model</label>
+                    <label class="form-label">Active Model</label>
                     <select id="model" class="form-control">
-                        <option value="">Laden...</option>
+                        <option value="">Loading...</option>
                     </select>
                 </div>
                 <div>
                     <div class="range-header">
-                        <label class="range-label">Creativiteit (Temp)</label>
+                        <label class="range-label">Creativity (Temp)</label>
                         <span id="tempValue" class="range-value">0.7</span>
                     </div>
                     <input type="range" id="temperature" min="0.0" max="2.0" step="0.1" value="0.7" class="range-control">
@@ -52,33 +54,33 @@
             </div>
 
             <div class="panel">
-                <div class="panel-title">Model Informatie</div>
-                <div id="model-info">Wacht op model selectie...</div>
+                <div class="panel-title">Model Information</div>
+                <div id="model-info">Waiting for model selection...</div>
             </div>
 
             <div class="panel">
-                <div class="panel-title">Beschikbare Tools (NPU/GPU)</div>
+                <div class="panel-title">Available Tools (NPU/GPU)</div>
                 <div id="tools-list">
                 </div>
                 <p class="tools-note">
-                    Qwen-Coder kan autonoom beslissen om deze tools aan te roepen via Function Calling.
+                    Qwen-Coder can autonomously decide to invoke these tools via function calling.
                 </p>
             </div>
         </div>
     </div>
 
     <button class="inspector-toggle" id="inspectorToggle">
-        📁 Inspecteer Rauwe OpenAI Berichten & Streams (<span id="inspector-status">Ingeklapt</span>)
+        📁 Inspect Raw OpenAI Messages & Streams (<span id="inspector-status">Collapsed</span>)
     </button>
     <div id="raw-inspector">
         <div class="raw-grid">
             <div>
-                <div class="raw-label">Laatste Request JSON:</div>
-                <pre id="raw-request">Nog geen request verzonden...</pre>
+                <div class="raw-label">Latest Request JSON:</div>
+                <pre id="raw-request">No request sent yet...</pre>
             </div>
             <div>
-                <div class="raw-label">Binnenkomende Stream Chunks:</div>
-                <pre id="raw-stream">Wacht op data stream...</pre>
+                <div class="raw-label">Incoming Stream Chunks:</div>
+                <pre id="raw-stream">Waiting for data stream...</pre>
             </div>
         </div>
     </div>
