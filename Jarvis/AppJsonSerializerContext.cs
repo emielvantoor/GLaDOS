@@ -10,6 +10,7 @@ using Jarvis.Models;
 [JsonSerializable(typeof(ChatCompletionChunk[]))]
 [JsonSerializable(typeof(ChatCompletionRequest))]
 [JsonSerializable(typeof(ChatCompletionResponse))]
+[JsonSerializable(typeof(RuntimeMemoryUsageResponse))]
 internal partial class AppJsonSerializerContext : JsonSerializerContext
 {
 }
