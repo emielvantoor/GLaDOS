@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GLaDOS OpenAI Bridge Client</title>
+    <link rel="stylesheet" href="css/site.css">
+</head>
+<body>
+
+<div class="container">
+    <div class="header-wrapper">
+        <h1>🚀 GLaDOS OpenAI Bridge Client</h1>
+        <button class="theme-toggle" id="themeBtn">🌓 Auto Theme</button>
+    </div>
+
+    <div class="layout-grid">
+        <main class="chat-main">
+            <div class="chat-box" id="chatBox">
+                <div class="message assistant">
+                    <div class="message-content">Hello Emiel! I'm ready to assist you through your local hardware. Feel free to ask me anything!</div>
+                </div>
+            </div>
+
+            <div class="composer">
+                <div class="status" id="statusText">Status: Standby</div>
+                <div class="input-area">
+                    <input type="file" id="textFileInput" class="file-input" accept="text/*,.txt,.md,.json,.csv,.html,.css,.js,.ts,.xml,.yaml,.yml" multiple>
+                    <button type="button" id="attachTextBtn" class="attach-text-button" title="Add text files to the chat input" aria-label="Add text files">+</button>
+                    <textarea id="prompt" placeholder="Send a message to GLaDOS or paste your HTML code here... (Shift+Enter for a new line)"></textarea>
+                    <button id="submitBtn">Send</button>
+                </div>
+            </div>
+        </main>
+
+        <div class="sidebar">
+            <div class="panel chats-panel">
+                <div class="panel-title-row">
+                    <div class="panel-title">Chats</div>
+                    <button type="button" class="small-action-button" id="newChatBtn">New</button>
+                </div>
+                <div class="chat-list" id="chatList"></div>
+                <button type="button" class="delete-chat-button" id="deleteChatBtn">Delete Current Chat</button>
+            </div>
+
+            <div class="panel collapsible-panel collapsed">
+                <button type="button" class="panel-collapse-button" aria-expanded="false">
+                    <span class="panel-title">Configuration</span>
+                    <span class="panel-collapse-icon" aria-hidden="true">v</span>
+                </button>
+                <div class="panel-content">
+                    <div class="form-group">
+                        <div class="setting-label-row">
+                            <label class="form-label">Endpoint</label>
+                            <button type="button" class="info-tooltip" aria-label="Endpoint info" data-tooltip="The chat completions URL GLaDOS sends OpenAI-compatible requests to.">?</button>
+                        </div>
+                        <input type="text" id="endpoint" class="form-control">
+                    </div>
+                    <div class="form-group">
+                        <div class="setting-label-row">
+                            <label class="form-label">Active Model</label>
+                            <button type="button" class="info-tooltip" aria-label="Active model info" data-tooltip="The local model that will generate the assistant response.">?</button>
+                        </div>
+                        <select id="model" class="form-control">
+                            <option value="">Loading...</option>
+                        </select>
+                    </div>
+                    <div>
+                        <div class="range-header">
+                            <div class="setting-label-row">
+                                <label class="range-label">Creativity (Temp)</label>
+                                <button type="button" class="info-tooltip" aria-label="Temperature info" data-tooltip="Lower values are more predictable; higher values make responses more varied.">?</button>
+                            </div>
+                            <span id="tempValue" class="range-value">0.7</span>
+                        </div>
+                        <input type="range" id="temperature" min="0.0" max="2.0" step="0.1" value="0.7" class="range-control">
+                    </div>
+                    <div class="form-group context-size-group">
+                        <div class="range-header">
+                            <div class="setting-label-row">
+                                <label class="range-label" for="contextSize">Context Size</label>
+                                <button type="button" class="info-tooltip" aria-label="Context size info" data-tooltip="How many tokens the model can consider from the conversation and system context.">?</button>
+                            </div>
+                            <span id="contextSizeValue" class="range-value">32,768</span>
+                        </div>
+                        <input type="range" id="contextSize" min="1024" max="32768" step="1024" value="32768" class="range-control">
+                        <div class="context-usage" id="contextUsage">0 / 32,768 tokens used</div>
+                        <div class="context-memory" id="contextMemoryUsage">Memory: loading...</div>
+                        <div class="context-meter" aria-hidden="true">
+                            <div class="context-meter-fill" id="contextMeterFill"></div>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <div class="range-header">
+                            <div class="setting-label-row">
+                                <label class="range-label" for="maxCompletionTokens">Max Completion Tokens</label>
+                                <button type="button" class="info-tooltip" aria-label="Max completion tokens info" data-tooltip="The maximum number of tokens GLaDOS may generate for the next answer.">?</button>
+                            </div>
+                            <span id="maxCompletionTokensValue" class="range-value">16,384</span>
+                        </div>
+                        <input type="range" id="maxCompletionTokens" min="256" max="16384" step="256" value="16384" class="range-control">
+                    </div>
+                </div>
+            </div>
+
+            <div class="panel collapsible-panel collapsed">
+                <button type="button" class="panel-collapse-button" aria-expanded="false">
+                    <span class="panel-title">Model Information</span>
+                    <span class="panel-collapse-icon" aria-hidden="true">v</span>
+                </button>
+                <div class="panel-content">
+                    <div id="model-info">Waiting for model selection...</div>
+                </div>
+            </div>
+
+            <div class="panel collapsible-panel collapsed">
+                <button type="button" class="panel-collapse-button" aria-expanded="false">
+                    <span class="panel-title">Available Tools</span>
+                    <span class="panel-collapse-icon" aria-hidden="true">v</span>
+                </button>
+                <div class="panel-content">
+                    <div id="tools-list">
+                    </div>
+                    <p class="tools-note">
+                        Internal tools come from <code>/v1/tools</code>. Browser tools are sent with each chat request.
+                    </p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <button class="inspector-toggle" id="inspectorToggle">
+        📁 Inspect Raw OpenAI Messages & Streams (<span id="inspector-status">Collapsed</span>)
+    </button>
+    <div id="raw-inspector">
+        <div class="raw-grid">
+            <div>
+                <div class="raw-label">Latest Request JSON:</div>
+                <pre id="raw-request">No request sent yet...</pre>
+            </div>
+            <div>
+                <div class="raw-label">Incoming Stream Chunks:</div>
+                <pre id="raw-stream">Waiting for data stream...</pre>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="js/tools/index.js"></script>
+<script src="js/app/state.js"></script>
+<script src="js/app/theme.js"></script>
+<script src="js/app/chats.js"></script>
+<script src="js/app/content.js"></script>
+<script src="js/app/artifacts.js"></script>
+<script src="js/app/history.js"></script>
+<script src="js/app/settings.js"></script>
+<script src="js/app/messages.js"></script>
+<script src="js/app/permissions.js"></script>
+<script src="js/app/controls.js"></script>
+<script src="js/app/assistant.js"></script>
+<script src="js/app/models.js"></script>
+<script src="js/app/composer.js"></script>
+<script src="js/app/tools.js"></script>
+<script src="js/app/stream.js"></script>
+<script src="js/site.js"></script>
+
+</body>
+</html>

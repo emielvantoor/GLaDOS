@@ -1,7 +1,7 @@
 **Prompt:**  
-"Build the `Jarvis/Jarvis.csproj` project with the following optimized arguments:
+"Build the `GLaDOS/GLaDOS.csproj` project with the following optimized arguments:
 ```bash
-dotnet build Jarvis/Jarvis.csproj --no-restore /p:AllowMissingPrunePackageData=true /p:NuGetAudit=false -m:1 -v:minimal
+dotnet build GLaDOS/GLaDOS.csproj --no-restore /p:AllowMissingPrunePackageData=true /p:NuGetAudit=false -m:1 -v:minimal
 ```  
 **Purpose:**
 - `--no-restore`: Skips NuGet package restoration (useful if dependencies are already restored).
@@ -11,12 +11,12 @@ dotnet build Jarvis/Jarvis.csproj --no-restore /p:AllowMissingPrunePackageData=t
 - `-v:minimal`: Reduces build output verbosity.
 
 
-Jarvis v2 – Agent Protocol Architecture
+GLaDOS v2 – Agent Protocol Architecture
 Doel
 
-Jarvis moet geen AI-agent zijn die zelf alle tool-protocollen begrijpt.
+GLaDOS moet geen AI-agent zijn die zelf alle tool-protocollen begrijpt.
 
-Jarvis moet een Agent Orchestrator worden die meerdere AI-agent protocollen kan hosten, routeren en combineren.
+GLaDOS moet een Agent Orchestrator worden die meerdere AI-agent protocollen kan hosten, routeren en combineren.
 
 Het LanguageModel mag volledig protocol-onafhankelijk worden.
 
@@ -24,11 +24,11 @@ Architectuur
 Browser / Rider / VSCode
 │
 ▼
-Jarvis.Agent (Orchestrator)
+GLaDOS.Agent (Orchestrator)
 │
 ┌────────────────┼────────────────┐
 ▼                ▼                ▼
-JarvisProtocol    QwenProtocol    OpenAIProtocol
+GLaDOSProtocol    QwenProtocol    OpenAIProtocol
 │                │                │
 └────────────────┼────────────────┘
 ▼
@@ -38,7 +38,7 @@ Tool Router
 Internal Tools   External Agent
 │            │
 ▼            ▼
-Jarvis Tools    Rider/QwenAgent
+GLaDOS Tools    Rider/QwenAgent
 │
 ▼
 LanguageModel
@@ -95,7 +95,7 @@ Voorbeelden:
 
 Protocols/
 
-JarvisProtocol.cs
+GLaDOSProtocol.cs
 
 OpenAIProtocol.cs
 
@@ -155,7 +155,7 @@ public string Provider;
     public string RawCall;
 }
 
-Hiermee hoeft de rest van Jarvis nooit meer te weten welk protocol gebruikt werd.
+Hiermee hoeft de rest van GLaDOS nooit meer te weten welk protocol gebruikt werd.
 
 5. ToolRouter
 
@@ -191,9 +191,9 @@ De ToolRouter beslist uitsluitend:
 
 intern uitvoeren
 extern routeren
-6. JarvisAgent wordt een Orchestrator
+6. GLaDOSAgent wordt een Orchestrator
 
-JarvisAgent bevat geen protocolcode.
+GLaDOSAgent bevat geen protocolcode.
 
 Zijn taak wordt:
 
@@ -223,7 +223,7 @@ Protocol.BuildToolResponse()
 
 LanguageModel
 
-JarvisAgent weet dus niet meer hoe Qwen tool-calls eruit zien.
+GLaDOSAgent weet dus niet meer hoe Qwen tool-calls eruit zien.
 
 7. Internal vs External Tools
 
@@ -314,7 +314,7 @@ Dus:
 
 Protocol.BuildToolResponse()
 Directory structuur
-Jarvis.Core
+GLaDOS.Core
 
     Protocols/
 
@@ -326,7 +326,7 @@ Jarvis.Core
 
         QwenProtocol.cs
 
-        JarvisProtocol.cs
+        GLaDOSProtocol.cs
 
     Routing/
 
@@ -342,9 +342,9 @@ Jarvis.Core
 
     Agents/
 
-        JarvisAgent.cs
+        GLaDOSAgent.cs
 
-Jarvis.LLama
+GLaDOS.LLama
 
     LLamaLanguageModel.cs
 
@@ -352,4 +352,4 @@ Jarvis.LLama
 
 
 When running dotnet build use the following arguments:
-dotnet build Jarvis/Jarvis.csproj --no-restore /p:AllowMissingPrunePackageData=true /p:NuGetAudit=false -m:1 -v:minimal
+dotnet build GLaDOS/GLaDOS.csproj --no-restore /p:AllowMissingPrunePackageData=true /p:NuGetAudit=false -m:1 -v:minimal
