@@ -12,6 +12,7 @@ On startup the CLI:
 2. Loads available models from `/v1/models`.
 3. Prompts the user to choose a model by number or name.
 4. Creates an OpenAI-compatible chat client for `/v1/chat/completions`.
+5. Shows a Qwen-style terminal header with the selected model and current project folder.
 
 The default endpoint is:
 
@@ -70,6 +71,31 @@ go
 ```
 
 Type `exit` or `quit` to close the CLI.
+
+Type `?` to show shortcuts.
+
+Messages can include `@path/to/file` references. Potato resolves relative paths from the current project folder, reads the referenced text files, and appends their contents to the message sent to the model.
+
+Supported examples:
+
+```text
+explain @Potato/Program.cs
+review @"path with spaces/file.cs"
+summarize @~/notes/context.md
+```
+
+## Slash Commands
+
+Slash commands are handled by the CLI before a message is sent to the staged agent workflow.
+
+- `/model`
+  Shows the model selection prompt again and switches the active chat client to the selected model.
+
+- `/cd [path]`
+  Changes the CLI working directory. Relative paths are resolved from the current working directory, `~/` paths are expanded, and `file://` paths are supported.
+
+- `/ask question`
+  Sends a one-off side question to the selected model without adding the question or answer to the main staged conversation history.
 
 ## Tools
 
