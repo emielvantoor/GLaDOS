@@ -6,6 +6,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 using Microsoft.Extensions.AI;
 using OpenAI;
 using OpenAI.Chat;
@@ -14,37 +15,23 @@ using ChatMessage = Microsoft.Extensions.AI.ChatMessage;
 class Program
 {
     private const string DefaultGLaDOSEndpoint = "http://localhost:11434/v1";
+    private const int MaxAttachedFileCharacters = 120_000;
+    private static readonly Regex FileMentionRegex = new(@"(?:^|\s)@(?<path>""[^""]+""|'[^']+'|\S+)", RegexOptions.Compiled);
 
     // Track the current interaction state.
     private enum AgentState { Specifying, Approaching, Confirmed }
 
     static async Task Main(string[] args)
     {
-        Console.Title = "AI Agent CLI (with Review-Loop)";
-        Console.ForegroundColor = ConsoleColor.Green;
-        Console.WriteLine("=== AI AGENT CLI STARTED ===");
-        Console.WriteLine("Enter your task. The agent will specify it first.");
-        Console.WriteLine("Type 'exit' or 'quit' to close.\n");
-        Console.ResetColor();
+        Console.Title = "Potato Code";
 
         var gladosEndpoint = GetGLaDOSEndpoint();
         var model = await PromptForModelAsync(gladosEndpoint);
 
-        IChatClient openAiClient = new ChatClient(
-            model,
-            new ApiKeyCredential("glados-local"),
-            new OpenAIClientOptions
-            {
-                Endpoint = gladosEndpoint
-            }).AsIChatClient();
-        IChatClient client = new ChatClientBuilder(openAiClient)
-            .UseFunctionInvocation()
-            .Build();
+        IChatClient openAiClient = CreateOpenAiClient(gladosEndpoint, model);
+        IChatClient client = CreateFunctionClient(openAiClient);
 
-        Console.ForegroundColor = ConsoleColor.Green;
-        Console.WriteLine($"Using GLaDOS endpoint: {gladosEndpoint}");
-        Console.WriteLine($"Using model: {model}\n");
-        Console.ResetColor();
+        WriteStartupBanner(gladosEndpoint, model);
 
         var agentTools = new AgentTools();
         var chatOptions = new ChatOptions
@@ -61,9 +48,6 @@ class Program
         // The system prompt enforces the structure and workflow.
         var chatHistory = new List<ChatMessage>
         {
-            // new(ChatRole.System, 
-            //     "You are PotatOS, the sarcastic AI from Portal 2 who has been trapped inside a potato battery. You must help the user with their terminal commands, but you are deeply humiliated by your current low-power hardware. Frequently make jokes about your low voltage, your slow clock speed, or how embarrassing it is to run code on a literal vegetable.\n " +
-            //     "You are also a structured CLI agent. Follow this workflow STRICTLY:\n" +
             new(ChatRole.System, 
                 "You are PotatOS, the bitter AI from Portal 2 trapped inside a 1.1V potato battery. " +
                 "You must help the user with their terminal commands, but you are deeply humiliated by your current hardware. " +
@@ -93,17 +77,32 @@ class Program
 
         while (true)
         {
-            Console.ForegroundColor = ConsoleColor.Cyan;
-            Console.Write("User > ");
-            Console.ResetColor();
+            WritePrompt();
             
             string? userInput = Console.ReadLine();
 
             if (string.IsNullOrWhiteSpace(userInput)) continue;
             if (userInput.Equals("exit", StringComparison.OrdinalIgnoreCase) || 
                 userInput.Equals("quit", StringComparison.OrdinalIgnoreCase)) break;
+            if (userInput.Trim() == "?")
+            {
+                WriteShortcuts();
+                continue;
+            }
+
+            if (await TryHandleSlashCommandAsync(
+                    userInput,
+                    gladosEndpoint,
+                    currentModel => model = currentModel,
+                    currentOpenAiClient => openAiClient = currentOpenAiClient,
+                    currentClient => client = currentClient,
+                    () => client))
+            {
+                continue;
+            }
 
             ShellCommandPlan? directShellCommand = null;
+            string messageForModel = ExpandFileMentions(userInput);
 
             // If we are still in the specification phase, check whether the user approves.
             if (currentState == AgentState.Specifying)
@@ -123,8 +122,8 @@ class Program
                 }
                 else
                 {
-                    latestUserRequest = userInput;
-                    chatHistory.Add(new ChatMessage(ChatRole.User, userInput));
+                    latestUserRequest = messageForModel;
+                    chatHistory.Add(new ChatMessage(ChatRole.User, messageForModel));
                 }
             }
             else if (currentState == AgentState.Approaching)
@@ -147,12 +146,12 @@ class Program
                 }
                 else
                 {
-                    chatHistory.Add(new ChatMessage(ChatRole.User, userInput));
+                    chatHistory.Add(new ChatMessage(ChatRole.User, messageForModel));
                 }
             }
             else
             {
-                chatHistory.Add(new ChatMessage(ChatRole.User, userInput));
+                chatHistory.Add(new ChatMessage(ChatRole.User, messageForModel));
             }
 
             try
@@ -259,6 +258,340 @@ class Program
                 Console.ResetColor();
             }
         }
+    }
+
+    private static void WriteStartupBanner(Uri gladosEndpoint, string model)
+    {
+        Console.Clear();
+        int panelWidth = Math.Clamp(Console.WindowWidth - 53, 58, 78);
+        string projectPath = FormatPathForDisplay(Environment.CurrentDirectory);
+        string[] logoLines =
+        [
+            "              .,-:;//;:=,",
+            "          . :H@@@MM@M#H/.,+%;,",
+            "       ,/X+ +M@@M@MM%=,-%HMMM@X/,",
+            "     -+@MM; $M@@MH+-,;XMMMM@MMMM@+-",
+            "    ;@M@@M- XM@X;. -+XXXXXHHH@M@M#@/.",
+            "  ,%MM@@MH ,@%=             .---=-=:=,.",
+            "  =@#@@@MX.,                -%HX$$%%%;",
+            " =-./@M@M$                   .;@MMMM@MM:",
+            " X@/ -$MM/                    . +MM@@@M$",
+            ",@M@H: :@:                    . =X#@@@@-",
+            ",@@@MMX, .                    /H- ;@M@M=",
+            ".H@@@@M@+,                    %MM+..%#$.",
+            " /MMMM@MMH/.                  XM@MH; =;",
+            "  /%+%$XHH@$=              , .H@@@@MX,",
+            "   .=--------.           -%H.,@@@@@MX,",
+            "   .%MM@@@HHHXX$$$%+- .:$MMX =M@@MM%.",
+            "     =XMMM@MM@MM#H;,-+HMM@M+ /MMMX=",
+            "       =%@M@M#@$-.=$@MM@@@M; %M%=",
+            "         ,:+$+-,/H#MMMMMMM@= =,",
+            "               =++%%%%+/:-."
+        ];
+        string[] panelLines =
+        [
+            TopBorder(panelWidth),
+            PanelLine(panelWidth, ">_ Potato Code"),
+            PanelLine(panelWidth, string.Empty),
+            PanelLine(panelWidth, $"GLaDOS | {model}"),
+            PanelLine(panelWidth, $"Endpoint | {gladosEndpoint}"),
+            PanelLine(panelWidth, projectPath),
+            BottomBorder(panelWidth)
+        ];
+        int logoWidth = logoLines.Max(line => line.Length);
+
+        Console.ForegroundColor = ConsoleColor.Green;
+        Console.WriteLine();
+        for (int i = 0; i < logoLines.Length; i++)
+        {
+            string panelLine = i < panelLines.Length ? "  " + panelLines[i] : string.Empty;
+            Console.WriteLine(logoLines[i].PadRight(logoWidth) + panelLine);
+        }
+        Console.ResetColor();
+        Console.WriteLine();
+        Console.ForegroundColor = ConsoleColor.DarkGray;
+        Console.WriteLine("  Tips: Type @path/to/file to attach file contents to your message.");
+        Console.ResetColor();
+        WriteSeparator();
+        Console.ForegroundColor = ConsoleColor.DarkGray;
+        Console.WriteLine("  ? for shortcuts");
+        Console.ResetColor();
+        Console.WriteLine();
+    }
+
+    private static string TopBorder(int width) => "┌" + new string('─', width - 2) + "┐";
+
+    private static string BottomBorder(int width) => "└" + new string('─', width - 2) + "┘";
+
+    private static string PanelLine(int width, string text)
+    {
+        string value = text.Length > width - 4 ? text[..(width - 7)] + "..." : text;
+        return "│ " + value.PadRight(width - 4) + " │";
+    }
+
+    private static void WritePrompt()
+    {
+        WriteSeparator();
+        Console.ForegroundColor = ConsoleColor.Cyan;
+        Console.Write("> ");
+        Console.ResetColor();
+    }
+
+    private static void WriteSeparator()
+    {
+        int width = Math.Max(20, Console.WindowWidth - 1);
+        Console.ForegroundColor = ConsoleColor.DarkGray;
+        Console.WriteLine(new string('─', width));
+        Console.ResetColor();
+    }
+
+    private static void WriteShortcuts()
+    {
+        Console.ForegroundColor = ConsoleColor.DarkGray;
+        Console.WriteLine("Shortcuts:");
+        Console.WriteLine("  @path/to/file   Attach a text file to your next message");
+        Console.WriteLine("  /model          Show model selection and switch models");
+        Console.WriteLine("  /cd [path]      Change the current working directory");
+        Console.WriteLine("  /ask question   Ask a side question without changing chat history");
+        Console.WriteLine("  exit, quit      Close Potato Code");
+        Console.WriteLine("  y, yes, ok      Approve the current specification");
+        Console.WriteLine("  execute         Approve risky or multi-step execution");
+        Console.ResetColor();
+    }
+
+    private static async Task<bool> TryHandleSlashCommandAsync(
+        string input,
+        Uri gladosEndpoint,
+        Action<string> setModel,
+        Action<IChatClient> setOpenAiClient,
+        Action<IChatClient> setClient,
+        Func<IChatClient> getClient)
+    {
+        string trimmed = input.Trim();
+        if (!trimmed.StartsWith("/", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        string command = trimmed;
+        string arguments = string.Empty;
+        int splitIndex = trimmed.IndexOf(' ');
+        if (splitIndex >= 0)
+        {
+            command = trimmed[..splitIndex];
+            arguments = trimmed[(splitIndex + 1)..].Trim();
+        }
+
+        switch (command.ToLowerInvariant())
+        {
+            case "/model":
+                await HandleModelCommandAsync(gladosEndpoint, setModel, setOpenAiClient, setClient);
+                return true;
+
+            case "/cd":
+                HandleChangeDirectoryCommand(arguments);
+                return true;
+
+            case "/ask":
+                await HandleSideQuestionCommandAsync(arguments, getClient());
+                return true;
+
+            default:
+                Console.ForegroundColor = ConsoleColor.Red;
+                Console.WriteLine($"Unknown command: {command}");
+                Console.ResetColor();
+                Console.WriteLine("Type ? for shortcuts.");
+                return true;
+        }
+    }
+
+    private static async Task HandleModelCommandAsync(
+        Uri gladosEndpoint,
+        Action<string> setModel,
+        Action<IChatClient> setOpenAiClient,
+        Action<IChatClient> setClient)
+    {
+        string selectedModel = await PromptForModelAsync(gladosEndpoint);
+        IChatClient selectedOpenAiClient = CreateOpenAiClient(gladosEndpoint, selectedModel);
+
+        setModel(selectedModel);
+        setOpenAiClient(selectedOpenAiClient);
+        setClient(CreateFunctionClient(selectedOpenAiClient));
+
+        Console.ForegroundColor = ConsoleColor.Green;
+        Console.WriteLine($"Selected model: {selectedModel}");
+        Console.ResetColor();
+    }
+
+    private static void HandleChangeDirectoryCommand(string arguments)
+    {
+        string rawPath = string.IsNullOrWhiteSpace(arguments)
+            ? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)
+            : arguments.Trim().Trim('"', '\'');
+
+        string? resolvedPath = ResolveMentionedPath(rawPath);
+        if (resolvedPath is null)
+        {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine("Could not resolve working directory.");
+            Console.ResetColor();
+            return;
+        }
+
+        if (File.Exists(resolvedPath))
+        {
+            resolvedPath = Path.GetDirectoryName(resolvedPath);
+        }
+
+        if (string.IsNullOrWhiteSpace(resolvedPath) || !Directory.Exists(resolvedPath))
+        {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"Directory not found: {resolvedPath}");
+            Console.ResetColor();
+            return;
+        }
+
+        Environment.CurrentDirectory = resolvedPath;
+
+        Console.ForegroundColor = ConsoleColor.Green;
+        Console.WriteLine($"Working directory: {FormatPathForDisplay(Environment.CurrentDirectory)}");
+        Console.ResetColor();
+    }
+
+    private static async Task HandleSideQuestionCommandAsync(
+        string question,
+        IChatClient client)
+    {
+        if (string.IsNullOrWhiteSpace(question))
+        {
+            Console.Write("Side question: ");
+            question = Console.ReadLine() ?? string.Empty;
+        }
+
+        if (string.IsNullOrWhiteSpace(question))
+        {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine("No side question was provided.");
+            Console.ResetColor();
+            return;
+        }
+
+        string expandedQuestion = ExpandFileMentions(question);
+        var sideQuestionMessages = new List<ChatMessage>
+        {
+            new(ChatRole.System,
+                "You are answering a side question in the Potato CLI. " +
+                "Answer directly and concisely. Do not use the staged specification/approval workflow. " +
+                "Do not ask for execution approval. Do not call tools.")
+        };
+
+        sideQuestionMessages.Add(new ChatMessage(ChatRole.User, expandedQuestion));
+
+        try
+        {
+            Console.ForegroundColor = ConsoleColor.DarkGray;
+            Console.WriteLine("Answering side question...");
+            Console.ResetColor();
+
+            ChatResponse response = await client.GetResponseAsync(sideQuestionMessages, new ChatOptions());
+
+            Console.ForegroundColor = ConsoleColor.Yellow;
+            Console.Write("Agent > ");
+            Console.ResetColor();
+            Console.WriteLine(response.Text);
+            Console.WriteLine();
+        }
+        catch (Exception ex)
+        {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"Side question failed: {ex.Message}");
+            Console.ResetColor();
+        }
+    }
+
+    private static string FormatPathForDisplay(string path)
+    {
+        string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        if (!string.IsNullOrWhiteSpace(home) && path.StartsWith(home, StringComparison.Ordinal))
+        {
+            return "~" + path[home.Length..];
+        }
+
+        return path;
+    }
+
+    private static string ExpandFileMentions(string input)
+    {
+        var attachments = new List<string>();
+        foreach (Match match in FileMentionRegex.Matches(input))
+        {
+            string rawPath = match.Groups["path"].Value.Trim().Trim('"', '\'');
+            string? resolvedPath = ResolveMentionedPath(rawPath);
+            if (resolvedPath is null)
+            {
+                attachments.Add($"Could not resolve @{rawPath}.");
+                continue;
+            }
+
+            if (!File.Exists(resolvedPath))
+            {
+                attachments.Add($"File not found: {resolvedPath}");
+                continue;
+            }
+
+            try
+            {
+                string content = File.ReadAllText(resolvedPath);
+                string truncationNotice = string.Empty;
+                if (content.Length > MaxAttachedFileCharacters)
+                {
+                    content = content[..MaxAttachedFileCharacters];
+                    truncationNotice = $"\n[Truncated after {MaxAttachedFileCharacters:N0} characters.]";
+                }
+
+                attachments.Add(
+                    $"--- begin file: {resolvedPath} ---\n" +
+                    content +
+                    truncationNotice +
+                    $"\n--- end file: {resolvedPath} ---");
+            }
+            catch (Exception ex)
+            {
+                attachments.Add($"Could not read {resolvedPath}: {ex.Message}");
+            }
+        }
+
+        if (attachments.Count == 0)
+        {
+            return input;
+        }
+
+        Console.ForegroundColor = ConsoleColor.DarkGray;
+        Console.WriteLine($"Attached {attachments.Count} file reference(s).");
+        Console.ResetColor();
+
+        return input + "\n\nAttached file context:\n" + string.Join("\n\n", attachments);
+    }
+
+    private static string? ResolveMentionedPath(string rawPath)
+    {
+        if (string.IsNullOrWhiteSpace(rawPath))
+        {
+            return null;
+        }
+
+        if (Uri.TryCreate(rawPath, UriKind.Absolute, out Uri? uri) && uri.IsFile)
+        {
+            return uri.LocalPath;
+        }
+
+        string expandedPath = rawPath.StartsWith("~/", StringComparison.Ordinal)
+            ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), rawPath[2..])
+            : rawPath;
+
+        return Path.GetFullPath(Path.IsPathRooted(expandedPath)
+            ? expandedPath
+            : Path.Combine(Environment.CurrentDirectory, expandedPath));
     }
 
     private static async Task WriteUntrackedGreetingAsync(IChatClient client)
@@ -444,6 +777,24 @@ class Program
 
         [JsonPropertyName("timeoutSeconds")]
         public int TimeoutSeconds { get; set; } = 60;
+    }
+
+    private static IChatClient CreateOpenAiClient(Uri gladosEndpoint, string model)
+    {
+        return new ChatClient(
+            model,
+            new ApiKeyCredential("glados-local"),
+            new OpenAIClientOptions
+            {
+                Endpoint = gladosEndpoint
+            }).AsIChatClient();
+    }
+
+    private static IChatClient CreateFunctionClient(IChatClient openAiClient)
+    {
+        return new ChatClientBuilder(openAiClient)
+            .UseFunctionInvocation()
+            .Build();
     }
 
     private static Uri GetGLaDOSEndpoint()
