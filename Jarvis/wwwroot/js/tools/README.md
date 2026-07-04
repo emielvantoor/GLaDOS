@@ -12,6 +12,7 @@ To add a tool:
 JarvisTools.register({
     name: "my_tool",
     icon: "🧰",
+    permitted: "User",
     schema: {
         name: "my_tool",
         description: "Describe when the model should use this tool.",
@@ -35,6 +36,7 @@ JarvisTools.register({
 Available handler context:
 
 - `context.addToolMessage(message)` shows a tool message in the chat.
-- `context.askSearchPermission(query)` shows the web-search permission prompt.
-- `context.executeAiRequest(searchExecuted, query)` continues the AI request flow.
+- `context.requestToolPermission(tool, args)` shows the generic permission prompt.
+- `context.executeInternalTool(toolCall, args)` executes an approved server-side Jarvis tool.
+- `context.executeAiRequest()` continues the AI request flow.
 - `context.escapeHtml(text)` escapes HTML for safe display.

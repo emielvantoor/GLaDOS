@@ -82,6 +82,10 @@ public static class LanguageModelMetaDataExtensions
 
     public static AgentToolDefinition ToDomainModel(this ChatCompletionTool tool)
     {
-        return new AgentToolDefinition(tool.Function.Name, tool.Function.Description ?? string.Empty, tool.Function.Parameters);
+        return new AgentToolDefinition(
+            tool.Function.Name,
+            tool.Function.Description ?? string.Empty,
+            tool.Function.Parameters,
+            tool.Permitted);
     }
 }

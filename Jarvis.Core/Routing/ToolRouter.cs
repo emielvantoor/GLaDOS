@@ -1,5 +1,6 @@
 using System.Text.Json.Nodes;
 using Jarvis.Core.Models;
+using Jarvis.Core.Tools;
 using Microsoft.Extensions.Logging;
 
 namespace Jarvis.Core.Routing;
@@ -20,6 +21,17 @@ public class ToolRouter
         if (!_toolRegistry.TryGetInternalTool(toolCall.ToolName, out var tool))
         {
             _logger.LogInformation("Delegating external tool call {ToolName}", toolCall.ToolName);
+            return new AgentToolResult
+            {
+                ToolCall = toolCall,
+                Output = string.Empty,
+                IsExternal = true
+            };
+        }
+
+        if (tool.Permitted == ToolPermission.User)
+        {
+            _logger.LogInformation("Delegating user-permitted internal tool call {ToolName}", toolCall.ToolName);
             return new AgentToolResult
             {
                 ToolCall = toolCall,

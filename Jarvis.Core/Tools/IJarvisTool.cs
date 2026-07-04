@@ -9,6 +9,8 @@ public interface IJarvisTool
     
     // De beschrijving zodat de GPU weet WANNEER hij deze tool moet kiezen
     string Description { get; }
+
+    ToolPermission Permitted { get; }
     
     // De OpenAI-compatible JSON schema definitie van de parameters (indien aanwezig)
     JsonObject Parameters { get; }

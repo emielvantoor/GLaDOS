@@ -15,7 +15,7 @@ public class ToolRegistry
     public IReadOnlyList<AgentToolDefinition> GetDefinitions()
     {
         return _tools.Values
-            .Select(t => new AgentToolDefinition(t.Name, t.Description, t.Parameters))
+            .Select(t => new AgentToolDefinition(t.Name, t.Description, t.Parameters, t.Permitted))
             .ToList();
     }
 
