@@ -104,6 +104,10 @@ internal static class PromptLibrary
         return builder.ToString();
     }
 
+    public static string SearchReplaceToolCallExample =>
+        "Use this exact textual tool-call shape if native tool calling is not produced: " +
+        "<tool_call>{\"name\":\"ApplySearchReplaceAsync\",\"arguments\":{\"filePath\":\"actual/path/from/observation\",\"search\":\"exact current text from ReadFileContent\",\"replace\":\"requested replacement text\"}}</tool_call>";
+
     private static string BuildToolSummary(bool includeArguments)
     {
         var builder = new StringBuilder();
@@ -196,7 +200,9 @@ internal static class PromptLibrary
         builder.AppendLine($"Required current step: {OneLine(previousQuestion)}");
         builder.AppendLine("ApplySearchReplaceAsync, CreateFileAsync, and ApplyDiffPatchAsync are registered and available. Do not claim they are unavailable.");
         builder.AppendLine("Execution is already approved inside the ReAct loop. Do not ask the user to type execute.");
-        builder.Append("Now respond with exactly one registered tool call. For source edits, use ApplySearchReplaceAsync with exact SEARCH and REPLACE text. For new files, use CreateFileAsync. Do not use shell commands as an edit fallback.");
+        builder.Append("Now respond with exactly one registered tool call. For source edits, use ApplySearchReplaceAsync with exact SEARCH and REPLACE text. ");
+        builder.Append(SearchReplaceToolCallExample);
+        builder.Append(" For new files, use CreateFileAsync. Do not use shell commands as an edit fallback.");
         return builder.ToString();
     }
 

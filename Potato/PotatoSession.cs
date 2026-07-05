@@ -312,7 +312,8 @@ internal sealed partial class PotatoSession
                 {
                     chatHistory.Add(new ChatMessage(
                         ChatRole.User,
-                        "Correction: ApplySearchReplaceAsync, CreateFileAsync, and ApplyDiffPatchAsync are available. Do not use ExecuteShellCommandAsync or manual editor instructions for source edits. The next response must be exactly one registered tool call, preferably ApplySearchReplaceAsync with exact SEARCH and REPLACE text copied from the latest file content, or CreateFileAsync for a new file."));
+                        "Correction: ApplySearchReplaceAsync, CreateFileAsync, and ApplyDiffPatchAsync are available. If you still believe a listed tool is unavailable, name the exact tool and the concrete observation proving it. Do not use ExecuteShellCommandAsync or manual editor instructions for source edits. The next response must be exactly one registered tool call, preferably ApplySearchReplaceAsync with exact SEARCH and REPLACE text copied from the latest file content, or CreateFileAsync for a new file. " +
+                        PromptLibrary.SearchReplaceToolCallExample));
                     continue;
                 }
 
@@ -359,7 +360,8 @@ internal sealed partial class PotatoSession
                 latestObservation +=
                     Environment.NewLine +
                     Environment.NewLine +
-                    "Correction: The assistant text incorrectly claimed one or more tools are unavailable. Native tool calls just executed successfully in this environment. Continue by using the registered tools. For source edits prefer ApplySearchReplaceAsync with exact SEARCH and REPLACE text; for new files use CreateFileAsync.";
+                    "Correction: The assistant text incorrectly claimed one or more tools are unavailable. Native tool calls just executed successfully in this environment. If you still believe a listed tool is unavailable, name the exact tool and the concrete observation proving it. Continue by using the registered tools. For source edits prefer ApplySearchReplaceAsync with exact SEARCH and REPLACE text; for new files use CreateFileAsync. " +
+                    PromptLibrary.SearchReplaceToolCallExample;
             }
 
             chatHistory.Add(new ChatMessage(
