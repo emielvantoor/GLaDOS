@@ -7,6 +7,9 @@ internal sealed class PotatoSession(
     GladosChatClientFactory clientFactory,
     ModelSelector modelSelector)
 {
+    private const int MaxReActIterations = 12;
+    private const int MaxToolCallsPerIteration = 8;
+
     private readonly AgentTools agentTools = new();
     private readonly FileMentionExpander fileMentionExpander = new();
     private readonly List<ChatMessage> chatHistory =
@@ -69,7 +72,6 @@ internal sealed class PotatoSession(
 
     private async Task HandleUserInputAsync(string userInput, ChatOptions toolOptions)
     {
-        ShellCommandPlan? directShellCommand = null;
         string messageForModel = fileMentionExpander.Expand(userInput);
 
         if (currentState == AgentState.Specifying)
@@ -90,7 +92,6 @@ internal sealed class PotatoSession(
             if (ApprovalPolicy.IsUserExecutionApproval(userInput))
             {
                 currentState = AgentState.Confirmed;
-                directShellCommand = await PlanExecutionAsync();
 
                 chatHistory.Add(new ChatMessage(ChatRole.System, PromptLibrary.BuildToolInstructions()));
                 chatHistory.Add(new ChatMessage(
@@ -116,19 +117,17 @@ internal sealed class PotatoSession(
             {
                 AgentState.Specifying => "Generating specification...",
                 AgentState.Approaching => "Generating approach...",
-                _ => "Agent is executing..."
+                _ => "Agent is executing ReAct loop..."
             });
 
-            if (directShellCommand is not null)
+            ChatOptions currentOptions = CreateCurrentOptions(toolOptions, includeTools: currentState == AgentState.Confirmed);
+
+            if (currentState == AgentState.Confirmed)
             {
-                await ExecuteDirectShellCommandAsync(directShellCommand);
+                await RunReActLoopAsync(currentOptions);
+                ResetConversationState();
                 return;
             }
-
-            var currentOptions = new ChatOptions
-            {
-                Tools = currentState == AgentState.Confirmed ? toolOptions.Tools : null
-            };
 
             ChatResponse response = await currentClient.GetResponseAsync(chatHistory, currentOptions);
             chatHistory.Add(new ChatMessage(ChatRole.Assistant, response.Text));
@@ -138,13 +137,18 @@ internal sealed class PotatoSession(
             if (currentState == AgentState.Approaching &&
                 !ApprovalPolicy.RequiresExplicitExecutionApproval(latestSpecification, latestApproach))
             {
-                directShellCommand = await PlanExecutionAsync();
-                if (directShellCommand is not null)
-                {
-                    currentState = AgentState.Confirmed;
-                    PotatoConsole.WriteStatus("Proceeding to command permission...");
-                    await ExecuteDirectShellCommandAsync(directShellCommand);
-                }
+                currentState = AgentState.Confirmed;
+                chatHistory.Add(new ChatMessage(ChatRole.System, PromptLibrary.BuildToolInstructions()));
+                chatHistory.Add(new ChatMessage(
+                    ChatRole.User,
+                    PromptLibrary.ExecuteApprovedApproachMessage(
+                        latestUserRequest,
+                        latestSpecification,
+                        latestApproach)));
+
+                PotatoConsole.WriteStatus("Proceeding to ReAct execution...");
+                await RunReActLoopAsync(CreateCurrentOptions(toolOptions, includeTools: true));
+                ResetConversationState();
             }
         }
         catch (Exception ex)
@@ -161,27 +165,77 @@ internal sealed class PotatoSession(
             [
                 AIFunctionFactory.Create(agentTools.GetCurrentTime),
                 AIFunctionFactory.Create(agentTools.ReadFileContent),
+                AIFunctionFactory.Create(agentTools.ApplyDiffPatchAsync),
                 AIFunctionFactory.Create(agentTools.ExecuteShellCommandAsync)
             ]
         };
     }
 
-    private async Task ExecuteDirectShellCommandAsync(ShellCommandPlan directShellCommand)
+    private static ChatOptions CreateCurrentOptions(ChatOptions toolOptions, bool includeTools)
     {
-        string directResult = await agentTools.ExecuteShellCommandAsync(
-            directShellCommand.Command,
-            directShellCommand.WorkingDirectory,
-            directShellCommand.TimeoutSeconds);
-
-        chatHistory.Add(new ChatMessage(ChatRole.Assistant, directResult));
-        PotatoConsole.WriteAgentResponse(directResult);
-        ResetConversationState();
+        return new ChatOptions
+        {
+            Tools = includeTools ? toolOptions.Tools : null
+        };
     }
 
-    private Task<ShellCommandPlan?> PlanExecutionAsync()
+    private async Task RunReActLoopAsync(ChatOptions toolOptions)
     {
-        var planner = new ExecutionPlanner(currentOpenAiClient);
-        return planner.TryPlanExecutionAsync(latestUserRequest, latestSpecification, latestApproach);
+        for (int iteration = 1; iteration <= MaxReActIterations; iteration++)
+        {
+            int toolCallsBefore = agentTools.ToolInvocationCount;
+            PotatoConsole.WriteStatus($"ReAct iteration {iteration}/{MaxReActIterations}...");
+
+            ChatResponse response = await currentClient.GetResponseAsync(chatHistory, toolOptions);
+            string responseText = response.Text.Trim();
+
+            if (string.IsNullOrWhiteSpace(responseText))
+            {
+                responseText = "No assistant response was returned.";
+            }
+
+            chatHistory.Add(new ChatMessage(ChatRole.Assistant, responseText));
+            PotatoConsole.WriteAgentResponse(RemoveFinalMarker(responseText));
+
+            if (IsFinalResponse(responseText))
+            {
+                return;
+            }
+
+            int toolCallsThisIteration = agentTools.ToolInvocationCount - toolCallsBefore;
+            if (toolCallsThisIteration <= 0)
+            {
+                chatHistory.Add(new ChatMessage(
+                    ChatRole.User,
+                    PromptLibrary.ContinueReActMessage(requireToolUse: false)));
+                continue;
+            }
+
+            if (toolCallsThisIteration > MaxToolCallsPerIteration)
+            {
+                chatHistory.Add(new ChatMessage(
+                    ChatRole.User,
+                    $"You used {toolCallsThisIteration} tools in the previous iteration. Finish with FINAL: if the task is complete, otherwise continue with one targeted next action."));
+                continue;
+            }
+
+            chatHistory.Add(new ChatMessage(
+                ChatRole.User,
+                PromptLibrary.ContinueReActMessage(requireToolUse: true)));
+        }
+
+        PotatoConsole.WriteError($"Stopped after {MaxReActIterations} ReAct iterations without a FINAL response.");
+    }
+
+    private static bool IsFinalResponse(string responseText) =>
+        responseText.TrimStart().StartsWith("FINAL:", StringComparison.OrdinalIgnoreCase);
+
+    private static string RemoveFinalMarker(string responseText)
+    {
+        string trimmed = responseText.TrimStart();
+        return trimmed.StartsWith("FINAL:", StringComparison.OrdinalIgnoreCase)
+            ? trimmed["FINAL:".Length..].TrimStart()
+            : responseText;
     }
 
     private void StoreLatestResponse(string responseText)
