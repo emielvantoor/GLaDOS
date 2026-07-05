@@ -53,6 +53,7 @@ internal sealed partial class PotatoSession
             modelSelector,
             fileMentionExpander,
             ResetConversationState,
+            () => PotatoConsole.WriteConversationTranscript(chatHistory),
             () => currentClient,
             SwitchModel);
 
@@ -230,6 +231,7 @@ internal sealed partial class PotatoSession
 
             chatHistory.Add(new ChatMessage(ChatRole.Assistant, responseText));
             reActMemory.Add("Assistant ReAct response", responseText);
+            PotatoConsole.WriteModelExchange(iteration, GetLatestModelQuestion(), responseText);
 
             if (IsFinalResponse(responseText))
             {
@@ -348,13 +350,12 @@ internal sealed partial class PotatoSession
     private async Task<bool> TryExecuteDeterministicFallbackAsync(int iteration)
     {
         if (iteration != 1 ||
-            !ApprovalPolicy.IsReadOnlyInspectionRequest(latestUserRequest) ||
-            !LooksLikeProjectOrFolderRequest(latestUserRequest))
+            !ShouldStartWithProjectInspection(latestUserRequest))
         {
             return false;
         }
 
-        PotatoConsole.WriteStatus("Model did not choose the first inspection action; running deterministic directory listing fallback...");
+        PotatoConsole.WriteStatus("Model did not choose the first project inspection action; running deterministic directory listing fallback...");
         string command = OperatingSystem.IsWindows() ? "dir" : "ls -la";
         string result = await agentTools.ExecuteShellCommandAsync(command, Environment.CurrentDirectory, 60);
         await reActMemory.SummarizeLargeUnsummarizedItemsAsync(currentOpenAiClient);
@@ -368,6 +369,10 @@ internal sealed partial class PotatoSession
                 result)));
         return true;
     }
+
+    private static bool ShouldStartWithProjectInspection(string? request) =>
+        ApprovalPolicy.IsProjectChangeRequest(request) ||
+        ApprovalPolicy.IsReadOnlyInspectionRequest(request) && LooksLikeProjectOrFolderRequest(request);
 
     private static bool LooksLikeProjectOrFolderRequest(string? request)
     {
