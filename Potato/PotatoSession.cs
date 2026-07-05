@@ -39,7 +39,7 @@ internal sealed partial class PotatoSession
         this.modelSelector = modelSelector;
         currentOpenAiClient = openAiClient;
         currentClient = client;
-        agentTools = new AgentTools(reActMemory);
+        agentTools = new AgentTools(reActMemory, () => currentOpenAiClient);
     }
 
     public async Task RunAsync()
@@ -402,7 +402,7 @@ internal sealed partial class PotatoSession
                     GetIntArgument(toolCall.Arguments, "maxEntries") ??
                     GetIntArgument(toolCall.Arguments, "max_entries") ??
                     200),
-                nameof(AgentTools.SummarizeFilePurpose) => agentTools.SummarizeFilePurpose(
+                nameof(AgentTools.SummarizeFilePurpose) => await agentTools.SummarizeFilePurpose(
                     GetStringArgument(toolCall.Arguments, "filePath") ??
                     GetStringArgument(toolCall.Arguments, "file_path") ??
                     string.Empty),

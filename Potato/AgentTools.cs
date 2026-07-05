@@ -3,12 +3,14 @@ using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
+using Microsoft.Extensions.AI;
 
-internal class AgentTools(ReActMemory memory)
+internal class AgentTools(ReActMemory memory, Func<IChatClient> getSideQuestionClient)
 {
     private const int DefaultCommandTimeoutSeconds = 60;
     private const int MaxCommandTimeoutSeconds = 600;
     private const int MaxPatchCharacters = 200_000;
+    private const int MaxPurposeInferenceCharacters = 12_000;
 
     public int ToolInvocationCount { get; private set; }
 
@@ -104,7 +106,7 @@ internal class AgentTools(ReActMemory memory)
     }
 
     [Description("Summarizes a text file's visible contents and likely purpose without returning the full file. Use this to choose which files need deeper reading.")]
-    public string SummarizeFilePurpose([Description("The path to the file. Absolute paths are accepted; relative paths resolve from the current working directory.")] string filePath)
+    public async Task<string> SummarizeFilePurpose([Description("The path to the file. Absolute paths are accepted; relative paths resolve from the current working directory.")] string filePath)
     {
         ToolInvocationCount++;
         string? resolvedPath = ResolveReadableFilePath(filePath);
@@ -124,14 +126,18 @@ internal class AgentTools(ReActMemory memory)
             return StoreAndReturn(nameof(SummarizeFilePurpose), $"Error: File '{filePath}' does not exist. Current working directory: {Environment.CurrentDirectory}");
         }
 
-        string content = File.ReadAllText(resolvedPath);
+        if (!TryReadFileContent(resolvedPath, out string content, out string? readError))
+        {
+            return StoreAndReturn($"{nameof(SummarizeFilePurpose)} {resolvedPath}", $"Error: Could not read file contents: {readError}");
+        }
+
         string extension = Path.GetExtension(resolvedPath);
         string[] lines = content.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
 
         var builder = new StringBuilder();
         builder.AppendLine($"File: {resolvedPath}");
         builder.AppendLine($"Size: {content.Length} characters, {lines.Length} lines");
-        builder.AppendLine($"Likely purpose: {InferFilePurpose(resolvedPath, content)}");
+        builder.AppendLine($"Likely purpose: {await InferFilePurpose(resolvedPath, content)}");
 
         string[] declarations = ExtractDeclarations(extension, lines).Take(30).ToArray();
         if (declarations.Length > 0)
@@ -516,7 +522,42 @@ internal class AgentTools(ReActMemory memory)
          entry.Name.Equals("obj", StringComparison.OrdinalIgnoreCase) ||
          entry.Name.Equals("node_modules", StringComparison.OrdinalIgnoreCase));
 
-    private static string InferFilePurpose(string filePath, string content)
+    private async Task<string> InferFilePurpose(string filePath, string content)
+    {
+        string heuristicPurpose = InferFilePurposeHeuristic(filePath, content);
+
+        if (string.IsNullOrWhiteSpace(content))
+        {
+            return heuristicPurpose;
+        }
+
+        try
+        {
+            var messages = new List<ChatMessage>
+            {
+                new(ChatRole.System, PromptLibrary.SideQuestionSystemPrompt),
+                new(
+                    ChatRole.User,
+                    "Summarize this file's purpose and likely use case. " +
+                    "Use the file path and visible contents when possible. " +
+                    "Return one concise sentence and do not quote large snippets.\n\n" +
+                    $"File path: {filePath}\n\n" +
+                    "File contents:\n" +
+                    Truncate(content, MaxPurposeInferenceCharacters))
+            };
+
+            ChatResponse response = await getSideQuestionClient().GetResponseAsync(messages, new ChatOptions());
+            return string.IsNullOrWhiteSpace(response.Text)
+                ? heuristicPurpose
+                : response.Text.Trim();
+        }
+        catch
+        {
+            return heuristicPurpose;
+        }
+    }
+
+    private static string InferFilePurposeHeuristic(string filePath, string content)
     {
         string fileName = Path.GetFileName(filePath);
         string extension = Path.GetExtension(filePath).ToLowerInvariant();
@@ -556,6 +597,22 @@ internal class AgentTools(ReActMemory memory)
             ".sln" => "Visual Studio solution file.",
             _ => "Text file."
         };
+    }
+
+    private static bool TryReadFileContent(string filePath, out string content, out string? error)
+    {
+        try
+        {
+            content = File.ReadAllText(filePath);
+            error = null;
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or DecoderFallbackException)
+        {
+            content = string.Empty;
+            error = ex.Message;
+            return false;
+        }
     }
 
     private static IEnumerable<string> ExtractDeclarations(string extension, string[] lines)
