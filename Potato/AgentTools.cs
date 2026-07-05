@@ -14,6 +14,8 @@ internal class AgentTools(ReActMemory memory, Func<IChatClient> getSideQuestionC
 
     public int ToolInvocationCount { get; private set; }
 
+    public int SuccessfulEditCount { get; private set; }
+
     public CancellationToken CurrentCancellationToken { get; set; }
 
     [Description("Gets the current local system date and time.")]
@@ -398,6 +400,7 @@ internal class AgentTools(ReActMemory memory, Func<IChatClient> getSideQuestionC
             builder.AppendLine("Patch applied successfully.");
             builder.AppendLine("Changed files:");
             builder.AppendLine(FormatPatchedFiles(patch));
+            SuccessfulEditCount++;
             return StoreAndReturn(nameof(ApplyDiffPatchAsync), builder.ToString());
         }
         catch (OperationCanceledException) when (CurrentCancellationToken.IsCancellationRequested)
@@ -486,6 +489,7 @@ internal class AgentTools(ReActMemory memory, Func<IChatClient> getSideQuestionC
 
         string updatedContent = content.Replace(search, replace, StringComparison.Ordinal);
         await File.WriteAllTextAsync(resolvedPath, updatedContent, CurrentCancellationToken);
+        SuccessfulEditCount++;
         return StoreAndReturn(nameof(ApplySearchReplaceAsync), $"SEARCH/REPLACE edit applied successfully to {resolvedPath}.");
     }
 
