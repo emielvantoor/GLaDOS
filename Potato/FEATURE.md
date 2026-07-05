@@ -61,6 +61,8 @@ okay
 correct
 ```
 
+Approval words are treated as standalone commands. A follow-up such as `yes what is PotatoConsole for?` is handled as a new request instead of approving an empty or previous workflow.
+
 Risky or multi-step execution can be confirmed with:
 
 ```text
@@ -114,6 +116,9 @@ The CLI exposes local tools to the agent:
 - `ReadFileContent`
   Reads a specific text file from disk. Absolute paths are accepted; relative paths resolve from the current working directory.
 
+- `GetCollectedContext`
+  Retrieves context collected during the current ReAct execution. Use `index: "list"` to see stored items with contextual descriptions, `index: "latest"` for the newest item, or a numeric index to retrieve one item. Large entries are summarized automatically for compact retrieval; pass `full: true` only when exact content is needed.
+
 - `ApplyDiffPatchAsync`
   Applies a unified diff patch after showing the patch to the user and asking for permission. The tool validates the patch with `git apply --check` before applying it.
 
@@ -123,6 +128,8 @@ The CLI exposes local tools to the agent:
 Tool names are generated from the C# method names in `AgentTools`, so prompt instructions stay aligned with the registered methods.
 
 Tool calls are printed with their parameters before execution. For file reads, Potato shows both the requested path and the resolved path.
+
+During ReAct execution, Potato stores assistant responses and tool outputs as collected context. List entries include descriptors such as file paths, shell commands, or response previews, so smaller stateless models can choose the right index without relying on hidden memory or oversized prompts.
 
 ## Shell Execution
 
@@ -191,9 +198,11 @@ After execution is approved, Potato runs a bounded observe-act loop:
 3. Tool results are treated as observations for the next iteration.
 4. The loop continues until the model responds with `FINAL:` or the iteration limit is reached.
 
-The current loop limit is 12 iterations. Each assistant turn should either call the next useful tool or finish with `FINAL:`.
+The current loop limit is 12 iterations. Each assistant turn should either call the next useful tool or finish with `FINAL:`. Potato accepts `FINAL:` at the start of a response or on its own later line, so models that produce the answer first and append the marker still terminate the loop cleanly.
 
 Some local models emit textual commands instead of native tool calls. When Potato sees a `<tool_call>{...}</tool_call>` block or a fenced shell command during the ReAct loop, it routes that action through the same permissioned local tool path and appends the result as the next observation.
+
+For read-only project or folder inspection tasks, if the model fails to choose the first directory-listing action, Potato runs a deterministic read-only listing fallback through the same permissioned shell tool and continues with that observation.
 
 ## Execution Planning
 
