@@ -40,7 +40,7 @@ The CLI uses a staged workflow:
    After approval, the agent explains how the task will be completed. It names the available CLI tool or tools it intends to use and why. If no direct tool fits, it states whether the task can be solved through shell execution and what kind of shell action would be needed. It must not run tools, emit tool-call JSON, or print exact shell commands in this phase.
 
 4. Execution
-   The CLI executes the approved approach through available tools.
+   The CLI executes the approved approach through a bounded ReAct loop. The model can inspect files, run commands, apply patches, observe results, and continue until it returns a final answer.
 
 For simple read-only or inspection tasks, the CLI may proceed from the approach directly to the command permission prompt. For risky, destructive, write, install, delete, or multi-step tasks, the agent should ask the user to type `execute` before continuing.
 
@@ -110,6 +110,9 @@ The CLI exposes local tools to the agent:
 - `ReadFileContent`
   Reads a specific text file from disk.
 
+- `ApplyDiffPatchAsync`
+  Applies a unified diff patch after showing the patch to the user and asking for permission. The tool validates the patch with `git apply --check` before applying it.
+
 - `ExecuteShellCommandAsync`
   Runs a shell command after showing the exact command to the user and asking for permission.
 
@@ -142,9 +145,51 @@ Shell selection:
 
 Commands have a default timeout of 60 seconds and are capped at 600 seconds.
 
+## Diff Patching
+
+Code edits should be made with unified diffs through `ApplyDiffPatchAsync`.
+
+Before applying a patch, the CLI prints:
+
+- the requested tool action
+- the working directory
+- the full patch
+
+The user must approve with:
+
+```text
+y
+yes
+```
+
+The patch is first checked with:
+
+```bash
+git apply --check --whitespace=nowarn
+```
+
+If validation succeeds, the CLI applies it with:
+
+```bash
+git apply --whitespace=nowarn
+```
+
+If either step fails, the tool returns the exit code, stdout, and stderr to the model as the next observation.
+
+## ReAct Execution Loop
+
+After execution is approved, Potato runs a bounded observe-act loop:
+
+1. The model chooses a focused next action or gives a final answer.
+2. Tool calls are executed through the local permissioned tools.
+3. Tool results are treated as observations for the next iteration.
+4. The loop continues until the model responds with `FINAL:` or the iteration limit is reached.
+
+The current loop limit is 12 iterations. Each assistant turn should either call the next useful tool or finish with `FINAL:`.
+
 ## Execution Planning
 
-After the approach phase, the CLI can ask the selected GLaDOS model to produce an execution plan.
+Older versions of the CLI asked the selected GLaDOS model to produce a single execution plan after the approach phase.
 
 The execution planner returns JSON with:
 
@@ -156,9 +201,7 @@ The execution planner returns JSON with:
 }
 ```
 
-If the model returns a raw shell command instead of JSON, the CLI treats that text as the command and still routes it through the permissioned shell tool.
-
-The planner is instructed to prefer read-only commands for inspection tasks and to avoid destructive commands unless the approved task explicitly requires them.
+The ReAct loop now handles approved execution instead, because coding tasks usually need multiple inspect, edit, and verify steps.
 
 ## Safety Boundaries
 
@@ -171,6 +214,6 @@ The extra `execute` prompt is reserved for tasks that appear risky, destructive,
 ## Current Limitations
 
 - Risk detection is heuristic and based on the approved specification and approach text.
-- Execution planning depends on the selected model producing a useful command or JSON plan.
+- ReAct execution depends on the selected model producing valid tool calls and a final `FINAL:` response.
 - The CLI-local tools are separate from GLaDOS server-side `IAgentTool` registrations.
 - Long-running commands are killed when they exceed the configured timeout.

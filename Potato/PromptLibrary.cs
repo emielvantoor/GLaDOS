@@ -20,13 +20,13 @@ internal static class PromptLibrary
         "3. PHASE 3 (Approach): After the specification is approved, describe how the task will be completed. " +
         "   Focus on the concrete completion path, not another summary of the user's request. " +
         "   State which available CLI tool or tools you intend to use and why. " +
-        "   Available tools are GetCurrentTime, ReadFileContent, and ExecuteShellCommandAsync. " +
+        "   Available tools are GetCurrentTime, ReadFileContent, ApplyDiffPatchAsync, and ExecuteShellCommandAsync. " +
         "   If no direct available tool fits the task, say whether the task can be solved through ExecuteShellCommandAsync and what kind of shell action would be needed. " +
         "   If neither a direct tool nor shell execution can solve it, say what is missing. " +
         "   Do not emit tool-call JSON or exact shell commands in this phase. " +
         "   For simple read-only or inspection tasks, the CLI may proceed to execution immediately after showing the approach. " +
         "   For risky, destructive, write, install, delete, or multi-step tasks, ask the user to type 'execute' before continuing.\n" +
-        "4. PHASE 4 (Execution): Execute the approved approach through the CLI tools.";
+        "4. PHASE 4 (Execution): Execute the approved approach through a ReAct loop using the CLI tools.";
 
     public static string ApprovalToApproachMessage(string? latestSpecification) =>
         "I approve the specification exactly as written. Skip the adjustment phase. " +
@@ -34,7 +34,7 @@ internal static class PromptLibrary
         "Show only Phase 3: Approach. Describe how the task will be completed in a few bullet points. " +
         "Focus on the concrete completion path, not another summary of the user's request. " +
         "State which available CLI tool or tools you intend to use and why. " +
-        "Available tools are GetCurrentTime, ReadFileContent, and ExecuteShellCommandAsync. " +
+        "Available tools are GetCurrentTime, ReadFileContent, ApplyDiffPatchAsync, and ExecuteShellCommandAsync. " +
         "If no direct available tool fits the task, say whether the task can be solved through ExecuteShellCommandAsync and what kind of shell action would be needed. " +
         "If neither a direct tool nor shell execution can solve it, say what is missing. " +
         "Do not emit tool-call JSON or exact shell commands in this phase. " +
@@ -57,12 +57,15 @@ internal static class PromptLibrary
         {
             $"{nameof(AgentTools.GetCurrentTime)}: use for current date or time. Arguments: {{}}.",
             $"{nameof(AgentTools.ReadFileContent)}: use to read one known text file. Arguments: filePath must be an exact existing path from the user request or an attached file header.",
+            $"{nameof(AgentTools.ApplyDiffPatchAsync)}: use to edit files by applying a unified diff patch. Arguments: patch is the full unified diff, workingDirectory is optional.",
             $"{nameof(AgentTools.ExecuteShellCommandAsync)}: use for filesystem, directory listing, OS, process, or shell tasks. Arguments: command is the shell command to execute, workingDirectory is optional, timeoutSeconds defaults to 60."
         };
 
         var builder = new StringBuilder();
-        builder.AppendLine("Execution tool instructions:");
+        builder.AppendLine("Execution tool instructions for the ReAct loop:");
         builder.AppendLine("The following tools are available in this CLI. Do not say a listed tool is unavailable.");
+        builder.AppendLine("Work in observe-act cycles: inspect the current state, call one targeted tool when needed, use the returned observation, then continue.");
+        builder.AppendLine("When the approved task is complete, answer with FINAL: followed by a concise summary and any verification result.");
         builder.AppendLine("When execution needs a tool, output ONLY this exact GLaDOS format and no other text:");
         builder.AppendLine("<tool_call>{\"name\":\"ToolName\",\"arguments\":{}}</tool_call>");
         builder.AppendLine("Available tools:");
@@ -73,12 +76,24 @@ internal static class PromptLibrary
         }
 
         builder.AppendLine("Use the shell command tool for requests that require listing directories, inspecting files, checking the OS, running commands, or reading system state.");
+        builder.AppendLine("For code edits, read the relevant file first, then use ApplyDiffPatchAsync with a unified diff. Prefer patches over shell redirection or inline file writes.");
+        builder.AppendLine("After applying a patch, run focused verification through ExecuteShellCommandAsync when the approved task warrants it.");
         builder.AppendLine("Choose an appropriate command for the current operating system.");
         builder.AppendLine("Never copy placeholder argument values. Do not use paths like /full/path/to/file, /full/path/to/program.cs, path/to/file, or example commands.");
         builder.AppendLine("When reading an attached file, use the exact absolute path shown in the '--- begin file: ... ---' header.");
         builder.AppendLine("Do not print commands as prose. Do not wrap tool calls in Markdown fences. The CLI will show shell commands to the user for permission before running them.");
         builder.Append("If a listed tool matches the task, emit the tool call. Do not ask the user for an alternative method.");
         return builder.ToString();
+    }
+
+    public static string ContinueReActMessage(bool requireToolUse)
+    {
+        if (requireToolUse)
+        {
+            return "Continue the ReAct loop from the latest observation. If the approved task is complete, respond with FINAL:. Otherwise choose the next single targeted tool action.";
+        }
+
+        return "Continue the ReAct loop. If the approved task is complete, respond with FINAL:. If it is not complete, use one of the available tools for the next concrete action.";
     }
 
     public static string GreetingSystemPrompt =>
