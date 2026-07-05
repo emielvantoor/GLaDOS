@@ -190,6 +190,7 @@ internal static class PotatoConsole
         Console.WriteLine("  /ask question   Ask a side question without changing chat history");
         Console.WriteLine("  /transcript     Show the current conversation sent to the model");
         Console.WriteLine("  /abort          Cancel the current task and return to the main prompt");
+        Console.WriteLine("  Ctrl+C          Abort the in-flight task; exits normally at the idle prompt");
         Console.WriteLine("  Up/Down         Cycle through commands entered in this session");
         Console.WriteLine("  exit, quit      Close Potato Code");
         Console.WriteLine("  y, yes, ok      Approve the current specification");

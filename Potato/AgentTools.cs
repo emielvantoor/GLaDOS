@@ -14,9 +14,12 @@ internal class AgentTools(ReActMemory memory, Func<IChatClient> getSideQuestionC
 
     public int ToolInvocationCount { get; private set; }
 
+    public CancellationToken CurrentCancellationToken { get; set; }
+
     [Description("Gets the current local system date and time.")]
     public string GetCurrentTime()
     {
+        CurrentCancellationToken.ThrowIfCancellationRequested();
         ToolInvocationCount++;
         WriteToolCall(nameof(GetCurrentTime), []);
         string result = $"The current local time is: {DateTime.Now:F}";
@@ -27,6 +30,7 @@ internal class AgentTools(ReActMemory memory, Func<IChatClient> getSideQuestionC
     [Description("Reads the contents of a specific text file from disk.")]
     public string ReadFileContent([Description("The path to the file. Absolute paths are accepted; relative paths resolve from the current working directory.")] string filePath)
     {
+        CurrentCancellationToken.ThrowIfCancellationRequested();
         ToolInvocationCount++;
         string? resolvedPath = ResolveReadableFilePath(filePath);
         WriteToolCall(nameof(ReadFileContent),
@@ -54,6 +58,7 @@ internal class AgentTools(ReActMemory memory, Func<IChatClient> getSideQuestionC
         [Description("Whether to recurse into subdirectories. Defaults to false.")] bool recursive = false,
         [Description("Maximum number of entries to return. Defaults to 200 and is capped at 1000.")] int maxEntries = 200)
     {
+        CurrentCancellationToken.ThrowIfCancellationRequested();
         ToolInvocationCount++;
         string? resolvedPath = ResolveReadableDirectoryPath(directoryPath);
         WriteToolCall(nameof(ListFiles),
@@ -108,6 +113,7 @@ internal class AgentTools(ReActMemory memory, Func<IChatClient> getSideQuestionC
     [Description("Summarizes a text file's visible contents and likely purpose without returning the full file. Use this to choose which files need deeper reading.")]
     public async Task<string> SummarizeFilePurpose([Description("The path to the file. Absolute paths are accepted; relative paths resolve from the current working directory.")] string filePath)
     {
+        CurrentCancellationToken.ThrowIfCancellationRequested();
         ToolInvocationCount++;
         string? resolvedPath = ResolveReadableFilePath(filePath);
         WriteToolCall(nameof(SummarizeFilePurpose),
@@ -137,7 +143,7 @@ internal class AgentTools(ReActMemory memory, Func<IChatClient> getSideQuestionC
         var builder = new StringBuilder();
         builder.AppendLine($"File: {resolvedPath}");
         builder.AppendLine($"Size: {content.Length} characters, {lines.Length} lines");
-        builder.AppendLine($"Likely purpose: {await InferFilePurpose(resolvedPath, content)}");
+        builder.AppendLine($"Likely purpose: {await InferFilePurpose(resolvedPath, content, CurrentCancellationToken)}");
 
         string[] declarations = ExtractDeclarations(extension, lines).Take(30).ToArray();
         if (declarations.Length > 0)
@@ -182,6 +188,7 @@ internal class AgentTools(ReActMemory memory, Func<IChatClient> getSideQuestionC
         [Description("Use 'list', 'latest', or a numeric index from the collected context list.")] string index = "list",
         [Description("Whether to return full stored content instead of a summary when available.")] bool full = false)
     {
+        CurrentCancellationToken.ThrowIfCancellationRequested();
         ToolInvocationCount++;
         WriteToolCall(nameof(GetCollectedContext),
         [
@@ -198,6 +205,7 @@ internal class AgentTools(ReActMemory memory, Func<IChatClient> getSideQuestionC
         [Description("Optional working directory for the command. Leave empty to use the current process directory.")] string? workingDirectory = null,
         [Description("Optional timeout in seconds. Defaults to 60 seconds and is capped at 600 seconds.")] int timeoutSeconds = DefaultCommandTimeoutSeconds)
     {
+        CurrentCancellationToken.ThrowIfCancellationRequested();
         ToolInvocationCount++;
         WriteToolCall(nameof(ExecuteShellCommandAsync),
         [
@@ -238,7 +246,7 @@ internal class AgentTools(ReActMemory memory, Func<IChatClient> getSideQuestionC
         Console.ResetColor();
         Console.Write("Allow execution? [y/N] ");
 
-        string? approval = Console.ReadLine();
+        string? approval = ReadLineWithCancellation(CurrentCancellationToken);
         if (!IsApproval(approval))
         {
             return StoreAndReturn($"{nameof(ExecuteShellCommandAsync)} {command}", "Command execution denied by user.");
@@ -284,19 +292,25 @@ internal class AgentTools(ReActMemory memory, Func<IChatClient> getSideQuestionC
             process.BeginOutputReadLine();
             process.BeginErrorReadLine();
 
-            Task waitTask = process.WaitForExitAsync();
-            Task timeoutTask = Task.Delay(TimeSpan.FromSeconds(timeoutSeconds));
+            Task waitTask = process.WaitForExitAsync(CurrentCancellationToken);
+            Task timeoutTask = Task.Delay(TimeSpan.FromSeconds(timeoutSeconds), CurrentCancellationToken);
 
             if (await Task.WhenAny(waitTask, timeoutTask) == timeoutTask)
             {
                 process.Kill(entireProcessTree: true);
-                await waitTask;
+                await process.WaitForExitAsync();
                 return StoreAndReturn($"{nameof(ExecuteShellCommandAsync)} {command}", $"Command timed out after {timeoutSeconds} seconds and was killed.");
             }
 
+            await waitTask;
             return StoreAndReturn(
                 $"{nameof(ExecuteShellCommandAsync)} {command}",
                 FormatCommandResult(process.ExitCode, outputBuilder.ToString(), errorBuilder.ToString()));
+        }
+        catch (OperationCanceledException) when (CurrentCancellationToken.IsCancellationRequested)
+        {
+            KillProcessTree(process);
+            throw;
         }
         catch (Exception ex)
         {
@@ -309,6 +323,7 @@ internal class AgentTools(ReActMemory memory, Func<IChatClient> getSideQuestionC
         [Description("A unified diff patch. It should use git-style file headers such as diff --git, --- a/path, and +++ b/path.")] string patch,
         [Description("Optional working directory where the patch should be applied. Leave empty to use the current process directory.")] string? workingDirectory = null)
     {
+        CurrentCancellationToken.ThrowIfCancellationRequested();
         ToolInvocationCount++;
         WriteToolCall(nameof(ApplyDiffPatchAsync),
         [
@@ -343,7 +358,7 @@ internal class AgentTools(ReActMemory memory, Func<IChatClient> getSideQuestionC
         Console.ResetColor();
         Console.Write("Apply patch? [y/N] ");
 
-        string? approval = Console.ReadLine();
+        string? approval = ReadLineWithCancellation(CurrentCancellationToken);
         if (!IsApproval(approval))
         {
             return StoreAndReturn(nameof(ApplyDiffPatchAsync), "Patch application denied by user.");
@@ -353,13 +368,14 @@ internal class AgentTools(ReActMemory memory, Func<IChatClient> getSideQuestionC
 
         try
         {
-            await File.WriteAllTextAsync(patchFile, patch);
+            await File.WriteAllTextAsync(patchFile, patch, CurrentCancellationToken);
 
             ProcessResult checkResult = await RunProcessAsync(
                 "git",
                 ["apply", "--check", "--whitespace=nowarn", patchFile],
                 effectiveWorkingDirectory,
-                DefaultCommandTimeoutSeconds);
+                DefaultCommandTimeoutSeconds,
+                CurrentCancellationToken);
 
             if (checkResult.ExitCode != 0)
             {
@@ -370,7 +386,8 @@ internal class AgentTools(ReActMemory memory, Func<IChatClient> getSideQuestionC
                 "git",
                 ["apply", "--whitespace=nowarn", patchFile],
                 effectiveWorkingDirectory,
-                DefaultCommandTimeoutSeconds);
+                DefaultCommandTimeoutSeconds,
+                CurrentCancellationToken);
 
             if (applyResult.ExitCode != 0)
             {
@@ -382,6 +399,10 @@ internal class AgentTools(ReActMemory memory, Func<IChatClient> getSideQuestionC
             builder.AppendLine("Changed files:");
             builder.AppendLine(FormatPatchedFiles(patch));
             return StoreAndReturn(nameof(ApplyDiffPatchAsync), builder.ToString());
+        }
+        catch (OperationCanceledException) when (CurrentCancellationToken.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception ex)
         {
@@ -401,6 +422,71 @@ internal class AgentTools(ReActMemory memory, Func<IChatClient> getSideQuestionC
                 // Temporary patch cleanup is best-effort.
             }
         }
+    }
+
+    [Description("Applies an exact Qwen/Aider-style SEARCH/REPLACE edit to one file after showing the change to the user and asking for permission.")]
+    public async Task<string> ApplySearchReplaceAsync(
+        [Description("The path to the file. Absolute paths are accepted; relative paths resolve from the current working directory.")] string filePath,
+        [Description("The exact existing text to find in the file.")] string search,
+        [Description("The replacement text to write in place of the search text.")] string replace)
+    {
+        CurrentCancellationToken.ThrowIfCancellationRequested();
+        ToolInvocationCount++;
+        string? resolvedPath = ResolveReadableFilePath(filePath);
+        WriteToolCall(nameof(ApplySearchReplaceAsync),
+        [
+            ("filePath", filePath),
+            ("resolvedPath", resolvedPath ?? "(unresolved)"),
+            ("searchCharacters", search?.Length.ToString() ?? "0"),
+            ("replaceCharacters", replace?.Length.ToString() ?? "0")
+        ]);
+
+        if (IsPlaceholderPath(filePath) && resolvedPath is null)
+        {
+            return StoreAndReturn(nameof(ApplySearchReplaceAsync), "Error: The file path is a placeholder. Use a real path from the directory listing or attached file header.");
+        }
+
+        if (resolvedPath is null || !File.Exists(resolvedPath))
+        {
+            return StoreAndReturn(nameof(ApplySearchReplaceAsync), $"Error: File '{filePath}' does not exist. Current working directory: {Environment.CurrentDirectory}");
+        }
+
+        if (string.IsNullOrEmpty(search))
+        {
+            return StoreAndReturn(nameof(ApplySearchReplaceAsync), "Error: SEARCH text cannot be empty.");
+        }
+
+        string content = await File.ReadAllTextAsync(resolvedPath, CurrentCancellationToken);
+        int matchCount = CountOccurrences(content, search);
+        if (matchCount == 0)
+        {
+            return StoreAndReturn(nameof(ApplySearchReplaceAsync), "Error: SEARCH text was not found exactly in the target file.");
+        }
+
+        if (matchCount > 1)
+        {
+            return StoreAndReturn(nameof(ApplySearchReplaceAsync), $"Error: SEARCH text matched {matchCount} times. Provide a larger unique SEARCH block.");
+        }
+
+        Console.ForegroundColor = ConsoleColor.Magenta;
+        Console.WriteLine("Tool permission requested: apply SEARCH/REPLACE edit");
+        Console.WriteLine($"File: {resolvedPath}");
+        Console.WriteLine("SEARCH:");
+        Console.WriteLine(search);
+        Console.WriteLine("REPLACE:");
+        Console.WriteLine(replace);
+        Console.ResetColor();
+        Console.Write("Apply edit? [y/N] ");
+
+        string? approval = ReadLineWithCancellation(CurrentCancellationToken);
+        if (!IsApproval(approval))
+        {
+            return StoreAndReturn(nameof(ApplySearchReplaceAsync), "SEARCH/REPLACE edit denied by user.");
+        }
+
+        string updatedContent = content.Replace(search, replace, StringComparison.Ordinal);
+        await File.WriteAllTextAsync(resolvedPath, updatedContent, CurrentCancellationToken);
+        return StoreAndReturn(nameof(ApplySearchReplaceAsync), $"SEARCH/REPLACE edit applied successfully to {resolvedPath}.");
     }
 
     private static bool IsPlaceholderPath(string? filePath)
@@ -522,7 +608,10 @@ internal class AgentTools(ReActMemory memory, Func<IChatClient> getSideQuestionC
          entry.Name.Equals("obj", StringComparison.OrdinalIgnoreCase) ||
          entry.Name.Equals("node_modules", StringComparison.OrdinalIgnoreCase));
 
-    private async Task<string> InferFilePurpose(string filePath, string content)
+    private async Task<string> InferFilePurpose(
+        string filePath,
+        string content,
+        CancellationToken cancellationToken)
     {
         string heuristicPurpose = InferFilePurposeHeuristic(filePath, content);
 
@@ -546,12 +635,12 @@ internal class AgentTools(ReActMemory memory, Func<IChatClient> getSideQuestionC
                     Truncate(content, MaxPurposeInferenceCharacters))
             };
 
-            ChatResponse response = await getSideQuestionClient().GetResponseAsync(messages, new ChatOptions());
+            ChatResponse response = await getSideQuestionClient().GetResponseAsync(messages, new ChatOptions(), cancellationToken);
             return string.IsNullOrWhiteSpace(response.Text)
                 ? heuristicPurpose
                 : response.Text.Trim();
         }
-        catch
+        catch when (!cancellationToken.IsCancellationRequested)
         {
             return heuristicPurpose;
         }
@@ -662,6 +751,19 @@ internal class AgentTools(ReActMemory memory, Func<IChatClient> getSideQuestionC
     private static string Truncate(string text, int maxLength) =>
         text.Length <= maxLength ? text : text[..Math.Max(0, maxLength - 3)] + "...";
 
+    private static int CountOccurrences(string text, string value)
+    {
+        int count = 0;
+        int index = 0;
+        while ((index = text.IndexOf(value, index, StringComparison.Ordinal)) >= 0)
+        {
+            count++;
+            index += value.Length;
+        }
+
+        return count;
+    }
+
     private static bool LooksLikeDirectoryListingCommand(string command)
     {
         string normalized = command.TrimStart().ToLowerInvariant();
@@ -702,6 +804,50 @@ internal class AgentTools(ReActMemory memory, Func<IChatClient> getSideQuestionC
     {
         string normalized = input?.Trim().ToLowerInvariant() ?? string.Empty;
         return normalized is "y" or "yes";
+    }
+
+    private static string? ReadLineWithCancellation(CancellationToken cancellationToken)
+    {
+        if (Console.IsInputRedirected)
+        {
+            return Console.ReadLine();
+        }
+
+        var buffer = new StringBuilder();
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (!Console.KeyAvailable)
+            {
+                Thread.Sleep(50);
+                continue;
+            }
+
+            ConsoleKeyInfo key = Console.ReadKey(intercept: true);
+            switch (key.Key)
+            {
+                case ConsoleKey.Enter:
+                    Console.WriteLine();
+                    return buffer.ToString();
+
+                case ConsoleKey.Backspace:
+                    if (buffer.Length > 0)
+                    {
+                        buffer.Length--;
+                        Console.Write("\b \b");
+                    }
+                    break;
+
+                default:
+                    if (!char.IsControl(key.KeyChar))
+                    {
+                        buffer.Append(key.KeyChar);
+                        Console.Write(key.KeyChar);
+                    }
+                    break;
+            }
+        }
     }
 
     private static ShellCommand GetShell()
@@ -759,7 +905,8 @@ internal class AgentTools(ReActMemory memory, Func<IChatClient> getSideQuestionC
         string fileName,
         string[] arguments,
         string workingDirectory,
-        int timeoutSeconds)
+        int timeoutSeconds,
+        CancellationToken cancellationToken)
     {
         using var process = new Process();
         process.StartInfo.FileName = fileName;
@@ -797,20 +944,44 @@ internal class AgentTools(ReActMemory memory, Func<IChatClient> getSideQuestionC
         process.BeginOutputReadLine();
         process.BeginErrorReadLine();
 
-        Task waitTask = process.WaitForExitAsync();
-        Task timeoutTask = Task.Delay(TimeSpan.FromSeconds(timeoutSeconds));
-
-        if (await Task.WhenAny(waitTask, timeoutTask) == timeoutTask)
+        try
         {
-            process.Kill(entireProcessTree: true);
-            await waitTask;
-            return new ProcessResult(
-                -1,
-                outputBuilder.ToString(),
-                $"Process timed out after {timeoutSeconds} seconds and was killed.\n{errorBuilder}");
-        }
+            Task waitTask = process.WaitForExitAsync(cancellationToken);
+            Task timeoutTask = Task.Delay(TimeSpan.FromSeconds(timeoutSeconds), cancellationToken);
 
-        return new ProcessResult(process.ExitCode, outputBuilder.ToString(), errorBuilder.ToString());
+            if (await Task.WhenAny(waitTask, timeoutTask) == timeoutTask)
+            {
+                process.Kill(entireProcessTree: true);
+                await process.WaitForExitAsync();
+                return new ProcessResult(
+                    -1,
+                    outputBuilder.ToString(),
+                    $"Process timed out after {timeoutSeconds} seconds and was killed.\n{errorBuilder}");
+            }
+
+            await waitTask;
+            return new ProcessResult(process.ExitCode, outputBuilder.ToString(), errorBuilder.ToString());
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            KillProcessTree(process);
+            throw;
+        }
+    }
+
+    private static void KillProcessTree(Process process)
+    {
+        try
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+            }
+        }
+        catch
+        {
+            // Process may already have exited while cancellation was being handled.
+        }
     }
 
     private sealed record ShellCommand(
