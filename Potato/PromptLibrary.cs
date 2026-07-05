@@ -176,7 +176,24 @@ internal static class PromptLibrary
         builder.AppendLine($"Original request: {OneLine(latestUserRequest)}");
         builder.AppendLine($"Working directory: {workingDirectory}");
         builder.AppendLine($"Required current step: {OneLine(previousQuestion)}");
+        builder.AppendLine("ApplyDiffPatchAsync and ApplySearchReplaceAsync are registered and available. Do not claim they are unavailable.");
+        builder.AppendLine("Execution is already approved inside the ReAct loop. Do not ask the user to type execute.");
         builder.Append("Now respond with exactly one tool call, or one fenced shell command if native tool calls are unavailable.");
+        return builder.ToString();
+    }
+
+    public static string UserInterventionResponseMessage(string userAnswer)
+    {
+        var builder = new StringBuilder();
+        builder.AppendLine("User answered your ReAct-loop question.");
+        builder.AppendLine("Use this answer as additional context for the already-approved execution.");
+        builder.AppendLine("Do not restart Phase 1, Phase 2, or Phase 3. Continue the ReAct loop.");
+        builder.AppendLine("Do not ask the user to type execute. Execution is already in progress.");
+        builder.AppendLine("ApplyDiffPatchAsync and ApplySearchReplaceAsync are registered and available for file edits.");
+        builder.AppendLine("Next action: use exactly one tool call, or respond with FINAL: only if the original request is fully answered and verified.");
+        builder.AppendLine();
+        builder.AppendLine("User answer:");
+        builder.Append(userAnswer);
         return builder.ToString();
     }
 

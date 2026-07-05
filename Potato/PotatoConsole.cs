@@ -172,6 +172,89 @@ internal static class PotatoConsole
         }
     }
 
+    public static string ReadInterventionInput(CancellationToken cancellationToken)
+    {
+        Console.ForegroundColor = ConsoleColor.Cyan;
+        Console.Write("You > ");
+        Console.ResetColor();
+
+        var buffer = new List<char>();
+        int cursorIndex = 0;
+        int inputLeft = Console.CursorLeft;
+        int inputTop = Console.CursorTop;
+        int renderedLength = 0;
+
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!Console.KeyAvailable)
+            {
+                Thread.Sleep(50);
+                continue;
+            }
+
+            ConsoleKeyInfo key = Console.ReadKey(intercept: true);
+            switch (key.Key)
+            {
+                case ConsoleKey.Enter:
+                    Console.WriteLine();
+                    return new string(buffer.ToArray());
+
+                case ConsoleKey.Backspace:
+                    if (cursorIndex > 0)
+                    {
+                        buffer.RemoveAt(cursorIndex - 1);
+                        cursorIndex--;
+                        RedrawInputLine(buffer, cursorIndex, inputLeft, inputTop, ref renderedLength);
+                    }
+                    break;
+
+                case ConsoleKey.Delete:
+                    if (cursorIndex < buffer.Count)
+                    {
+                        buffer.RemoveAt(cursorIndex);
+                        RedrawInputLine(buffer, cursorIndex, inputLeft, inputTop, ref renderedLength);
+                    }
+                    break;
+
+                case ConsoleKey.LeftArrow:
+                    if (cursorIndex > 0)
+                    {
+                        cursorIndex--;
+                        MoveCursor(inputLeft, inputTop, cursorIndex);
+                    }
+                    break;
+
+                case ConsoleKey.RightArrow:
+                    if (cursorIndex < buffer.Count)
+                    {
+                        cursorIndex++;
+                        MoveCursor(inputLeft, inputTop, cursorIndex);
+                    }
+                    break;
+
+                case ConsoleKey.Home:
+                    cursorIndex = 0;
+                    MoveCursor(inputLeft, inputTop, cursorIndex);
+                    break;
+
+                case ConsoleKey.End:
+                    cursorIndex = buffer.Count;
+                    MoveCursor(inputLeft, inputTop, cursorIndex);
+                    break;
+
+                default:
+                    if (!char.IsControl(key.KeyChar))
+                    {
+                        buffer.Insert(cursorIndex, key.KeyChar);
+                        cursorIndex++;
+                        RedrawInputLine(buffer, cursorIndex, inputLeft, inputTop, ref renderedLength);
+                    }
+                    break;
+            }
+        }
+    }
+
     public static void WriteSeparator()
     {
         int width = Math.Max(20, Console.WindowWidth - 1);
