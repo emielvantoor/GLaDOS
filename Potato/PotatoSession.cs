@@ -279,6 +279,14 @@ internal sealed partial class PotatoSession
                     continue;
                 }
 
+                if (TryReadUserIntervention(responseText, cancellationToken, out string userAnswer))
+                {
+                    chatHistory.Add(new ChatMessage(
+                        ChatRole.User,
+                        PromptLibrary.UserInterventionResponseMessage(userAnswer)));
+                    continue;
+                }
+
                 PotatoConsole.WriteStatus("Model did not call a tool or return FINAL; continuing execution loop...");
 
                 if (LooksLikeUnmarkedCompletion(responseText))
@@ -331,6 +339,43 @@ internal sealed partial class PotatoSession
                normalized.Contains("has been completed", StringComparison.Ordinal) ||
                normalized.Contains("implementation has been tested", StringComparison.Ordinal) ||
                normalized.Contains("task is complete", StringComparison.Ordinal);
+    }
+
+    private static bool LooksLikeUserInterventionRequest(string responseText)
+    {
+        string normalized = responseText.Trim().ToLowerInvariant();
+        if (!normalized.Contains("?", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return normalized.EndsWith("?", StringComparison.Ordinal) ||
+               normalized.Contains("is this approved?", StringComparison.Ordinal) ||
+               normalized.Contains("do you approve", StringComparison.Ordinal) ||
+               normalized.Contains("should i", StringComparison.Ordinal) ||
+               normalized.Contains("do you want", StringComparison.Ordinal) ||
+               normalized.Contains("please confirm", StringComparison.Ordinal) ||
+               normalized.Contains("need your", StringComparison.Ordinal) ||
+               normalized.Contains("which ", StringComparison.Ordinal) ||
+               normalized.Contains("what ", StringComparison.Ordinal);
+    }
+
+    private bool TryReadUserIntervention(
+        string modelQuestion,
+        CancellationToken cancellationToken,
+        out string userAnswer)
+    {
+        userAnswer = string.Empty;
+        if (!LooksLikeUserInterventionRequest(modelQuestion))
+        {
+            return false;
+        }
+
+        PotatoConsole.WriteStatus("Model requested user input during ReAct execution.");
+        PotatoConsole.WriteAgentResponse(modelQuestion);
+        userAnswer = PotatoConsole.ReadInterventionInput(cancellationToken);
+        AddInputHistory(userAnswer);
+        return true;
     }
 
     private static string RemoveFinalMarker(string responseText)
@@ -580,7 +625,18 @@ internal sealed partial class PotatoSession
 
     private static TextualToolCall? TryParseSearchReplaceBlock(string responseText)
     {
-        var match = Regex.Match(
+        TextualToolCall? aiderStyleCall = TryParseAiderSearchReplaceBlock(responseText);
+        if (aiderStyleCall is not null)
+        {
+            return aiderStyleCall;
+        }
+
+        return TryParseMarkdownSearchReplaceBlock(responseText);
+    }
+
+    private static TextualToolCall? TryParseAiderSearchReplaceBlock(string responseText)
+    {
+        Match match = Regex.Match(
             responseText,
             @"(?<path>^[^\r\n<>`]+?)\s*\r?\n<<<<<<< SEARCH\r?\n(?<search>[\s\S]*?)\r?\n=======\r?\n(?<replace>[\s\S]*?)\r?\n>>>>>>> REPLACE",
             RegexOptions.Multiline);
@@ -606,6 +662,53 @@ internal sealed partial class PotatoSession
                 ["search"] = search,
                 ["replace"] = replace
             });
+    }
+
+    private static TextualToolCall? TryParseMarkdownSearchReplaceBlock(string responseText)
+    {
+        Match match = Regex.Match(
+            responseText,
+            @"\*\*SEARCH\*\*\s*:?\s*```(?:[^\r\n`]*)?\r?\n(?<search>[\s\S]*?)\r?\n```\s*\*\*REPLACE\*\*\s*:?\s*```(?:[^\r\n`]*)?\r?\n(?<replace>[\s\S]*?)\r?\n```",
+            RegexOptions.IgnoreCase);
+
+        if (!match.Success)
+        {
+            return null;
+        }
+
+        string? filePath = TryInferEditFilePath(responseText);
+        string search = match.Groups["search"].Value;
+        string replace = match.Groups["replace"].Value;
+        if (string.IsNullOrWhiteSpace(filePath) || string.IsNullOrEmpty(search))
+        {
+            return null;
+        }
+
+        return new TextualToolCall(
+            nameof(AgentTools.ApplySearchReplaceAsync),
+            new JsonObject
+            {
+                ["filePath"] = filePath,
+                ["search"] = search,
+                ["replace"] = replace
+            });
+    }
+
+    private static string? TryInferEditFilePath(string responseText)
+    {
+        Match contextualMatch = Regex.Match(
+            responseText,
+            @"(?:file|in|to|target|edit|apply(?:ing)?(?:\s+this)?(?:\s+change)?(?:\s+to)?)\s*:?\s*`(?<path>[^`\r\n]+\.[A-Za-z0-9]+)`",
+            RegexOptions.IgnoreCase);
+        if (contextualMatch.Success)
+        {
+            return contextualMatch.Groups["path"].Value.Trim();
+        }
+
+        Match pathMatch = Regex.Match(
+            responseText,
+            @"(?<![`A-Za-z0-9_/\\.-])(?<path>[A-Za-z0-9_.-]+(?:[/\\][A-Za-z0-9_.-]+)*\.[A-Za-z0-9]+)(?![`A-Za-z0-9_/\\.-])");
+        return pathMatch.Success ? pathMatch.Groups["path"].Value.Trim() : null;
     }
 
     private static string? GetStringArgument(JsonObject arguments, string name)
