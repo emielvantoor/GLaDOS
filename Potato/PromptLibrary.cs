@@ -92,7 +92,7 @@ internal static class PromptLibrary
 
         builder.AppendLine("Use ListFiles for directory listings. Use ReadFileContent for exact file content. Use SummarizeFilePurpose to understand a file before deciding whether to read it fully.");
         builder.AppendLine("Use ExecuteShellCommandAsync only for commands that the direct tools cannot perform, such as builds, tests, git commands, OS checks, or running the application.");
-        builder.AppendLine("For code edits, read the relevant file first, then use ApplyDiffPatchAsync with a unified diff. Do not use shell redirection, echo, sed -i, perl -pi, or inline file-writing commands to edit source files.");
+        builder.AppendLine("For code edits, read the relevant file first, then use ApplyDiffPatchAsync with a unified diff or ApplySearchReplaceAsync with exact SEARCH and REPLACE text. Do not use shell redirection, echo, sed -i, perl -pi, or inline file-writing commands to edit source files.");
         builder.AppendLine("After applying a patch, run focused verification through ExecuteShellCommandAsync when the approved task warrants it.");
         builder.AppendLine("Choose an appropriate command for the current operating system.");
         builder.AppendLine("Never copy placeholder argument values. Do not use paths like /full/path/to/file, /full/path/to/program.cs, path/to/file, or example commands.");
@@ -194,10 +194,10 @@ internal static class PromptLibrary
         builder.AppendLine("Latest observation:");
         builder.AppendLine(Compact(latestObservation, 4_000));
         builder.AppendLine();
-        builder.AppendLine("Available next actions are the registered tools: GetCurrentTime, ReadFileContent, ListFiles, SummarizeFilePurpose, GetCollectedContext, ApplyDiffPatchAsync, ExecuteShellCommandAsync.");
+        builder.AppendLine("Available next actions are the registered tools: GetCurrentTime, ReadFileContent, ListFiles, SummarizeFilePurpose, GetCollectedContext, ApplyDiffPatchAsync, ApplySearchReplaceAsync, ExecuteShellCommandAsync.");
         builder.AppendLine("Use ListFiles for directory listings; do not use shell commands for that. Use SummarizeFilePurpose to orient on a likely relevant file before reading or patching it.");
         builder.AppendLine("If this is a code change and you have only listed files so far, the next action must summarize or read the likely relevant source file. Do not patch or finish yet.");
-        builder.AppendLine("If a source edit is needed, use ApplyDiffPatchAsync with a unified diff after reading the relevant file. Do not use shell redirection or append commands to edit files.");
+        builder.AppendLine("If a source edit is needed, use ApplyDiffPatchAsync with a unified diff or ApplySearchReplaceAsync with exact SEARCH and REPLACE text after reading the relevant file. Do not use shell redirection or append commands to edit files.");
         builder.Append("Next action: use exactly one tool call, or respond with FINAL: only if the original request is fully answered and verified.");
         return builder.ToString();
     }

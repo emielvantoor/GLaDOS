@@ -48,13 +48,16 @@ internal sealed class ReActMemory
             : FormatItem(item, full);
     }
 
-    public async Task SummarizeLargeUnsummarizedItemsAsync(IChatClient summarizerClient)
+    public async Task SummarizeLargeUnsummarizedItemsAsync(
+        IChatClient summarizerClient,
+        CancellationToken cancellationToken = default)
     {
         foreach (ReActMemoryItem item in items.Where(item =>
                      item.Summary is null &&
                      item.Content.Length > SummaryThresholdCharacters))
         {
-            item.Summary = await SummarizeAsync(summarizerClient, item);
+            cancellationToken.ThrowIfCancellationRequested();
+            item.Summary = await SummarizeAsync(summarizerClient, item, cancellationToken);
             item.Descriptor = BuildDescriptor(item.Source, item.Summary);
         }
     }
@@ -119,7 +122,10 @@ internal sealed class ReActMemory
         return $"{trimmedSource}: {Trim(meaningfulLine, 100)}";
     }
 
-    private static async Task<string> SummarizeAsync(IChatClient summarizerClient, ReActMemoryItem item)
+    private static async Task<string> SummarizeAsync(
+        IChatClient summarizerClient,
+        ReActMemoryItem item,
+        CancellationToken cancellationToken)
     {
         try
         {
@@ -135,12 +141,12 @@ internal sealed class ReActMemory
                     Trim(item.Content, FullContentLimitCharacters))
             };
 
-            ChatResponse response = await summarizerClient.GetResponseAsync(messages, new ChatOptions());
+            ChatResponse response = await summarizerClient.GetResponseAsync(messages, new ChatOptions(), cancellationToken);
             return string.IsNullOrWhiteSpace(response.Text)
                 ? Trim(item.Content, SummaryThresholdCharacters)
                 : response.Text.Trim();
         }
-        catch
+        catch when (!cancellationToken.IsCancellationRequested)
         {
             return Trim(item.Content, SummaryThresholdCharacters);
         }

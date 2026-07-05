@@ -20,12 +20,14 @@ internal sealed partial class PotatoSession
         new(ChatRole.System, PromptLibrary.SystemPrompt)
     ];
 
+    private readonly object taskCancellationLock = new();
     private AgentState currentState = AgentState.Specifying;
     private IChatClient currentOpenAiClient;
     private IChatClient currentClient;
     private string? latestSpecification;
     private string? latestApproach;
     private string? latestUserRequest;
+    private CancellationTokenSource? currentTaskCancellationSource;
 
     public PotatoSession(
         Uri gladosEndpoint,
@@ -46,6 +48,8 @@ internal sealed partial class PotatoSession
     {
         ChatOptions toolOptions = CreateToolOptions();
         await WriteUntrackedGreetingAsync();
+        ConsoleCancelEventHandler cancelHandler = HandleConsoleCancelKeyPress;
+        Console.CancelKeyPress += cancelHandler;
 
         var slashCommandHandler = new SlashCommandHandler(
             gladosEndpoint,
@@ -57,36 +61,43 @@ internal sealed partial class PotatoSession
             () => currentClient,
             SwitchModel);
 
-        while (true)
+        try
         {
-            string? userInput = PotatoConsole.ReadPromptInput(inputHistory);
-
-            if (string.IsNullOrWhiteSpace(userInput))
+            while (true)
             {
-                continue;
+                string? userInput = PotatoConsole.ReadPromptInput(inputHistory);
+
+                if (string.IsNullOrWhiteSpace(userInput))
+                {
+                    continue;
+                }
+
+                AddInputHistory(userInput);
+
+                if (userInput.Equals("exit", StringComparison.OrdinalIgnoreCase) ||
+                    userInput.Equals("quit", StringComparison.OrdinalIgnoreCase))
+                {
+                    break;
+                }
+
+                if (userInput.Trim() == "?")
+                {
+                    PotatoConsole.WriteShortcuts();
+                    continue;
+                }
+
+                if (await slashCommandHandler.TryHandleAsync(userInput))
+                {
+                    toolOptions = CreateToolOptions();
+                    continue;
+                }
+
+                await HandleUserInputAsync(userInput, toolOptions);
             }
-
-            AddInputHistory(userInput);
-
-            if (userInput.Equals("exit", StringComparison.OrdinalIgnoreCase) ||
-                userInput.Equals("quit", StringComparison.OrdinalIgnoreCase))
-            {
-                break;
-            }
-
-            if (userInput.Trim() == "?")
-            {
-                PotatoConsole.WriteShortcuts();
-                continue;
-            }
-
-            if (await slashCommandHandler.TryHandleAsync(userInput))
-            {
-                toolOptions = CreateToolOptions();
-                continue;
-            }
-
-            await HandleUserInputAsync(userInput, toolOptions);
+        }
+        finally
+        {
+            Console.CancelKeyPress -= cancelHandler;
         }
     }
 
@@ -100,6 +111,8 @@ internal sealed partial class PotatoSession
 
     private async Task HandleUserInputAsync(string userInput, ChatOptions toolOptions)
     {
+        using CancellationTokenSource taskCancellationSource = BeginTaskCancellation();
+        CancellationToken cancellationToken = taskCancellationSource.Token;
         string messageForModel = fileMentionExpander.Expand(userInput);
 
         if (currentState == AgentState.Specifying)
@@ -153,12 +166,12 @@ internal sealed partial class PotatoSession
 
             if (currentState == AgentState.Confirmed)
             {
-                await RunReActLoopAsync(currentOptions);
+                await RunReActLoopAsync(currentOptions, cancellationToken);
                 ResetConversationState();
                 return;
             }
 
-            ChatResponse response = await currentClient.GetResponseAsync(chatHistory, currentOptions);
+            ChatResponse response = await currentClient.GetResponseAsync(chatHistory, currentOptions, cancellationToken);
             chatHistory.Add(new ChatMessage(ChatRole.Assistant, response.Text));
             StoreLatestResponse(response.Text);
             PotatoConsole.WriteAgentResponse(response.Text);
@@ -176,7 +189,7 @@ internal sealed partial class PotatoSession
                         latestApproach)));
 
                 PotatoConsole.WriteStatus("Proceeding to ReAct execution...");
-                await RunReActLoopAsync(CreateCurrentOptions(toolOptions, includeTools: true));
+                await RunReActLoopAsync(CreateCurrentOptions(toolOptions, includeTools: true), cancellationToken);
                 ResetConversationState();
             }
             else if (currentState == AgentState.Approaching)
@@ -184,9 +197,18 @@ internal sealed partial class PotatoSession
                 PotatoConsole.WriteStatus("Waiting for execution approval. Type 'execute' or 'yes' to start.");
             }
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            ResetConversationState();
+            PotatoConsole.WriteSuccess("Aborted current task. Back at the main prompt.");
+        }
         catch (Exception ex)
         {
             PotatoConsole.WriteError($"Error: {ex.Message}");
+        }
+        finally
+        {
+            EndTaskCancellation(taskCancellationSource);
         }
     }
 
@@ -202,6 +224,7 @@ internal sealed partial class PotatoSession
                 AIFunctionFactory.Create(agentTools.SummarizeFilePurpose),
                 AIFunctionFactory.Create(agentTools.GetCollectedContext),
                 AIFunctionFactory.Create(agentTools.ApplyDiffPatchAsync),
+                AIFunctionFactory.Create(agentTools.ApplySearchReplaceAsync),
                 AIFunctionFactory.Create(agentTools.ExecuteShellCommandAsync)
             ]
         };
@@ -215,15 +238,16 @@ internal sealed partial class PotatoSession
         };
     }
 
-    private async Task RunReActLoopAsync(ChatOptions toolOptions)
+    private async Task RunReActLoopAsync(ChatOptions toolOptions, CancellationToken cancellationToken)
     {
         for (int iteration = 1; iteration <= MaxReActIterations; iteration++)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             int toolCallsBefore = agentTools.ToolInvocationCount;
             PotatoConsole.WriteStatus($"ReAct iteration {iteration}/{MaxReActIterations}...");
             PotatoConsole.WriteModelQuestion(GetLatestModelQuestion());
 
-            ChatResponse response = await currentClient.GetResponseAsync(chatHistory, toolOptions);
+            ChatResponse response = await currentClient.GetResponseAsync(chatHistory, toolOptions, cancellationToken);
             string responseText = response.Text.Trim();
 
             if (string.IsNullOrWhiteSpace(responseText))
@@ -242,15 +266,15 @@ internal sealed partial class PotatoSession
             }
 
             int toolCallsThisIteration = agentTools.ToolInvocationCount - toolCallsBefore;
-            await reActMemory.SummarizeLargeUnsummarizedItemsAsync(currentOpenAiClient);
+            await reActMemory.SummarizeLargeUnsummarizedItemsAsync(currentOpenAiClient, cancellationToken);
             if (toolCallsThisIteration <= 0)
             {
-                if (await TryExecuteTextualActionAsync(responseText))
+                if (await TryExecuteTextualActionAsync(responseText, cancellationToken))
                 {
                     continue;
                 }
 
-                if (await TryExecuteDeterministicFallbackAsync(iteration))
+                if (await TryExecuteDeterministicFallbackAsync(iteration, cancellationToken))
                 {
                     continue;
                 }
@@ -328,17 +352,19 @@ internal sealed partial class PotatoSession
     [GeneratedRegex(@"^\s*(?:#{1,6}\s*)?(?:\*\*)?\s*FINAL\s*:?\s*(?:\*\*)?", RegexOptions.IgnoreCase | RegexOptions.Multiline)]
     private static partial Regex FinalMarkerRegex();
 
-    private async Task<bool> TryExecuteTextualActionAsync(string responseText)
+    private async Task<bool> TryExecuteTextualActionAsync(string responseText, CancellationToken cancellationToken)
     {
-        TextualToolCall? toolCall = TryParseToolCall(responseText) ?? TryParseShellFence(responseText);
+        TextualToolCall? toolCall = TryParseToolCall(responseText) ??
+                                    TryParseSearchReplaceBlock(responseText) ??
+                                    TryParseShellFence(responseText);
         if (toolCall is null)
         {
             return false;
         }
 
         PotatoConsole.WriteStatus($"Interpreting textual action as tool call: {toolCall.Name}");
-        string result = await ExecuteTextualToolCallAsync(toolCall);
-        await reActMemory.SummarizeLargeUnsummarizedItemsAsync(currentOpenAiClient);
+        string result = await ExecuteTextualToolCallAsync(toolCall, cancellationToken);
+        await reActMemory.SummarizeLargeUnsummarizedItemsAsync(currentOpenAiClient, cancellationToken);
         chatHistory.Add(new ChatMessage(
             ChatRole.User,
             PromptLibrary.NextStepAfterObservationMessage(
@@ -349,7 +375,7 @@ internal sealed partial class PotatoSession
         return true;
     }
 
-    private async Task<bool> TryExecuteDeterministicFallbackAsync(int iteration)
+    private async Task<bool> TryExecuteDeterministicFallbackAsync(int iteration, CancellationToken cancellationToken)
     {
         if (iteration != 1 ||
             !ShouldStartWithProjectInspection(latestUserRequest))
@@ -359,7 +385,7 @@ internal sealed partial class PotatoSession
 
         PotatoConsole.WriteStatus("Model did not choose the first project inspection action; running deterministic directory listing fallback...");
         string result = agentTools.ListFiles(Environment.CurrentDirectory);
-        await reActMemory.SummarizeLargeUnsummarizedItemsAsync(currentOpenAiClient);
+        await reActMemory.SummarizeLargeUnsummarizedItemsAsync(currentOpenAiClient, cancellationToken);
 
         chatHistory.Add(new ChatMessage(
             ChatRole.User,
@@ -384,16 +410,19 @@ internal sealed partial class PotatoSession
                text.Contains("repository", StringComparison.Ordinal);
     }
 
-    private async Task<string> ExecuteTextualToolCallAsync(TextualToolCall toolCall)
+    private async Task<string> ExecuteTextualToolCallAsync(TextualToolCall toolCall, CancellationToken cancellationToken)
     {
         try
         {
-            return toolCall.Name switch
+            cancellationToken.ThrowIfCancellationRequested();
+            string toolName = NormalizeTextualToolName(toolCall.Name);
+            return toolName switch
             {
                 nameof(AgentTools.GetCurrentTime) => agentTools.GetCurrentTime(),
                 nameof(AgentTools.ReadFileContent) => agentTools.ReadFileContent(
                     GetStringArgument(toolCall.Arguments, "filePath") ??
                     GetStringArgument(toolCall.Arguments, "file_path") ??
+                    GetStringArgument(toolCall.Arguments, "path") ??
                     string.Empty),
                 nameof(AgentTools.ListFiles) => agentTools.ListFiles(
                     GetStringArgument(toolCall.Arguments, "directoryPath") ??
@@ -413,14 +442,45 @@ internal sealed partial class PotatoSession
                     GetStringArgument(toolCall.Arguments, "patch") ?? string.Empty,
                     GetStringArgument(toolCall.Arguments, "workingDirectory") ??
                     GetStringArgument(toolCall.Arguments, "working_directory")),
+                nameof(AgentTools.ApplySearchReplaceAsync) => await agentTools.ApplySearchReplaceAsync(
+                    GetStringArgument(toolCall.Arguments, "filePath") ??
+                    GetStringArgument(toolCall.Arguments, "file_path") ??
+                    GetStringArgument(toolCall.Arguments, "path") ??
+                    string.Empty,
+                    GetStringArgument(toolCall.Arguments, "search") ??
+                    GetStringArgument(toolCall.Arguments, "oldString") ??
+                    GetStringArgument(toolCall.Arguments, "old_string") ??
+                    GetStringArgument(toolCall.Arguments, "SEARCH") ??
+                    string.Empty,
+                    GetStringArgument(toolCall.Arguments, "replace") ??
+                    GetStringArgument(toolCall.Arguments, "newString") ??
+                    GetStringArgument(toolCall.Arguments, "new_string") ??
+                    GetStringArgument(toolCall.Arguments, "REPLACE") ??
+                    string.Empty),
                 nameof(AgentTools.ExecuteShellCommandAsync) => await ExecuteShellToolCallAsync(toolCall),
                 _ => $"Error: Unknown textual tool call '{toolCall.Name}'."
             };
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception ex)
         {
             return $"Error executing textual tool call '{toolCall.Name}': {ex.Message}";
         }
+    }
+
+    private static string NormalizeTextualToolName(string name)
+    {
+        string normalized = name.Trim();
+        return normalized switch
+        {
+            "SearchReplace" or "search_replace" or "apply_search_replace" or "replace_file" => nameof(AgentTools.ApplySearchReplaceAsync),
+            "read_file" => nameof(AgentTools.ReadFileContent),
+            "list_files" => nameof(AgentTools.ListFiles),
+            _ => normalized
+        };
     }
 
     private async Task<string> ExecuteShellToolCallAsync(TextualToolCall toolCall)
@@ -515,6 +575,36 @@ internal sealed partial class PotatoSession
                 ["command"] = command,
                 ["workingDirectory"] = Environment.CurrentDirectory,
                 ["timeoutSeconds"] = 60
+            });
+    }
+
+    private static TextualToolCall? TryParseSearchReplaceBlock(string responseText)
+    {
+        var match = Regex.Match(
+            responseText,
+            @"(?<path>^[^\r\n<>`]+?)\s*\r?\n<<<<<<< SEARCH\r?\n(?<search>[\s\S]*?)\r?\n=======\r?\n(?<replace>[\s\S]*?)\r?\n>>>>>>> REPLACE",
+            RegexOptions.Multiline);
+
+        if (!match.Success)
+        {
+            return null;
+        }
+
+        string filePath = match.Groups["path"].Value.Trim();
+        string search = match.Groups["search"].Value;
+        string replace = match.Groups["replace"].Value;
+        if (string.IsNullOrWhiteSpace(filePath) || string.IsNullOrEmpty(search))
+        {
+            return null;
+        }
+
+        return new TextualToolCall(
+            nameof(AgentTools.ApplySearchReplaceAsync),
+            new JsonObject
+            {
+                ["filePath"] = filePath,
+                ["search"] = search,
+                ["replace"] = replace
             });
     }
 
@@ -635,5 +725,47 @@ internal sealed partial class PotatoSession
         {
             chatHistory.RemoveRange(1, chatHistory.Count - 1);
         }
+    }
+
+    private CancellationTokenSource BeginTaskCancellation()
+    {
+        var cancellationSource = new CancellationTokenSource();
+        lock (taskCancellationLock)
+        {
+            currentTaskCancellationSource = cancellationSource;
+            agentTools.CurrentCancellationToken = cancellationSource.Token;
+        }
+
+        return cancellationSource;
+    }
+
+    private void EndTaskCancellation(CancellationTokenSource cancellationSource)
+    {
+        lock (taskCancellationLock)
+        {
+            if (ReferenceEquals(currentTaskCancellationSource, cancellationSource))
+            {
+                currentTaskCancellationSource = null;
+                agentTools.CurrentCancellationToken = default;
+            }
+        }
+    }
+
+    private void HandleConsoleCancelKeyPress(object? sender, ConsoleCancelEventArgs eventArgs)
+    {
+        CancellationTokenSource? cancellationSource;
+        lock (taskCancellationLock)
+        {
+            cancellationSource = currentTaskCancellationSource;
+        }
+
+        if (cancellationSource is null)
+        {
+            return;
+        }
+
+        eventArgs.Cancel = true;
+        cancellationSource.Cancel();
+        PotatoConsole.WriteStatus("Abort requested. Cancelling current task...");
     }
 }
