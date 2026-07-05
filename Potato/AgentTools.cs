@@ -228,7 +228,7 @@ internal class AgentTools(ReActMemory memory, Func<IChatClient> getSideQuestionC
 
         if (LooksLikeShellFileEditCommand(command))
         {
-            return StoreAndReturn($"{nameof(ExecuteShellCommandAsync)} {command}", "Rejected shell-based file edit. Read the relevant file, then use ApplyDiffPatchAsync with a unified diff.");
+            return StoreAndReturn($"{nameof(ExecuteShellCommandAsync)} {command}", "Rejected shell-based file edit. Use CreateFileAsync for new files, or read the relevant file and use ApplySearchReplaceAsync with exact SEARCH and REPLACE text.");
         }
 
         if (!string.IsNullOrWhiteSpace(workingDirectory) && !Directory.Exists(workingDirectory))
@@ -493,6 +493,56 @@ internal class AgentTools(ReActMemory memory, Func<IChatClient> getSideQuestionC
         return StoreAndReturn(nameof(ApplySearchReplaceAsync), $"SEARCH/REPLACE edit applied successfully to {resolvedPath}.");
     }
 
+    [Description("Creates a new text file after showing the full content to the user and asking for permission. Fails if the file already exists.")]
+    public async Task<string> CreateFileAsync(
+        [Description("The path for the new file. Absolute paths are accepted; relative paths resolve from the current working directory.")] string filePath,
+        [Description("The full text content to write into the new file.")] string content)
+    {
+        CurrentCancellationToken.ThrowIfCancellationRequested();
+        ToolInvocationCount++;
+        string? resolvedPath = ResolveCreatableFilePath(filePath);
+        WriteToolCall(nameof(CreateFileAsync),
+        [
+            ("filePath", filePath),
+            ("resolvedPath", resolvedPath ?? "(unresolved)"),
+            ("contentCharacters", content?.Length.ToString() ?? "0")
+        ]);
+
+        if (IsPlaceholderPath(filePath) || resolvedPath is null)
+        {
+            return StoreAndReturn(nameof(CreateFileAsync), "Error: The file path is a placeholder. Use a real path from the directory listing or attached file header.");
+        }
+
+        if (File.Exists(resolvedPath))
+        {
+            return StoreAndReturn(nameof(CreateFileAsync), $"Error: File '{resolvedPath}' already exists. Use ApplySearchReplaceAsync to edit existing files.");
+        }
+
+        string? parentDirectory = Path.GetDirectoryName(resolvedPath);
+        if (string.IsNullOrWhiteSpace(parentDirectory) || !Directory.Exists(parentDirectory))
+        {
+            return StoreAndReturn(nameof(CreateFileAsync), $"Error: Parent directory '{parentDirectory}' does not exist. Create or choose an existing directory first.");
+        }
+
+        Console.ForegroundColor = ConsoleColor.Magenta;
+        Console.WriteLine("Tool permission requested: create file");
+        Console.WriteLine($"File: {resolvedPath}");
+        Console.WriteLine("CONTENT:");
+        Console.WriteLine(content);
+        Console.ResetColor();
+        Console.Write("Create file? [y/N] ");
+
+        string? approval = ReadLineWithCancellation(CurrentCancellationToken);
+        if (!IsApproval(approval))
+        {
+            return StoreAndReturn(nameof(CreateFileAsync), "File creation denied by user.");
+        }
+
+        await File.WriteAllTextAsync(resolvedPath, content, CurrentCancellationToken);
+        SuccessfulEditCount++;
+        return StoreAndReturn(nameof(CreateFileAsync), $"File created successfully at {resolvedPath}.");
+    }
+
     private static bool IsPlaceholderPath(string? filePath)
     {
         if (string.IsNullOrWhiteSpace(filePath))
@@ -519,6 +569,29 @@ internal class AgentTools(ReActMemory memory, Func<IChatClient> getSideQuestionC
             return TryResolvePlaceholderFileName(trimmed);
         }
 
+        if (Uri.TryCreate(trimmed, UriKind.Absolute, out Uri? uri) && uri.IsFile)
+        {
+            trimmed = uri.LocalPath;
+        }
+
+        if (trimmed.StartsWith("~/", StringComparison.Ordinal))
+        {
+            trimmed = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), trimmed[2..]);
+        }
+
+        return Path.GetFullPath(Path.IsPathRooted(trimmed)
+            ? trimmed
+            : Path.Combine(Environment.CurrentDirectory, trimmed));
+    }
+
+    private static string? ResolveCreatableFilePath(string? filePath)
+    {
+        if (string.IsNullOrWhiteSpace(filePath))
+        {
+            return null;
+        }
+
+        string trimmed = filePath.Trim();
         if (Uri.TryCreate(trimmed, UriKind.Absolute, out Uri? uri) && uri.IsFile)
         {
             trimmed = uri.LocalPath;

@@ -224,6 +224,7 @@ internal sealed partial class PotatoSession
                 AIFunctionFactory.Create(agentTools.SummarizeFilePurpose),
                 AIFunctionFactory.Create(agentTools.GetCollectedContext),
                 AIFunctionFactory.Create(agentTools.ApplySearchReplaceAsync),
+                AIFunctionFactory.Create(agentTools.CreateFileAsync),
                 AIFunctionFactory.Create(agentTools.ApplyDiffPatchAsync),
                 AIFunctionFactory.Create(agentTools.ExecuteShellCommandAsync)
             ]
@@ -241,6 +242,8 @@ internal sealed partial class PotatoSession
     private async Task RunReActLoopAsync(ChatOptions toolOptions, CancellationToken cancellationToken)
     {
         int successfulEditsBeforeExecution = agentTools.SuccessfulEditCount;
+        bool directCreateFileFallbackAttempted = false;
+        bool directReplaceFileFallbackAttempted = false;
 
         for (int iteration = 1; iteration <= MaxReActIterations; iteration++)
         {
@@ -269,7 +272,7 @@ internal sealed partial class PotatoSession
                 {
                     chatHistory.Add(new ChatMessage(
                         ChatRole.User,
-                        "You returned FINAL for a project change, but no edit tool has successfully changed a file in this execution. Read the relevant file if needed, then prefer ApplySearchReplaceAsync with exact SEARCH and REPLACE text, or use ApplyDiffPatchAsync if SEARCH/REPLACE is not practical. Do not claim the file was modified until the latest observation confirms a successful edit."));
+                        "You returned FINAL for a project change, but no edit tool has successfully changed a file in this execution. Read the relevant file if needed, then prefer ApplySearchReplaceAsync with exact SEARCH and REPLACE text. Use CreateFileAsync for new files, or ApplyDiffPatchAsync if neither direct edit tool is practical. Do not claim the file was modified until the latest observation confirms a successful edit."));
                     continue;
                 }
 
@@ -286,8 +289,30 @@ internal sealed partial class PotatoSession
                     continue;
                 }
 
-                if (await TryExecuteDeterministicFallbackAsync(iteration, cancellationToken))
+                if (await TryExecuteDeterministicFallbackAsync(
+                        iteration,
+                        directCreateFileFallbackAttempted,
+                        directReplaceFileFallbackAttempted,
+                        cancellationToken))
                 {
+                    if (TryParseDirectCreateFileRequest(latestUserRequest, out _, out _))
+                    {
+                        directCreateFileFallbackAttempted = true;
+                    }
+
+                    if (TryParseDirectReplaceFileContentRequest(latestUserRequest, out _, out _))
+                    {
+                        directReplaceFileFallbackAttempted = true;
+                    }
+
+                    continue;
+                }
+
+                if (LooksLikeUnavailableToolClaim(responseText) || LooksLikeShellEditFallbackClaim(responseText))
+                {
+                    chatHistory.Add(new ChatMessage(
+                        ChatRole.User,
+                        "Correction: ApplySearchReplaceAsync, CreateFileAsync, and ApplyDiffPatchAsync are available. Do not use ExecuteShellCommandAsync or manual editor instructions for source edits. The next response must be exactly one registered tool call, preferably ApplySearchReplaceAsync with exact SEARCH and REPLACE text copied from the latest file content, or CreateFileAsync for a new file."));
                     continue;
                 }
 
@@ -334,7 +359,7 @@ internal sealed partial class PotatoSession
                 latestObservation +=
                     Environment.NewLine +
                     Environment.NewLine +
-                    "Correction: The assistant text incorrectly claimed one or more tools are unavailable. Native tool calls just executed successfully in this environment. Continue by using the registered tools, and for source edits prefer ApplySearchReplaceAsync with exact SEARCH and REPLACE text.";
+                    "Correction: The assistant text incorrectly claimed one or more tools are unavailable. Native tool calls just executed successfully in this environment. Continue by using the registered tools. For source edits prefer ApplySearchReplaceAsync with exact SEARCH and REPLACE text; for new files use CreateFileAsync.";
             }
 
             chatHistory.Add(new ChatMessage(
@@ -419,7 +444,7 @@ internal sealed partial class PotatoSession
         return responseText[..match.Index].TrimEnd();
     }
 
-    [GeneratedRegex(@"^\s*(?:#{1,6}\s*)?(?:\*\*)?\s*FINAL\s*:?\s*(?:\*\*)?", RegexOptions.IgnoreCase | RegexOptions.Multiline)]
+    [GeneratedRegex(@"\A\s*(?:#{1,6}\s*)?(?:\*\*)?\s*FINAL\s*:?\s*(?:\*\*)?", RegexOptions.IgnoreCase)]
     private static partial Regex FinalMarkerRegex();
 
     private async Task<bool> TryExecuteTextualActionAsync(string responseText, CancellationToken cancellationToken)
@@ -446,8 +471,53 @@ internal sealed partial class PotatoSession
         return true;
     }
 
-    private async Task<bool> TryExecuteDeterministicFallbackAsync(int iteration, CancellationToken cancellationToken)
+    private async Task<bool> TryExecuteDeterministicFallbackAsync(
+        int iteration,
+        bool directCreateFileFallbackAttempted,
+        bool directReplaceFileFallbackAttempted,
+        CancellationToken cancellationToken)
     {
+        if (!directReplaceFileFallbackAttempted &&
+            TryParseDirectReplaceFileContentRequest(latestUserRequest, out string replaceFilePath, out string replacementContent))
+        {
+            string resolvedPath = ResolveUserFilePath(replaceFilePath);
+            if (!File.Exists(resolvedPath))
+            {
+                return false;
+            }
+
+            PotatoConsole.WriteStatus("Model did not call ApplySearchReplaceAsync for a direct file content replacement; running deterministic replacement fallback...");
+            string currentContent = await File.ReadAllTextAsync(resolvedPath, cancellationToken);
+            string replaceResult = await agentTools.ApplySearchReplaceAsync(resolvedPath, currentContent, replacementContent);
+            await reActMemory.SummarizeLargeUnsummarizedItemsAsync(currentOpenAiClient, cancellationToken);
+
+            chatHistory.Add(new ChatMessage(
+                ChatRole.User,
+                PromptLibrary.NextStepAfterObservationMessage(
+                    latestUserRequest ?? string.Empty,
+                    Environment.CurrentDirectory,
+                    nameof(AgentTools.ApplySearchReplaceAsync),
+                    replaceResult)));
+            return true;
+        }
+
+        if (!directCreateFileFallbackAttempted &&
+            TryParseDirectCreateFileRequest(latestUserRequest, out string filePath, out string content))
+        {
+            PotatoConsole.WriteStatus("Model did not call CreateFileAsync for a direct file creation request; running deterministic file creation fallback...");
+            string createResult = await agentTools.CreateFileAsync(filePath, content);
+            await reActMemory.SummarizeLargeUnsummarizedItemsAsync(currentOpenAiClient, cancellationToken);
+
+            chatHistory.Add(new ChatMessage(
+                ChatRole.User,
+                PromptLibrary.NextStepAfterObservationMessage(
+                    latestUserRequest ?? string.Empty,
+                    Environment.CurrentDirectory,
+                    nameof(AgentTools.CreateFileAsync),
+                    createResult)));
+            return true;
+        }
+
         if (iteration != 1 ||
             !ShouldStartWithProjectInspection(latestUserRequest))
         {
@@ -466,6 +536,103 @@ internal sealed partial class PotatoSession
                 nameof(AgentTools.ListFiles),
                 result)));
         return true;
+    }
+
+    private static bool TryParseDirectReplaceFileContentRequest(string? request, out string filePath, out string content)
+    {
+        filePath = string.Empty;
+        content = string.Empty;
+
+        if (string.IsNullOrWhiteSpace(request))
+        {
+            return false;
+        }
+
+        Match match = Regex.Match(
+            request.Trim(),
+            @"\b(?:change|replace|set|update)\s+(?:the\s+)?content\s+of\s+(?:the\s+)?file\s+[`""']?(?<path>[^\s`""']+)[`""']?\s+to\s+[`""']?(?<content>.+?)[`""']?\s*$",
+            RegexOptions.IgnoreCase);
+
+        if (!match.Success)
+        {
+            match = Regex.Match(
+                request.Trim(),
+                @"\b(?:change|replace|set|update)\s+(?:the\s+)?file\s+[`""']?(?<path>[^\s`""']+\.[A-Za-z0-9]+)[`""']?\s+(?:content\s+)?to\s+[`""']?(?<content>.+?)[`""']?\s*$",
+                RegexOptions.IgnoreCase);
+        }
+
+        if (!match.Success)
+        {
+            return false;
+        }
+
+        filePath = match.Groups["path"].Value.Trim();
+        content = TrimMatchingQuotes(match.Groups["content"].Value.Trim());
+        return !string.IsNullOrWhiteSpace(filePath);
+    }
+
+    private static string ResolveUserFilePath(string filePath)
+    {
+        string trimmed = filePath.Trim();
+        if (Uri.TryCreate(trimmed, UriKind.Absolute, out Uri? uri) && uri.IsFile)
+        {
+            trimmed = uri.LocalPath;
+        }
+
+        if (trimmed.StartsWith("~/", StringComparison.Ordinal))
+        {
+            trimmed = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), trimmed[2..]);
+        }
+
+        return Path.GetFullPath(Path.IsPathRooted(trimmed)
+            ? trimmed
+            : Path.Combine(Environment.CurrentDirectory, trimmed));
+    }
+
+    private static bool TryParseDirectCreateFileRequest(string? request, out string filePath, out string content)
+    {
+        filePath = string.Empty;
+        content = string.Empty;
+
+        if (string.IsNullOrWhiteSpace(request))
+        {
+            return false;
+        }
+
+        Match match = Regex.Match(
+            request.Trim(),
+            @"\b(?:write|create|make)\s+(?:a\s+)?file\s+(?:(?:named|called)\s+)?[`""']?(?<path>[^\s`""']+)[`""']?\s+(?:with|containing)\s+(?:the\s+)?content\s+[`""']?(?<content>.+?)[`""']?\s*$",
+            RegexOptions.IgnoreCase);
+
+        if (!match.Success)
+        {
+            match = Regex.Match(
+                request.Trim(),
+                @"\b(?:write|create|make)\s+[`""']?(?<path>[^\s`""']+\.[A-Za-z0-9]+)[`""']?\s+(?:with|containing)\s+(?:the\s+)?content\s+[`""']?(?<content>.+?)[`""']?\s*$",
+                RegexOptions.IgnoreCase);
+        }
+
+        if (!match.Success)
+        {
+            return false;
+        }
+
+        filePath = match.Groups["path"].Value.Trim();
+        content = TrimMatchingQuotes(match.Groups["content"].Value.Trim());
+        return !string.IsNullOrWhiteSpace(filePath);
+    }
+
+    private static string TrimMatchingQuotes(string value)
+    {
+        if (value.Length >= 2 &&
+            ((value[0] == '"' && value[^1] == '"') ||
+             (value[0] == '\'' && value[^1] == '\'') ||
+             (value[0] == '`' && value[^1] == '`')))
+        {
+            return value[1..^1];
+        }
+
+        return value;
     }
 
     private static bool ShouldStartWithProjectInspection(string? request) =>
@@ -528,6 +695,14 @@ internal sealed partial class PotatoSession
                     GetStringArgument(toolCall.Arguments, "new_string") ??
                     GetStringArgument(toolCall.Arguments, "REPLACE") ??
                     string.Empty),
+                nameof(AgentTools.CreateFileAsync) => await agentTools.CreateFileAsync(
+                    GetStringArgument(toolCall.Arguments, "filePath") ??
+                    GetStringArgument(toolCall.Arguments, "file_path") ??
+                    GetStringArgument(toolCall.Arguments, "path") ??
+                    string.Empty,
+                    GetStringArgument(toolCall.Arguments, "content") ??
+                    GetStringArgument(toolCall.Arguments, "text") ??
+                    string.Empty),
                 nameof(AgentTools.ExecuteShellCommandAsync) => await ExecuteShellToolCallAsync(toolCall),
                 _ => $"Error: Unknown textual tool call '{toolCall.Name}'."
             };
@@ -548,6 +723,7 @@ internal sealed partial class PotatoSession
         return normalized switch
         {
             "SearchReplace" or "search_replace" or "apply_search_replace" or "replace_file" => nameof(AgentTools.ApplySearchReplaceAsync),
+            "CreateFile" or "create_file" or "write_new_file" or "new_file" => nameof(AgentTools.CreateFileAsync),
             "read_file" => nameof(AgentTools.ReadFileContent),
             "list_files" => nameof(AgentTools.ListFiles),
             _ => normalized
@@ -734,6 +910,16 @@ internal sealed partial class PotatoSession
                 normalized.Contains("unavailable", StringComparison.Ordinal) ||
                 normalized.Contains("missing from the available", StringComparison.Ordinal) ||
                 normalized.Contains("missing from the current", StringComparison.Ordinal));
+    }
+
+    private static bool LooksLikeShellEditFallbackClaim(string responseText)
+    {
+        string normalized = responseText.ToLowerInvariant();
+        return normalized.Contains("executeshellcommandasync", StringComparison.Ordinal) &&
+               (normalized.Contains("fallback", StringComparison.Ordinal) ||
+                normalized.Contains("manually inject", StringComparison.Ordinal) ||
+                normalized.Contains("manual edit", StringComparison.Ordinal) ||
+                normalized.Contains("edit", StringComparison.Ordinal));
     }
 
     private static TextualToolCall? TryParseAiderSearchReplaceBlock(string responseText)

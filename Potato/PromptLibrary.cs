@@ -36,14 +36,15 @@ internal static class PromptLibrary
         "   State that execution will use the ReAct loop for inspect/edit/verify cycles. " +
         "   State which available CLI tool or tools you intend to use and why, but do not invent files, configuration, command history stores, or facts that have not been inspected yet. " +
         "   Available CLI tools:\n" +
-        BuildToolSummary(includeArguments: false) +
+        BuildToolSummary(includeArguments: true) +
         "   Prefer ListFiles over ExecuteShellCommandAsync for directory listings. Prefer SummarizeFilePurpose before reading large files when orienting yourself. " +
         "   If no direct available tool fits the task, say whether the task can be solved through ExecuteShellCommandAsync and what kind of shell action would be needed. " +
         "   If neither a direct tool nor shell execution can solve it, say what is missing. " +
         "   Do not emit tool-call JSON or exact shell commands in this phase. " +
         "   Do not say execution will proceed automatically; the CLI will decide and print that status itself. " +
-        "   For simple read-only or inspection tasks, say that no destructive actions are planned. " +
-        "   For risky, destructive, write, install, delete, or multi-step tasks, ask the user to type 'execute' before continuing.\n" +
+        "   For simple read-only or inspection tasks, say that no write/delete/risky actions are planned. " +
+        "   For write, delete, install, risky, or multi-step tasks, ask the user to type 'execute' before continuing. " +
+        "   Make clear that once execution is approved, the registered tools are allowed to perform the approved work.\n" +
         "4. PHASE 4 (Execution): Execute the approved approach through a ReAct loop using the CLI tools.";
 
     public static string ApprovalToApproachMessage(string? latestSpecification) =>
@@ -62,8 +63,9 @@ internal static class PromptLibrary
         "If neither a direct tool nor shell execution can solve it, say what is missing. " +
         "Do not emit tool-call JSON or exact shell commands in this phase. " +
         "Do not say execution will proceed automatically; the CLI will decide and print that status itself. " +
-        "If this is a simple read-only inspection task, say that no destructive actions are planned and do not ask me to type 'execute'. " +
-        "Only ask me to type 'execute' if the task is risky, destructive, modifies files, installs software, deletes data, or requires multiple dependent steps.\n\n" +
+        "If this is a simple read-only inspection task, say that no write/delete/risky actions are planned and do not ask me to type 'execute'. " +
+        "Only ask me to type 'execute' if the task writes or modifies files, deletes data, installs software, is risky, or requires multiple dependent steps. " +
+        "Make clear that once execution is approved, the registered tools are allowed to perform the approved work.\n\n" +
         $"Approved specification:\n{latestSpecification ?? "(Use the latest specification from the conversation.)"}";
 
     public static string ExecuteApprovedApproachMessage(
@@ -86,14 +88,14 @@ internal static class PromptLibrary
         builder.AppendLine("When execution needs a tool, output ONLY this exact GLaDOS format and no other text:");
         builder.AppendLine("<tool_call>{\"name\":\"ToolName\",\"arguments\":{}}</tool_call>");
         builder.AppendLine("Do not ask the user to type execute during the ReAct loop. Execution has already been approved at the approach level.");
-        builder.AppendLine("If native tool calling fails and you need a shell command, output one fenced shell block with the exact command; Potato will route it through the permissioned shell tool.");
+        builder.AppendLine("If native tool calling fails, output the same tool action as textual <tool_call> JSON. Do not switch to shell for source edits.");
         builder.AppendLine("Available tools:");
         builder.Append(BuildToolSummary(includeArguments: true));
 
         builder.AppendLine("Use ListFiles for directory listings. Use ReadFileContent for exact file content. Use SummarizeFilePurpose to understand a file before deciding whether to read it fully.");
-        builder.AppendLine("Use ExecuteShellCommandAsync only for commands that the direct tools cannot perform, such as builds, tests, git commands, OS checks, or running the application.");
-        builder.AppendLine("For code edits after reading the relevant file, prefer ApplySearchReplaceAsync with exact SEARCH and REPLACE text copied from the latest file content. Use ApplyDiffPatchAsync only when SEARCH/REPLACE is not practical, such as broad multi-location changes. Do not use shell redirection, echo, sed -i, perl -pi, or inline file-writing commands to edit source files.");
-        builder.AppendLine("After applying a patch, run focused verification through ExecuteShellCommandAsync when the approved task warrants it.");
+        builder.AppendLine("Use ExecuteShellCommandAsync only for non-editing commands that the direct tools cannot perform, such as builds, tests, git commands, OS checks, or running the application.");
+        builder.AppendLine("For code edits after reading the relevant file, prefer ApplySearchReplaceAsync with exact SEARCH and REPLACE text copied from the latest file content. For new files, use CreateFileAsync. Use ApplyDiffPatchAsync only when SEARCH/REPLACE or CreateFileAsync is not practical, such as broad multi-location changes. Do not use shell redirection, echo, sed -i, perl -pi, or inline file-writing commands to edit source files.");
+        builder.AppendLine("After applying an edit, run focused verification through ExecuteShellCommandAsync when the approved task warrants it.");
         builder.AppendLine("Choose an appropriate command for the current operating system.");
         builder.AppendLine("Never copy placeholder argument values. Do not use paths like /full/path/to/file, /full/path/to/program.cs, path/to/file, or example commands.");
         builder.AppendLine("When reading a file from a directory listing, use the listed relative path. When reading an attached file, use the exact absolute path shown in the '--- begin file: ... ---' header.");
@@ -146,8 +148,9 @@ internal static class PromptLibrary
             nameof(AgentTools.SummarizeFilePurpose) => 3,
             nameof(AgentTools.GetCollectedContext) => 4,
             nameof(AgentTools.ApplySearchReplaceAsync) => 5,
-            nameof(AgentTools.ApplyDiffPatchAsync) => 6,
-            nameof(AgentTools.ExecuteShellCommandAsync) => 7,
+            nameof(AgentTools.CreateFileAsync) => 6,
+            nameof(AgentTools.ApplyDiffPatchAsync) => 7,
+            nameof(AgentTools.ExecuteShellCommandAsync) => 8,
             _ => 100
         };
 
@@ -191,9 +194,9 @@ internal static class PromptLibrary
         builder.AppendLine($"Original request: {OneLine(latestUserRequest)}");
         builder.AppendLine($"Working directory: {workingDirectory}");
         builder.AppendLine($"Required current step: {OneLine(previousQuestion)}");
-        builder.AppendLine("ApplySearchReplaceAsync and ApplyDiffPatchAsync are registered and available. Do not claim they are unavailable.");
+        builder.AppendLine("ApplySearchReplaceAsync, CreateFileAsync, and ApplyDiffPatchAsync are registered and available. Do not claim they are unavailable.");
         builder.AppendLine("Execution is already approved inside the ReAct loop. Do not ask the user to type execute.");
-        builder.Append("Now respond with exactly one tool call, or one fenced shell command if native tool calls are unavailable.");
+        builder.Append("Now respond with exactly one registered tool call. For source edits, use ApplySearchReplaceAsync with exact SEARCH and REPLACE text. For new files, use CreateFileAsync. Do not use shell commands as an edit fallback.");
         return builder.ToString();
     }
 
@@ -204,7 +207,7 @@ internal static class PromptLibrary
         builder.AppendLine("Use this answer as additional context for the already-approved execution.");
         builder.AppendLine("Do not restart Phase 1, Phase 2, or Phase 3. Continue the ReAct loop.");
         builder.AppendLine("Do not ask the user to type execute. Execution is already in progress.");
-        builder.AppendLine("ApplySearchReplaceAsync and ApplyDiffPatchAsync are registered and available for file edits.");
+        builder.AppendLine("ApplySearchReplaceAsync, CreateFileAsync, and ApplyDiffPatchAsync are registered and available for file edits.");
         builder.AppendLine("Next action: use exactly one tool call, or respond with FINAL: only if the original request is fully answered and verified.");
         builder.AppendLine();
         builder.AppendLine("User answer:");
@@ -226,10 +229,16 @@ internal static class PromptLibrary
         builder.AppendLine("Latest observation:");
         builder.AppendLine(Compact(latestObservation, 4_000));
         builder.AppendLine();
-        builder.AppendLine("Available next actions are the registered tools: GetCurrentTime, ReadFileContent, ListFiles, SummarizeFilePurpose, GetCollectedContext, ApplySearchReplaceAsync, ApplyDiffPatchAsync, ExecuteShellCommandAsync.");
+        builder.AppendLine("Available next actions are the registered tools: GetCurrentTime, ReadFileContent, ListFiles, SummarizeFilePurpose, GetCollectedContext, ApplySearchReplaceAsync, CreateFileAsync, ApplyDiffPatchAsync, ExecuteShellCommandAsync.");
         builder.AppendLine("Use ListFiles for directory listings; do not use shell commands for that. Use SummarizeFilePurpose to orient on a likely relevant file before reading or patching it.");
         builder.AppendLine("If this is a code change and you have only listed files so far, the next action must summarize or read the likely relevant source file. Do not patch or finish yet.");
-        builder.AppendLine("If a source edit is needed, prefer ApplySearchReplaceAsync with exact SEARCH and REPLACE text after reading the relevant file. Use ApplyDiffPatchAsync only when SEARCH/REPLACE is not practical. Do not use shell redirection or append commands to edit files.");
+        builder.AppendLine("If a source edit is needed, prefer ApplySearchReplaceAsync with exact SEARCH and REPLACE text after reading the relevant file. If a new file is needed, use CreateFileAsync. Use ApplyDiffPatchAsync only when SEARCH/REPLACE or CreateFileAsync is not practical. Do not use shell redirection or append commands to edit files.");
+        if (LooksLikeDirectFileContentReplacementRequest(latestUserRequest.ToLowerInvariant()) &&
+            latestObservation.Contains(nameof(AgentTools.ReadFileContent), StringComparison.Ordinal))
+        {
+            builder.AppendLine("This is a direct file content replacement and the file has now been read. Next action must be ApplySearchReplaceAsync using the exact observed file content as SEARCH and the requested new content as REPLACE.");
+        }
+
         builder.Append("Next action: use exactly one tool call, or respond with FINAL: only if the original request is fully answered and verified.");
         return builder.ToString();
     }
@@ -241,6 +250,25 @@ internal static class PromptLibrary
     {
         string request = latestUserRequest ?? string.Empty;
         string normalized = request.ToLowerInvariant();
+
+        if (LooksLikeDirectFileCreationRequest(normalized))
+        {
+            return "Next action only: create the requested new file using CreateFileAsync. " +
+                   "Do not use ExecuteShellCommandAsync, shell redirection, echo, tee, or manual editor instructions. " +
+                   "CreateFileAsync is registered and available. " +
+                   $"Working directory: {Environment.CurrentDirectory}. " +
+                   $"Original request: {OneLine(request)}";
+        }
+
+        if (LooksLikeDirectFileContentReplacementRequest(normalized))
+        {
+            return "Next action only: read the target file with ReadFileContent. " +
+                   "Do not use ExecuteShellCommandAsync, shell redirection, echo, tee, CreateFileAsync, or manual editor instructions. " +
+                   "After the read observation, the next step will use ApplySearchReplaceAsync with the exact current file content as SEARCH and the requested new content as REPLACE. " +
+                   "ReadFileContent and ApplySearchReplaceAsync are registered and available. " +
+                   $"Working directory: {Environment.CurrentDirectory}. " +
+                   $"Original request: {OneLine(request)}";
+        }
 
         if (ApprovalPolicy.IsProjectChangeRequest(request))
         {
@@ -279,6 +307,23 @@ internal static class PromptLibrary
                $"Working directory: {Environment.CurrentDirectory}. " +
                $"Original request: {OneLine(request)}";
     }
+
+    private static bool LooksLikeDirectFileCreationRequest(string normalizedRequest) =>
+        (normalizedRequest.Contains("write a file", StringComparison.Ordinal) ||
+         normalizedRequest.Contains("create a file", StringComparison.Ordinal) ||
+         normalizedRequest.Contains("make a file", StringComparison.Ordinal) ||
+         normalizedRequest.Contains("write file", StringComparison.Ordinal) ||
+         normalizedRequest.Contains("create file", StringComparison.Ordinal)) &&
+        normalizedRequest.Contains("content", StringComparison.Ordinal);
+
+    private static bool LooksLikeDirectFileContentReplacementRequest(string normalizedRequest) =>
+        (normalizedRequest.Contains("change the content of", StringComparison.Ordinal) ||
+         normalizedRequest.Contains("replace the content of", StringComparison.Ordinal) ||
+         normalizedRequest.Contains("set the content of", StringComparison.Ordinal) ||
+         normalizedRequest.Contains("update the content of", StringComparison.Ordinal) ||
+         normalizedRequest.Contains("change content of", StringComparison.Ordinal) ||
+         normalizedRequest.Contains("replace content of", StringComparison.Ordinal)) &&
+        normalizedRequest.Contains(" to ", StringComparison.Ordinal);
 
     private static string OneLine(string text)
     {
