@@ -15,25 +15,32 @@ public class AgentTools
     public string GetCurrentTime()
     {
         ToolInvocationCount++;
+        WriteToolCall(nameof(GetCurrentTime), []);
         return $"The current local time is: {DateTime.Now:F}";
     }
 
     [Description("Reads the contents of a specific text file from disk.")]
-    public string ReadFileContent([Description("The full path to the file.")] string filePath)
+    public string ReadFileContent([Description("The path to the file. Absolute paths are accepted; relative paths resolve from the current working directory.")] string filePath)
     {
         ToolInvocationCount++;
+        string? resolvedPath = ResolveReadableFilePath(filePath);
+        WriteToolCall(nameof(ReadFileContent),
+        [
+            ("filePath", filePath),
+            ("resolvedPath", resolvedPath ?? "(unresolved)")
+        ]);
 
-        if (IsPlaceholderPath(filePath))
+        if (IsPlaceholderPath(filePath) && resolvedPath is null)
         {
-            return "Error: The file path is a placeholder. Use the exact absolute path from the user request or attached file header.";
+            return "Error: The file path is a placeholder. Use a real path from the directory listing or attached file header.";
         }
 
-        if (!File.Exists(filePath))
+        if (resolvedPath is null || !File.Exists(resolvedPath))
         {
-            return $"Error: File '{filePath}' does not exist.";
+            return $"Error: File '{filePath}' does not exist. Current working directory: {Environment.CurrentDirectory}";
         }
 
-        return File.ReadAllText(filePath);
+        return File.ReadAllText(resolvedPath);
     }
 
     [Description("Executes a shell command after showing it to the user and asking for permission. Uses PowerShell on Windows and Bash on other platforms.")]
@@ -43,6 +50,12 @@ public class AgentTools
         [Description("Optional timeout in seconds. Defaults to 60 seconds and is capped at 600 seconds.")] int timeoutSeconds = DefaultCommandTimeoutSeconds)
     {
         ToolInvocationCount++;
+        WriteToolCall(nameof(ExecuteShellCommandAsync),
+        [
+            ("command", command),
+            ("workingDirectory", workingDirectory ?? Environment.CurrentDirectory),
+            ("timeoutSeconds", timeoutSeconds.ToString())
+        ]);
 
         if (string.IsNullOrWhiteSpace(command))
         {
@@ -136,6 +149,11 @@ public class AgentTools
         [Description("Optional working directory where the patch should be applied. Leave empty to use the current process directory.")] string? workingDirectory = null)
     {
         ToolInvocationCount++;
+        WriteToolCall(nameof(ApplyDiffPatchAsync),
+        [
+            ("workingDirectory", workingDirectory ?? Environment.CurrentDirectory),
+            ("patchCharacters", patch?.Length.ToString() ?? "0")
+        ]);
 
         if (string.IsNullOrWhiteSpace(patch))
         {
@@ -235,6 +253,58 @@ public class AgentTools
         return normalized.Contains("/full/path/", StringComparison.Ordinal) ||
                normalized.Contains("path/to/file", StringComparison.Ordinal) ||
                normalized.Contains("program.cs", StringComparison.Ordinal) && normalized.StartsWith("/full/path", StringComparison.Ordinal);
+    }
+
+    private static string? ResolveReadableFilePath(string? filePath)
+    {
+        if (string.IsNullOrWhiteSpace(filePath))
+        {
+            return null;
+        }
+
+        string trimmed = filePath.Trim();
+        if (IsPlaceholderPath(trimmed))
+        {
+            return TryResolvePlaceholderFileName(trimmed);
+        }
+
+        if (Uri.TryCreate(trimmed, UriKind.Absolute, out Uri? uri) && uri.IsFile)
+        {
+            trimmed = uri.LocalPath;
+        }
+
+        if (trimmed.StartsWith("~/", StringComparison.Ordinal))
+        {
+            trimmed = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), trimmed[2..]);
+        }
+
+        return Path.GetFullPath(Path.IsPathRooted(trimmed)
+            ? trimmed
+            : Path.Combine(Environment.CurrentDirectory, trimmed));
+    }
+
+    private static string? TryResolvePlaceholderFileName(string filePath)
+    {
+        string fileName = Path.GetFileName(filePath.Replace('\\', Path.DirectorySeparatorChar));
+        if (string.IsNullOrWhiteSpace(fileName) || fileName.Equals("file", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        string candidate = Path.Combine(Environment.CurrentDirectory, fileName);
+        return File.Exists(candidate) ? Path.GetFullPath(candidate) : null;
+    }
+
+    private static void WriteToolCall(string toolName, IReadOnlyList<(string Name, string Value)> parameters)
+    {
+        Console.ForegroundColor = ConsoleColor.DarkGray;
+        Console.WriteLine($"Tool call: {toolName}");
+        foreach ((string name, string value) in parameters)
+        {
+            Console.WriteLine($"  {name}: {value}");
+        }
+
+        Console.ResetColor();
     }
 
     private static bool IsApproval(string? input)

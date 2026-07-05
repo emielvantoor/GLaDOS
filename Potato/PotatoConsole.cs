@@ -1,5 +1,7 @@
 internal static class PotatoConsole
 {
+    private const string PromptText = "> ";
+
     public static void WriteStartupBanner(Uri gladosEndpoint, string model)
     {
         Console.Clear();
@@ -63,8 +65,109 @@ internal static class PotatoConsole
     {
         WriteSeparator();
         Console.ForegroundColor = ConsoleColor.Cyan;
-        Console.Write("> ");
+        Console.Write(PromptText);
         Console.ResetColor();
+    }
+
+    public static string? ReadPromptInput(IReadOnlyList<string> history)
+    {
+        WritePrompt();
+
+        var buffer = new List<char>();
+        int cursorIndex = 0;
+        int historyIndex = history.Count;
+        string draftInput = string.Empty;
+        int inputLeft = Console.CursorLeft;
+        int inputTop = Console.CursorTop;
+        int renderedLength = 0;
+
+        while (true)
+        {
+            ConsoleKeyInfo key = Console.ReadKey(intercept: true);
+
+            switch (key.Key)
+            {
+                case ConsoleKey.Enter:
+                    Console.WriteLine();
+                    return new string(buffer.ToArray());
+
+                case ConsoleKey.Backspace:
+                    if (cursorIndex > 0)
+                    {
+                        buffer.RemoveAt(cursorIndex - 1);
+                        cursorIndex--;
+                        RedrawInputLine(buffer, cursorIndex, inputLeft, inputTop, ref renderedLength);
+                    }
+                    break;
+
+                case ConsoleKey.Delete:
+                    if (cursorIndex < buffer.Count)
+                    {
+                        buffer.RemoveAt(cursorIndex);
+                        RedrawInputLine(buffer, cursorIndex, inputLeft, inputTop, ref renderedLength);
+                    }
+                    break;
+
+                case ConsoleKey.LeftArrow:
+                    if (cursorIndex > 0)
+                    {
+                        cursorIndex--;
+                        MoveCursor(inputLeft, inputTop, cursorIndex);
+                    }
+                    break;
+
+                case ConsoleKey.RightArrow:
+                    if (cursorIndex < buffer.Count)
+                    {
+                        cursorIndex++;
+                        MoveCursor(inputLeft, inputTop, cursorIndex);
+                    }
+                    break;
+
+                case ConsoleKey.Home:
+                    cursorIndex = 0;
+                    MoveCursor(inputLeft, inputTop, cursorIndex);
+                    break;
+
+                case ConsoleKey.End:
+                    cursorIndex = buffer.Count;
+                    MoveCursor(inputLeft, inputTop, cursorIndex);
+                    break;
+
+                case ConsoleKey.UpArrow:
+                    if (history.Count > 0 && historyIndex > 0)
+                    {
+                        if (historyIndex == history.Count)
+                        {
+                            draftInput = new string(buffer.ToArray());
+                        }
+
+                        historyIndex--;
+                        ReplaceBuffer(buffer, history[historyIndex], ref cursorIndex);
+                        RedrawInputLine(buffer, cursorIndex, inputLeft, inputTop, ref renderedLength);
+                    }
+                    break;
+
+                case ConsoleKey.DownArrow:
+                    if (history.Count > 0 && historyIndex < history.Count)
+                    {
+                        historyIndex++;
+                        string value = historyIndex == history.Count ? draftInput : history[historyIndex];
+                        ReplaceBuffer(buffer, value, ref cursorIndex);
+                        RedrawInputLine(buffer, cursorIndex, inputLeft, inputTop, ref renderedLength);
+                    }
+                    break;
+
+                default:
+                    if (!char.IsControl(key.KeyChar))
+                    {
+                        buffer.Insert(cursorIndex, key.KeyChar);
+                        cursorIndex++;
+                        RedrawInputLine(buffer, cursorIndex, inputLeft, inputTop, ref renderedLength);
+                    }
+                    break;
+            }
+        }
     }
 
     public static void WriteSeparator()
@@ -84,6 +187,7 @@ internal static class PotatoConsole
         Console.WriteLine("  /cd [path]      Change the current working directory");
         Console.WriteLine("  /ask question   Ask a side question without changing chat history");
         Console.WriteLine("  /abort          Cancel the current task and return to the main prompt");
+        Console.WriteLine("  Up/Down         Cycle through commands entered in this session");
         Console.WriteLine("  exit, quit      Close Potato Code");
         Console.WriteLine("  y, yes, ok      Approve the current specification");
         Console.WriteLine("  execute         Approve risky or multi-step execution");
@@ -120,6 +224,14 @@ internal static class PotatoConsole
         Console.ResetColor();
     }
 
+    public static void WriteModelQuestion(string message)
+    {
+        Console.ForegroundColor = ConsoleColor.DarkGray;
+        Console.WriteLine("Model question:");
+        Console.WriteLine(message);
+        Console.ResetColor();
+    }
+
     private static string TopBorder(int width) => "┌" + new string('─', width - 2) + "┐";
 
     private static string BottomBorder(int width) => "└" + new string('─', width - 2) + "┘";
@@ -128,5 +240,38 @@ internal static class PotatoConsole
     {
         string value = text.Length > width - 4 ? text[..(width - 7)] + "..." : text;
         return "│ " + value.PadRight(width - 4) + " │";
+    }
+
+    private static void ReplaceBuffer(List<char> buffer, string value, ref int cursorIndex)
+    {
+        buffer.Clear();
+        buffer.AddRange(value);
+        cursorIndex = buffer.Count;
+    }
+
+    private static void RedrawInputLine(
+        List<char> buffer,
+        int cursorIndex,
+        int inputLeft,
+        int inputTop,
+        ref int renderedLength)
+    {
+        string text = new(buffer.ToArray());
+        Console.SetCursorPosition(inputLeft, inputTop);
+        Console.Write(text);
+
+        if (renderedLength > text.Length)
+        {
+            Console.Write(new string(' ', renderedLength - text.Length));
+        }
+
+        renderedLength = text.Length;
+        MoveCursor(inputLeft, inputTop, cursorIndex);
+    }
+
+    private static void MoveCursor(int inputLeft, int inputTop, int cursorIndex)
+    {
+        int maxLeft = Math.Max(0, Console.BufferWidth - 1);
+        Console.SetCursorPosition(Math.Min(inputLeft + cursorIndex, maxLeft), inputTop);
     }
 }

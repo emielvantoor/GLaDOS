@@ -10,7 +10,7 @@ internal static class ApprovalPolicy
     public static bool IsUserExecutionApproval(string input)
     {
         string normalized = input.Trim().ToLowerInvariant();
-        string[] executeWords = ["execute", "run", "do it", "continue", "proceed", "go"];
+        string[] executeWords = ["y", "yes", "approved", "approve", "ok", "okay", "execute", "run", "do it", "continue", "proceed", "go"];
         return Array.Exists(executeWords, word => normalized == word || normalized.StartsWith(word + " "));
     }
 
@@ -28,5 +28,36 @@ internal static class ApprovalPolicy
         ];
 
         return riskySignals.Any(text.Contains);
+    }
+
+    public static bool IsReadOnlyInspectionRequest(string? userRequest)
+    {
+        string text = userRequest?.ToLowerInvariant() ?? string.Empty;
+        string[] readOnlySignals =
+        [
+            "explain", "summarize", "describe", "what is", "what does",
+            "review", "inspect", "analyze", "list", "show", "find"
+        ];
+
+        string[] writeSignals =
+        [
+            "change", "edit", "modify", "fix", "implement", "add", "remove",
+            "delete", "create", "install", "update", "rename", "move"
+        ];
+
+        return readOnlySignals.Any(text.Contains) && !writeSignals.Any(text.Contains);
+    }
+
+    public static bool ShouldAutoExecuteAfterApproach(
+        string? latestUserRequest,
+        string? latestSpecification,
+        string? latestApproach)
+    {
+        if (IsReadOnlyInspectionRequest(latestUserRequest))
+        {
+            return true;
+        }
+
+        return !RequiresExplicitExecutionApproval(latestSpecification, latestApproach);
     }
 }

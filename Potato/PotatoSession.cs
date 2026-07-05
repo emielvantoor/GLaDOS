@@ -1,6 +1,9 @@
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 using Microsoft.Extensions.AI;
 
-internal sealed class PotatoSession(
+internal sealed partial class PotatoSession(
     Uri gladosEndpoint,
     IChatClient openAiClient,
     IChatClient client,
@@ -12,6 +15,7 @@ internal sealed class PotatoSession(
 
     private readonly AgentTools agentTools = new();
     private readonly FileMentionExpander fileMentionExpander = new();
+    private readonly List<string> inputHistory = [];
     private readonly List<ChatMessage> chatHistory =
     [
         new(ChatRole.System, PromptLibrary.SystemPrompt)
@@ -40,13 +44,14 @@ internal sealed class PotatoSession(
 
         while (true)
         {
-            PotatoConsole.WritePrompt();
-            string? userInput = Console.ReadLine();
+            string? userInput = PotatoConsole.ReadPromptInput(inputHistory);
 
             if (string.IsNullOrWhiteSpace(userInput))
             {
                 continue;
             }
+
+            AddInputHistory(userInput);
 
             if (userInput.Equals("exit", StringComparison.OrdinalIgnoreCase) ||
                 userInput.Equals("quit", StringComparison.OrdinalIgnoreCase))
@@ -70,6 +75,14 @@ internal sealed class PotatoSession(
         }
     }
 
+    private void AddInputHistory(string input)
+    {
+        if (inputHistory.Count == 0 || !string.Equals(inputHistory[^1], input, StringComparison.Ordinal))
+        {
+            inputHistory.Add(input);
+        }
+    }
+
     private async Task HandleUserInputAsync(string userInput, ChatOptions toolOptions)
     {
         string messageForModel = fileMentionExpander.Expand(userInput);
@@ -84,6 +97,7 @@ internal sealed class PotatoSession(
             else
             {
                 latestUserRequest = messageForModel;
+                chatHistory.Add(new ChatMessage(ChatRole.System, PromptLibrary.SpecificationGuardMessage));
                 chatHistory.Add(new ChatMessage(ChatRole.User, messageForModel));
             }
         }
@@ -135,7 +149,7 @@ internal sealed class PotatoSession(
             PotatoConsole.WriteAgentResponse(response.Text);
 
             if (currentState == AgentState.Approaching &&
-                !ApprovalPolicy.RequiresExplicitExecutionApproval(latestSpecification, latestApproach))
+                ApprovalPolicy.ShouldAutoExecuteAfterApproach(latestUserRequest, latestSpecification, latestApproach))
             {
                 currentState = AgentState.Confirmed;
                 chatHistory.Add(new ChatMessage(ChatRole.System, PromptLibrary.BuildToolInstructions()));
@@ -149,6 +163,10 @@ internal sealed class PotatoSession(
                 PotatoConsole.WriteStatus("Proceeding to ReAct execution...");
                 await RunReActLoopAsync(CreateCurrentOptions(toolOptions, includeTools: true));
                 ResetConversationState();
+            }
+            else if (currentState == AgentState.Approaching)
+            {
+                PotatoConsole.WriteStatus("Waiting for execution approval. Type 'execute' or 'yes' to start.");
             }
         }
         catch (Exception ex)
@@ -185,6 +203,7 @@ internal sealed class PotatoSession(
         {
             int toolCallsBefore = agentTools.ToolInvocationCount;
             PotatoConsole.WriteStatus($"ReAct iteration {iteration}/{MaxReActIterations}...");
+            PotatoConsole.WriteModelQuestion(GetLatestModelQuestion());
 
             ChatResponse response = await currentClient.GetResponseAsync(chatHistory, toolOptions);
             string responseText = response.Text.Trim();
@@ -195,21 +214,38 @@ internal sealed class PotatoSession(
             }
 
             chatHistory.Add(new ChatMessage(ChatRole.Assistant, responseText));
-            PotatoConsole.WriteAgentResponse(RemoveFinalMarker(responseText));
 
             if (IsFinalResponse(responseText))
             {
+                PotatoConsole.WriteAgentResponse(RemoveFinalMarker(responseText));
                 return;
             }
 
             int toolCallsThisIteration = agentTools.ToolInvocationCount - toolCallsBefore;
             if (toolCallsThisIteration <= 0)
             {
+                if (await TryExecuteTextualActionAsync(responseText))
+                {
+                    continue;
+                }
+
+                PotatoConsole.WriteStatus("Model did not call a tool or return FINAL; continuing execution loop...");
+
+                if (LooksLikeUnmarkedCompletion(responseText))
+                {
+                    chatHistory.Add(new ChatMessage(
+                        ChatRole.User,
+                        "You claimed the task is complete without using the required FINAL: marker and without a tool-backed observation. If the task is actually complete, respond exactly with FINAL: followed by the summary. Otherwise use one available tool for the next action."));
+                    continue;
+                }
+
                 chatHistory.Add(new ChatMessage(
                     ChatRole.User,
                     PromptLibrary.ContinueReActMessage(requireToolUse: false)));
                 continue;
             }
+
+            PotatoConsole.WriteAgentResponse(responseText);
 
             if (toolCallsThisIteration > MaxToolCallsPerIteration)
             {
@@ -221,21 +257,192 @@ internal sealed class PotatoSession(
 
             chatHistory.Add(new ChatMessage(
                 ChatRole.User,
-                PromptLibrary.ContinueReActMessage(requireToolUse: true)));
+                PromptLibrary.NextStepAfterObservationMessage(
+                    latestUserRequest ?? string.Empty,
+                    Environment.CurrentDirectory,
+                    "native tool call",
+                    responseText)));
         }
 
         PotatoConsole.WriteError($"Stopped after {MaxReActIterations} ReAct iterations without a FINAL response.");
     }
 
     private static bool IsFinalResponse(string responseText) =>
-        responseText.TrimStart().StartsWith("FINAL:", StringComparison.OrdinalIgnoreCase);
+        FinalMarkerRegex().IsMatch(responseText);
+
+    private static bool LooksLikeUnmarkedCompletion(string responseText)
+    {
+        string normalized = responseText.ToLowerInvariant();
+        return normalized.Contains("completed", StringComparison.Ordinal) ||
+               normalized.Contains("has been implemented", StringComparison.Ordinal) ||
+               normalized.Contains("has been completed", StringComparison.Ordinal) ||
+               normalized.Contains("implementation has been tested", StringComparison.Ordinal) ||
+               normalized.Contains("task is complete", StringComparison.Ordinal);
+    }
 
     private static string RemoveFinalMarker(string responseText)
     {
-        string trimmed = responseText.TrimStart();
-        return trimmed.StartsWith("FINAL:", StringComparison.OrdinalIgnoreCase)
-            ? trimmed["FINAL:".Length..].TrimStart()
-            : responseText;
+        return FinalMarkerRegex().Replace(responseText, string.Empty, count: 1).TrimStart();
+    }
+
+    [GeneratedRegex(@"^\s*(?:#{1,6}\s*)?(?:\*\*)?\s*FINAL\s*:?\s*(?:\*\*)?", RegexOptions.IgnoreCase)]
+    private static partial Regex FinalMarkerRegex();
+
+    private async Task<bool> TryExecuteTextualActionAsync(string responseText)
+    {
+        TextualToolCall? toolCall = TryParseToolCall(responseText) ?? TryParseShellFence(responseText);
+        if (toolCall is null)
+        {
+            return false;
+        }
+
+        PotatoConsole.WriteStatus($"Interpreting textual action as tool call: {toolCall.Name}");
+        string result = await ExecuteTextualToolCallAsync(toolCall);
+        chatHistory.Add(new ChatMessage(
+            ChatRole.User,
+            PromptLibrary.NextStepAfterObservationMessage(
+                latestUserRequest ?? string.Empty,
+                Environment.CurrentDirectory,
+                toolCall.Name,
+                result)));
+        return true;
+    }
+
+    private async Task<string> ExecuteTextualToolCallAsync(TextualToolCall toolCall)
+    {
+        try
+        {
+            return toolCall.Name switch
+            {
+                nameof(AgentTools.GetCurrentTime) => agentTools.GetCurrentTime(),
+                nameof(AgentTools.ReadFileContent) => agentTools.ReadFileContent(
+                    GetStringArgument(toolCall.Arguments, "filePath") ??
+                    GetStringArgument(toolCall.Arguments, "file_path") ??
+                    string.Empty),
+                nameof(AgentTools.ApplyDiffPatchAsync) => await agentTools.ApplyDiffPatchAsync(
+                    GetStringArgument(toolCall.Arguments, "patch") ?? string.Empty,
+                    GetStringArgument(toolCall.Arguments, "workingDirectory") ??
+                    GetStringArgument(toolCall.Arguments, "working_directory")),
+                nameof(AgentTools.ExecuteShellCommandAsync) => await agentTools.ExecuteShellCommandAsync(
+                    GetStringArgument(toolCall.Arguments, "command") ?? string.Empty,
+                    GetStringArgument(toolCall.Arguments, "workingDirectory") ??
+                    GetStringArgument(toolCall.Arguments, "working_directory"),
+                    GetIntArgument(toolCall.Arguments, "timeoutSeconds") ??
+                    GetIntArgument(toolCall.Arguments, "timeout_seconds") ??
+                    60),
+                _ => $"Error: Unknown textual tool call '{toolCall.Name}'."
+            };
+        }
+        catch (Exception ex)
+        {
+            return $"Error executing textual tool call '{toolCall.Name}': {ex.Message}";
+        }
+    }
+
+    private static TextualToolCall? TryParseToolCall(string responseText)
+    {
+        var match = Regex.Match(
+            responseText,
+            @"<tool_call>\s*(?<json>\{[\s\S]*?\})\s*</tool_call>",
+            RegexOptions.IgnoreCase);
+
+        if (!match.Success)
+        {
+            return null;
+        }
+
+        try
+        {
+            JsonNode? node = JsonNode.Parse(match.Groups["json"].Value);
+            string? name = node?["name"]?.GetValue<string>();
+            JsonObject? arguments = node?["arguments"] as JsonObject;
+            return string.IsNullOrWhiteSpace(name)
+                ? null
+                : new TextualToolCall(name, arguments ?? []);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static TextualToolCall? TryParseShellFence(string responseText)
+    {
+        var match = Regex.Match(
+            responseText,
+            @"```(?:shell|bash|sh|powershell|pwsh|console|terminal)?\s*\r?\n(?<command>[\s\S]*?)```",
+            RegexOptions.IgnoreCase);
+
+        if (!match.Success)
+        {
+            return null;
+        }
+
+        string command = match.Groups["command"].Value.Trim();
+        if (string.IsNullOrWhiteSpace(command))
+        {
+            return null;
+        }
+
+        return new TextualToolCall(
+            nameof(AgentTools.ExecuteShellCommandAsync),
+            new JsonObject
+            {
+                ["command"] = command,
+                ["workingDirectory"] = Environment.CurrentDirectory,
+                ["timeoutSeconds"] = 60
+            });
+    }
+
+    private static string? GetStringArgument(JsonObject arguments, string name)
+    {
+        JsonNode? node = arguments[name];
+        if (node is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            return node.GetValue<string>();
+        }
+        catch
+        {
+            return node.ToJsonString();
+        }
+    }
+
+    private static int? GetIntArgument(JsonObject arguments, string name)
+    {
+        JsonNode? node = arguments[name];
+        if (node is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            return node.GetValue<int>();
+        }
+        catch
+        {
+            return int.TryParse(node.ToString(), out int value) ? value : null;
+        }
+    }
+
+    private sealed record TextualToolCall(string Name, JsonObject Arguments);
+
+    private string GetLatestModelQuestion()
+    {
+        for (int i = chatHistory.Count - 1; i >= 0; i--)
+        {
+            if (chatHistory[i].Role == ChatRole.User)
+            {
+                return chatHistory[i].Text;
+            }
+        }
+
+        return "(no user message in chat history)";
     }
 
     private void StoreLatestResponse(string responseText)
