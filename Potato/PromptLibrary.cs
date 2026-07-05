@@ -79,6 +79,7 @@ internal static class PromptLibrary
         builder.AppendLine("When the approved task is complete, answer with FINAL: followed by a concise summary and any verification result.");
         builder.AppendLine("Do not claim success or describe repository facts unless the latest tool observations prove the work was done.");
         builder.AppendLine("For folder or project explanation tasks, begin by listing files or reading relevant project files with tools.");
+        builder.AppendLine("For project changes, do not edit after only a directory listing. First read the likely relevant files, identify the code path that owns the requested behavior, then patch only that path.");
         builder.AppendLine("If you need information collected in an earlier iteration but it is not in the latest observation, call GetCollectedContext with index='list'. Use the descriptions in that list to choose the needed index.");
         builder.AppendLine("When execution needs a tool, output ONLY this exact GLaDOS format and no other text:");
         builder.AppendLine("<tool_call>{\"name\":\"ToolName\",\"arguments\":{}}</tool_call>");
@@ -88,7 +89,7 @@ internal static class PromptLibrary
         builder.Append(BuildToolSummary(includeArguments: true));
 
         builder.AppendLine("Use the shell command tool for requests that require listing directories, inspecting files, checking the OS, running commands, or reading system state.");
-        builder.AppendLine("For code edits, read the relevant file first, then use ApplyDiffPatchAsync with a unified diff. Prefer patches over shell redirection or inline file writes.");
+        builder.AppendLine("For code edits, read the relevant file first, then use ApplyDiffPatchAsync with a unified diff. Do not use shell redirection, echo, sed -i, perl -pi, or inline file-writing commands to edit source files.");
         builder.AppendLine("After applying a patch, run focused verification through ExecuteShellCommandAsync when the approved task warrants it.");
         builder.AppendLine("Choose an appropriate command for the current operating system.");
         builder.AppendLine("Never copy placeholder argument values. Do not use paths like /full/path/to/file, /full/path/to/program.cs, path/to/file, or example commands.");
@@ -190,7 +191,10 @@ internal static class PromptLibrary
         builder.AppendLine("Latest observation:");
         builder.AppendLine(Compact(latestObservation, 4_000));
         builder.AppendLine();
-        builder.Append("Next action: use exactly one tool call, or respond with FINAL: if the original request is fully answered.");
+        builder.AppendLine("Available next actions are the registered tools: GetCurrentTime, ReadFileContent, GetCollectedContext, ApplyDiffPatchAsync, ExecuteShellCommandAsync.");
+        builder.AppendLine("If this is a code change and you have only listed files so far, the next action must read the likely relevant source file. Do not patch or finish yet.");
+        builder.AppendLine("If a source edit is needed, use ApplyDiffPatchAsync with a unified diff after reading the relevant file. Do not use shell redirection or append commands to edit files.");
+        builder.Append("Next action: use exactly one tool call, or respond with FINAL: only if the original request is fully answered and verified.");
         return builder.ToString();
     }
 
@@ -207,6 +211,7 @@ internal static class PromptLibrary
             return "Next action only: begin with read-only project context discovery before any implementation. " +
                    "Use ExecuteShellCommandAsync with a read-only listing command to identify the project structure and likely language/framework. " +
                    "Do not run a terminal animation, workaround command, server, installer, or modifying command as the first action. " +
+                   "After the listing, read the relevant source files before choosing any edit. " +
                    $"Working directory: {Environment.CurrentDirectory}. " +
                    $"Original request: {OneLine(request)}";
         }
