@@ -42,7 +42,7 @@ The CLI uses a staged workflow:
 4. Execution
    The CLI executes the approved approach through a bounded ReAct loop. The model can inspect files, run commands, apply patches, observe results, and continue until it returns a final answer.
 
-For simple read-only or inspection tasks, the CLI may proceed from the approach directly to the command permission prompt. For risky, destructive, write, install, delete, or multi-step tasks, the agent should ask the user to type `execute` before continuing.
+For simple read-only or inspection tasks, the CLI may proceed from the approach directly to the command permission prompt. For write, delete, install, risky, or multi-step tasks, the agent should ask the user to type `execute` before continuing. Once execution is approved, the registered tools are allowed to perform the approved work.
 
 The CLI owns the execution decision. If it does not auto-start after the approach, it prints an explicit status asking for `execute` or `yes`.
 
@@ -226,7 +226,7 @@ The CLI does not silently execute shell commands.
 
 Even when a task is simple enough to skip the extra `execute` prompt, the shell tool still asks for command-level permission before running anything.
 
-The extra `execute` prompt is reserved for tasks that appear risky, destructive, write-oriented, install-oriented, delete-oriented, or multi-step.
+The extra `execute` prompt is reserved for tasks that appear write-oriented, delete-oriented, install-oriented, risky, or multi-step. Once execution is approved, the registered tools are allowed to perform the approved work.
 
 ## Current Limitations
 
