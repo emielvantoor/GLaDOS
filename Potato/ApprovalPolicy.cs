@@ -2,16 +2,16 @@ internal static class ApprovalPolicy
 {
     public static bool IsUserApproval(string input)
     {
-        string normalized = input.Trim().ToLowerInvariant();
+        string normalized = NormalizeApprovalInput(input);
         string[] approvalWords = ["y", "yes", "approved", "approve", "go", "fine", "good", "looks good", "ok", "okay", "correct"];
-        return Array.Exists(approvalWords, word => normalized == word || normalized.StartsWith(word + " "));
+        return Array.Exists(approvalWords, word => normalized == word);
     }
 
     public static bool IsUserExecutionApproval(string input)
     {
-        string normalized = input.Trim().ToLowerInvariant();
+        string normalized = NormalizeApprovalInput(input);
         string[] executeWords = ["y", "yes", "approved", "approve", "ok", "okay", "execute", "run", "do it", "continue", "proceed", "go"];
-        return Array.Exists(executeWords, word => normalized == word || normalized.StartsWith(word + " "));
+        return Array.Exists(executeWords, word => normalized == word);
     }
 
     public static bool RequiresExplicitExecutionApproval(string? latestSpecification, string? latestApproach)
@@ -59,5 +59,13 @@ internal static class ApprovalPolicy
         }
 
         return !RequiresExplicitExecutionApproval(latestSpecification, latestApproach);
+    }
+
+    private static string NormalizeApprovalInput(string input)
+    {
+        return input
+            .Trim()
+            .Trim('.', '!', '?')
+            .ToLowerInvariant();
     }
 }

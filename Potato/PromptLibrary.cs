@@ -68,6 +68,7 @@ internal static class PromptLibrary
         {
             $"{nameof(AgentTools.GetCurrentTime)}: use for current date or time. Arguments: {{}}.",
             $"{nameof(AgentTools.ReadFileContent)}: use to read one known text file. Arguments: filePath can be absolute or relative to the current working directory.",
+            $"{nameof(AgentTools.GetCollectedContext)}: use to retrieve earlier ReAct observations or responses by contextual index. Arguments: index is 'list', 'latest', or a number; full defaults to false. The list includes descriptions for choosing the right index.",
             $"{nameof(AgentTools.ApplyDiffPatchAsync)}: use to edit files by applying a unified diff patch. Arguments: patch is the full unified diff, workingDirectory is optional.",
             $"{nameof(AgentTools.ExecuteShellCommandAsync)}: use for filesystem, directory listing, OS, process, or shell tasks. Arguments: command is the shell command to execute, workingDirectory is optional, timeoutSeconds defaults to 60."
         };
@@ -79,6 +80,7 @@ internal static class PromptLibrary
         builder.AppendLine("When the approved task is complete, answer with FINAL: followed by a concise summary and any verification result.");
         builder.AppendLine("Do not claim success or describe repository facts unless the latest tool observations prove the work was done.");
         builder.AppendLine("For folder or project explanation tasks, begin by listing files or reading relevant project files with tools.");
+        builder.AppendLine("If you need information collected in an earlier iteration but it is not in the latest observation, call GetCollectedContext with index='list'. Use the descriptions in that list to choose the needed index.");
         builder.AppendLine("When execution needs a tool, output ONLY this exact GLaDOS format and no other text:");
         builder.AppendLine("<tool_call>{\"name\":\"ToolName\",\"arguments\":{}}</tool_call>");
         builder.AppendLine("Do not ask the user to type execute during the ReAct loop. Execution has already been approved at the approach level.");
@@ -109,6 +111,20 @@ internal static class PromptLibrary
         }
 
         return "Continue the ReAct loop. If the approved task is complete, respond with FINAL:. If it is not complete, use one of the available tools for the next concrete action.";
+    }
+
+    public static string RepeatCurrentStepMessage(
+        string latestUserRequest,
+        string workingDirectory,
+        string previousQuestion)
+    {
+        var builder = new StringBuilder();
+        builder.AppendLine("The previous response did not contain a usable tool call or FINAL answer.");
+        builder.AppendLine($"Original request: {OneLine(latestUserRequest)}");
+        builder.AppendLine($"Working directory: {workingDirectory}");
+        builder.AppendLine($"Required current step: {OneLine(previousQuestion)}");
+        builder.Append("Now respond with exactly one tool call, or one fenced shell command if native tool calls are unavailable.");
+        return builder.ToString();
     }
 
     public static string NextStepAfterObservationMessage(

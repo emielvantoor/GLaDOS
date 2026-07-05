@@ -3,7 +3,7 @@ using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
 
-public class AgentTools
+internal class AgentTools(ReActMemory memory)
 {
     private const int DefaultCommandTimeoutSeconds = 60;
     private const int MaxCommandTimeoutSeconds = 600;
@@ -16,7 +16,9 @@ public class AgentTools
     {
         ToolInvocationCount++;
         WriteToolCall(nameof(GetCurrentTime), []);
-        return $"The current local time is: {DateTime.Now:F}";
+        string result = $"The current local time is: {DateTime.Now:F}";
+        memory.Add(nameof(GetCurrentTime), result);
+        return result;
     }
 
     [Description("Reads the contents of a specific text file from disk.")]
@@ -32,15 +34,30 @@ public class AgentTools
 
         if (IsPlaceholderPath(filePath) && resolvedPath is null)
         {
-            return "Error: The file path is a placeholder. Use a real path from the directory listing or attached file header.";
+            return StoreAndReturn(nameof(ReadFileContent), "Error: The file path is a placeholder. Use a real path from the directory listing or attached file header.");
         }
 
         if (resolvedPath is null || !File.Exists(resolvedPath))
         {
-            return $"Error: File '{filePath}' does not exist. Current working directory: {Environment.CurrentDirectory}";
+            return StoreAndReturn(nameof(ReadFileContent), $"Error: File '{filePath}' does not exist. Current working directory: {Environment.CurrentDirectory}");
         }
 
-        return File.ReadAllText(resolvedPath);
+        return StoreAndReturn($"{nameof(ReadFileContent)} {resolvedPath}", File.ReadAllText(resolvedPath));
+    }
+
+    [Description("Gets collected ReAct context by index. Use index 'list' to list available items with descriptions, 'latest' for the newest item, or a numeric index. Set full to true only when exact full content is needed.")]
+    public string GetCollectedContext(
+        [Description("Use 'list', 'latest', or a numeric index from the collected context list.")] string index = "list",
+        [Description("Whether to return full stored content instead of a summary when available.")] bool full = false)
+    {
+        ToolInvocationCount++;
+        WriteToolCall(nameof(GetCollectedContext),
+        [
+            ("index", index),
+            ("full", full.ToString())
+        ]);
+
+        return memory.Get(index, full);
     }
 
     [Description("Executes a shell command after showing it to the user and asking for permission. Uses PowerShell on Windows and Bash on other platforms.")]
@@ -59,12 +76,12 @@ public class AgentTools
 
         if (string.IsNullOrWhiteSpace(command))
         {
-            return "Error: No command was provided.";
+            return StoreAndReturn(nameof(ExecuteShellCommandAsync), "Error: No command was provided.");
         }
 
         if (!string.IsNullOrWhiteSpace(workingDirectory) && !Directory.Exists(workingDirectory))
         {
-            return $"Error: Working directory '{workingDirectory}' does not exist.";
+            return StoreAndReturn(nameof(ExecuteShellCommandAsync), $"Error: Working directory '{workingDirectory}' does not exist.");
         }
 
         var shell = GetShell();
@@ -82,7 +99,7 @@ public class AgentTools
         string? approval = Console.ReadLine();
         if (!IsApproval(approval))
         {
-            return "Command execution denied by user.";
+            return StoreAndReturn($"{nameof(ExecuteShellCommandAsync)} {command}", "Command execution denied by user.");
         }
 
         using var process = new Process();
@@ -132,14 +149,16 @@ public class AgentTools
             {
                 process.Kill(entireProcessTree: true);
                 await waitTask;
-                return $"Command timed out after {timeoutSeconds} seconds and was killed.";
+                return StoreAndReturn($"{nameof(ExecuteShellCommandAsync)} {command}", $"Command timed out after {timeoutSeconds} seconds and was killed.");
             }
 
-            return FormatCommandResult(process.ExitCode, outputBuilder.ToString(), errorBuilder.ToString());
+            return StoreAndReturn(
+                $"{nameof(ExecuteShellCommandAsync)} {command}",
+                FormatCommandResult(process.ExitCode, outputBuilder.ToString(), errorBuilder.ToString()));
         }
         catch (Exception ex)
         {
-            return $"Error executing command: {ex.Message}";
+            return StoreAndReturn($"{nameof(ExecuteShellCommandAsync)} {command}", $"Error executing command: {ex.Message}");
         }
     }
 
@@ -157,12 +176,12 @@ public class AgentTools
 
         if (string.IsNullOrWhiteSpace(patch))
         {
-            return "Error: No patch was provided.";
+            return StoreAndReturn(nameof(ApplyDiffPatchAsync), "Error: No patch was provided.");
         }
 
         if (patch.Length > MaxPatchCharacters)
         {
-            return $"Error: Patch is too large. Maximum supported patch size is {MaxPatchCharacters} characters.";
+            return StoreAndReturn(nameof(ApplyDiffPatchAsync), $"Error: Patch is too large. Maximum supported patch size is {MaxPatchCharacters} characters.");
         }
 
         string effectiveWorkingDirectory = string.IsNullOrWhiteSpace(workingDirectory)
@@ -171,7 +190,7 @@ public class AgentTools
 
         if (!Directory.Exists(effectiveWorkingDirectory))
         {
-            return $"Error: Working directory '{effectiveWorkingDirectory}' does not exist.";
+            return StoreAndReturn(nameof(ApplyDiffPatchAsync), $"Error: Working directory '{effectiveWorkingDirectory}' does not exist.");
         }
 
         Console.ForegroundColor = ConsoleColor.Magenta;
@@ -185,7 +204,7 @@ public class AgentTools
         string? approval = Console.ReadLine();
         if (!IsApproval(approval))
         {
-            return "Patch application denied by user.";
+            return StoreAndReturn(nameof(ApplyDiffPatchAsync), "Patch application denied by user.");
         }
 
         string patchFile = Path.Combine(Path.GetTempPath(), $"potato-{Guid.NewGuid():N}.patch");
@@ -202,7 +221,7 @@ public class AgentTools
 
             if (checkResult.ExitCode != 0)
             {
-                return FormatProcessResult("Patch validation failed.", checkResult);
+                return StoreAndReturn(nameof(ApplyDiffPatchAsync), FormatProcessResult("Patch validation failed.", checkResult));
             }
 
             ProcessResult applyResult = await RunProcessAsync(
@@ -213,18 +232,18 @@ public class AgentTools
 
             if (applyResult.ExitCode != 0)
             {
-                return FormatProcessResult("Patch application failed.", applyResult);
+                return StoreAndReturn(nameof(ApplyDiffPatchAsync), FormatProcessResult("Patch application failed.", applyResult));
             }
 
             var builder = new StringBuilder();
             builder.AppendLine("Patch applied successfully.");
             builder.AppendLine("Changed files:");
             builder.AppendLine(FormatPatchedFiles(patch));
-            return builder.ToString();
+            return StoreAndReturn(nameof(ApplyDiffPatchAsync), builder.ToString());
         }
         catch (Exception ex)
         {
-            return $"Error applying patch: {ex.Message}";
+            return StoreAndReturn(nameof(ApplyDiffPatchAsync), $"Error applying patch: {ex.Message}");
         }
         finally
         {
@@ -305,6 +324,12 @@ public class AgentTools
         }
 
         Console.ResetColor();
+    }
+
+    private string StoreAndReturn(string source, string result)
+    {
+        memory.Add(source, result);
+        return result;
     }
 
     private static bool IsApproval(string? input)

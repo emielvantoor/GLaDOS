@@ -3,17 +3,16 @@ using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.AI;
 
-internal sealed partial class PotatoSession(
-    Uri gladosEndpoint,
-    IChatClient openAiClient,
-    IChatClient client,
-    GladosChatClientFactory clientFactory,
-    ModelSelector modelSelector)
+internal sealed partial class PotatoSession
 {
     private const int MaxReActIterations = 12;
     private const int MaxToolCallsPerIteration = 8;
 
-    private readonly AgentTools agentTools = new();
+    private readonly Uri gladosEndpoint;
+    private readonly GladosChatClientFactory clientFactory;
+    private readonly ModelSelector modelSelector;
+    private readonly ReActMemory reActMemory = new();
+    private readonly AgentTools agentTools;
     private readonly FileMentionExpander fileMentionExpander = new();
     private readonly List<string> inputHistory = [];
     private readonly List<ChatMessage> chatHistory =
@@ -22,11 +21,26 @@ internal sealed partial class PotatoSession(
     ];
 
     private AgentState currentState = AgentState.Specifying;
-    private IChatClient currentOpenAiClient = openAiClient;
-    private IChatClient currentClient = client;
+    private IChatClient currentOpenAiClient;
+    private IChatClient currentClient;
     private string? latestSpecification;
     private string? latestApproach;
     private string? latestUserRequest;
+
+    public PotatoSession(
+        Uri gladosEndpoint,
+        IChatClient openAiClient,
+        IChatClient client,
+        GladosChatClientFactory clientFactory,
+        ModelSelector modelSelector)
+    {
+        this.gladosEndpoint = gladosEndpoint;
+        this.clientFactory = clientFactory;
+        this.modelSelector = modelSelector;
+        currentOpenAiClient = openAiClient;
+        currentClient = client;
+        agentTools = new AgentTools(reActMemory);
+    }
 
     public async Task RunAsync()
     {
@@ -89,7 +103,7 @@ internal sealed partial class PotatoSession(
 
         if (currentState == AgentState.Specifying)
         {
-            if (ApprovalPolicy.IsUserApproval(userInput))
+            if (latestSpecification is not null && ApprovalPolicy.IsUserApproval(userInput))
             {
                 currentState = AgentState.Approaching;
                 chatHistory.Add(new ChatMessage(ChatRole.User, PromptLibrary.ApprovalToApproachMessage(latestSpecification)));
@@ -103,7 +117,7 @@ internal sealed partial class PotatoSession(
         }
         else if (currentState == AgentState.Approaching)
         {
-            if (ApprovalPolicy.IsUserExecutionApproval(userInput))
+            if (latestApproach is not null && ApprovalPolicy.IsUserExecutionApproval(userInput))
             {
                 currentState = AgentState.Confirmed;
 
@@ -183,6 +197,7 @@ internal sealed partial class PotatoSession(
             [
                 AIFunctionFactory.Create(agentTools.GetCurrentTime),
                 AIFunctionFactory.Create(agentTools.ReadFileContent),
+                AIFunctionFactory.Create(agentTools.GetCollectedContext),
                 AIFunctionFactory.Create(agentTools.ApplyDiffPatchAsync),
                 AIFunctionFactory.Create(agentTools.ExecuteShellCommandAsync)
             ]
@@ -214,6 +229,7 @@ internal sealed partial class PotatoSession(
             }
 
             chatHistory.Add(new ChatMessage(ChatRole.Assistant, responseText));
+            reActMemory.Add("Assistant ReAct response", responseText);
 
             if (IsFinalResponse(responseText))
             {
@@ -222,9 +238,15 @@ internal sealed partial class PotatoSession(
             }
 
             int toolCallsThisIteration = agentTools.ToolInvocationCount - toolCallsBefore;
+            await reActMemory.SummarizeLargeUnsummarizedItemsAsync(currentOpenAiClient);
             if (toolCallsThisIteration <= 0)
             {
                 if (await TryExecuteTextualActionAsync(responseText))
+                {
+                    continue;
+                }
+
+                if (await TryExecuteDeterministicFallbackAsync(iteration))
                 {
                     continue;
                 }
@@ -241,7 +263,10 @@ internal sealed partial class PotatoSession(
 
                 chatHistory.Add(new ChatMessage(
                     ChatRole.User,
-                    PromptLibrary.ContinueReActMessage(requireToolUse: false)));
+                    PromptLibrary.RepeatCurrentStepMessage(
+                        latestUserRequest ?? string.Empty,
+                        Environment.CurrentDirectory,
+                        GetLatestModelQuestion())));
                 continue;
             }
 
@@ -282,10 +307,21 @@ internal sealed partial class PotatoSession(
 
     private static string RemoveFinalMarker(string responseText)
     {
-        return FinalMarkerRegex().Replace(responseText, string.Empty, count: 1).TrimStart();
+        Match match = FinalMarkerRegex().Match(responseText);
+        if (!match.Success)
+        {
+            return responseText.Trim();
+        }
+
+        if (match.Index == 0)
+        {
+            return FinalMarkerRegex().Replace(responseText, string.Empty, count: 1).TrimStart();
+        }
+
+        return responseText[..match.Index].TrimEnd();
     }
 
-    [GeneratedRegex(@"^\s*(?:#{1,6}\s*)?(?:\*\*)?\s*FINAL\s*:?\s*(?:\*\*)?", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"^\s*(?:#{1,6}\s*)?(?:\*\*)?\s*FINAL\s*:?\s*(?:\*\*)?", RegexOptions.IgnoreCase | RegexOptions.Multiline)]
     private static partial Regex FinalMarkerRegex();
 
     private async Task<bool> TryExecuteTextualActionAsync(string responseText)
@@ -298,6 +334,7 @@ internal sealed partial class PotatoSession(
 
         PotatoConsole.WriteStatus($"Interpreting textual action as tool call: {toolCall.Name}");
         string result = await ExecuteTextualToolCallAsync(toolCall);
+        await reActMemory.SummarizeLargeUnsummarizedItemsAsync(currentOpenAiClient);
         chatHistory.Add(new ChatMessage(
             ChatRole.User,
             PromptLibrary.NextStepAfterObservationMessage(
@@ -306,6 +343,39 @@ internal sealed partial class PotatoSession(
                 toolCall.Name,
                 result)));
         return true;
+    }
+
+    private async Task<bool> TryExecuteDeterministicFallbackAsync(int iteration)
+    {
+        if (iteration != 1 ||
+            !ApprovalPolicy.IsReadOnlyInspectionRequest(latestUserRequest) ||
+            !LooksLikeProjectOrFolderRequest(latestUserRequest))
+        {
+            return false;
+        }
+
+        PotatoConsole.WriteStatus("Model did not choose the first inspection action; running deterministic directory listing fallback...");
+        string command = OperatingSystem.IsWindows() ? "dir" : "ls -la";
+        string result = await agentTools.ExecuteShellCommandAsync(command, Environment.CurrentDirectory, 60);
+        await reActMemory.SummarizeLargeUnsummarizedItemsAsync(currentOpenAiClient);
+
+        chatHistory.Add(new ChatMessage(
+            ChatRole.User,
+            PromptLibrary.NextStepAfterObservationMessage(
+                latestUserRequest ?? string.Empty,
+                Environment.CurrentDirectory,
+                $"{nameof(AgentTools.ExecuteShellCommandAsync)} {command}",
+                result)));
+        return true;
+    }
+
+    private static bool LooksLikeProjectOrFolderRequest(string? request)
+    {
+        string text = request?.ToLowerInvariant() ?? string.Empty;
+        return text.Contains("project", StringComparison.Ordinal) ||
+               text.Contains("folder", StringComparison.Ordinal) ||
+               text.Contains("repo", StringComparison.Ordinal) ||
+               text.Contains("repository", StringComparison.Ordinal);
     }
 
     private async Task<string> ExecuteTextualToolCallAsync(TextualToolCall toolCall)
@@ -319,6 +389,9 @@ internal sealed partial class PotatoSession(
                     GetStringArgument(toolCall.Arguments, "filePath") ??
                     GetStringArgument(toolCall.Arguments, "file_path") ??
                     string.Empty),
+                nameof(AgentTools.GetCollectedContext) => agentTools.GetCollectedContext(
+                    GetStringArgument(toolCall.Arguments, "index") ?? "list",
+                    GetBoolArgument(toolCall.Arguments, "full") ?? false),
                 nameof(AgentTools.ApplyDiffPatchAsync) => await agentTools.ApplyDiffPatchAsync(
                     GetStringArgument(toolCall.Arguments, "patch") ?? string.Empty,
                     GetStringArgument(toolCall.Arguments, "workingDirectory") ??
@@ -430,6 +503,24 @@ internal sealed partial class PotatoSession(
         }
     }
 
+    private static bool? GetBoolArgument(JsonObject arguments, string name)
+    {
+        JsonNode? node = arguments[name];
+        if (node is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            return node.GetValue<bool>();
+        }
+        catch
+        {
+            return bool.TryParse(node.ToString(), out bool value) ? value : null;
+        }
+    }
+
     private sealed record TextualToolCall(string Name, JsonObject Arguments);
 
     private string GetLatestModelQuestion()
@@ -485,6 +576,7 @@ internal sealed partial class PotatoSession(
     private void ResetConversationState()
     {
         currentState = AgentState.Specifying;
+        reActMemory.Clear();
         latestSpecification = null;
         latestApproach = null;
         latestUserRequest = null;
