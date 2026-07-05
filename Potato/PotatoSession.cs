@@ -198,6 +198,8 @@ internal sealed partial class PotatoSession
             [
                 AIFunctionFactory.Create(agentTools.GetCurrentTime),
                 AIFunctionFactory.Create(agentTools.ReadFileContent),
+                AIFunctionFactory.Create(agentTools.ListFiles),
+                AIFunctionFactory.Create(agentTools.SummarizeFilePurpose),
                 AIFunctionFactory.Create(agentTools.GetCollectedContext),
                 AIFunctionFactory.Create(agentTools.ApplyDiffPatchAsync),
                 AIFunctionFactory.Create(agentTools.ExecuteShellCommandAsync)
@@ -356,8 +358,7 @@ internal sealed partial class PotatoSession
         }
 
         PotatoConsole.WriteStatus("Model did not choose the first project inspection action; running deterministic directory listing fallback...");
-        string command = OperatingSystem.IsWindows() ? "dir" : "ls -la";
-        string result = await agentTools.ExecuteShellCommandAsync(command, Environment.CurrentDirectory, 60);
+        string result = agentTools.ListFiles(Environment.CurrentDirectory);
         await reActMemory.SummarizeLargeUnsummarizedItemsAsync(currentOpenAiClient);
 
         chatHistory.Add(new ChatMessage(
@@ -365,7 +366,7 @@ internal sealed partial class PotatoSession
             PromptLibrary.NextStepAfterObservationMessage(
                 latestUserRequest ?? string.Empty,
                 Environment.CurrentDirectory,
-                $"{nameof(AgentTools.ExecuteShellCommandAsync)} {command}",
+                nameof(AgentTools.ListFiles),
                 result)));
         return true;
     }
@@ -394,6 +395,17 @@ internal sealed partial class PotatoSession
                     GetStringArgument(toolCall.Arguments, "filePath") ??
                     GetStringArgument(toolCall.Arguments, "file_path") ??
                     string.Empty),
+                nameof(AgentTools.ListFiles) => agentTools.ListFiles(
+                    GetStringArgument(toolCall.Arguments, "directoryPath") ??
+                    GetStringArgument(toolCall.Arguments, "directory_path"),
+                    GetBoolArgument(toolCall.Arguments, "recursive") ?? false,
+                    GetIntArgument(toolCall.Arguments, "maxEntries") ??
+                    GetIntArgument(toolCall.Arguments, "max_entries") ??
+                    200),
+                nameof(AgentTools.SummarizeFilePurpose) => agentTools.SummarizeFilePurpose(
+                    GetStringArgument(toolCall.Arguments, "filePath") ??
+                    GetStringArgument(toolCall.Arguments, "file_path") ??
+                    string.Empty),
                 nameof(AgentTools.GetCollectedContext) => agentTools.GetCollectedContext(
                     GetStringArgument(toolCall.Arguments, "index") ?? "list",
                     GetBoolArgument(toolCall.Arguments, "full") ?? false),
@@ -401,13 +413,7 @@ internal sealed partial class PotatoSession
                     GetStringArgument(toolCall.Arguments, "patch") ?? string.Empty,
                     GetStringArgument(toolCall.Arguments, "workingDirectory") ??
                     GetStringArgument(toolCall.Arguments, "working_directory")),
-                nameof(AgentTools.ExecuteShellCommandAsync) => await agentTools.ExecuteShellCommandAsync(
-                    GetStringArgument(toolCall.Arguments, "command") ?? string.Empty,
-                    GetStringArgument(toolCall.Arguments, "workingDirectory") ??
-                    GetStringArgument(toolCall.Arguments, "working_directory"),
-                    GetIntArgument(toolCall.Arguments, "timeoutSeconds") ??
-                    GetIntArgument(toolCall.Arguments, "timeout_seconds") ??
-                    60),
+                nameof(AgentTools.ExecuteShellCommandAsync) => await ExecuteShellToolCallAsync(toolCall),
                 _ => $"Error: Unknown textual tool call '{toolCall.Name}'."
             };
         }
@@ -415,6 +421,46 @@ internal sealed partial class PotatoSession
         {
             return $"Error executing textual tool call '{toolCall.Name}': {ex.Message}";
         }
+    }
+
+    private async Task<string> ExecuteShellToolCallAsync(TextualToolCall toolCall)
+    {
+        string command = GetStringArgument(toolCall.Arguments, "command") ?? string.Empty;
+        if (LooksLikeDirectoryListingCommand(command))
+        {
+            return "Rejected shell directory listing. Use the ListFiles tool instead.";
+        }
+
+        if (LooksLikeShellFileEditCommand(command))
+        {
+            return "Rejected shell-based file edit. Read the relevant file, then use ApplyDiffPatchAsync with a unified diff.";
+        }
+
+        return await agentTools.ExecuteShellCommandAsync(
+            command,
+            GetStringArgument(toolCall.Arguments, "workingDirectory") ??
+            GetStringArgument(toolCall.Arguments, "working_directory"),
+            GetIntArgument(toolCall.Arguments, "timeoutSeconds") ??
+            GetIntArgument(toolCall.Arguments, "timeout_seconds") ??
+            60);
+    }
+
+    private static bool LooksLikeDirectoryListingCommand(string command)
+    {
+        string normalized = command.TrimStart().ToLowerInvariant();
+        return normalized.StartsWith("ls", StringComparison.Ordinal) ||
+               normalized.StartsWith("dir", StringComparison.Ordinal) ||
+               normalized.StartsWith("tree", StringComparison.Ordinal);
+    }
+
+    private static bool LooksLikeShellFileEditCommand(string command)
+    {
+        string normalized = command.ToLowerInvariant();
+        return normalized.Contains(">>", StringComparison.Ordinal) ||
+               Regex.IsMatch(normalized, @"(^|[^<])>([^>]|$)") ||
+               normalized.Contains("sed -i", StringComparison.Ordinal) ||
+               normalized.Contains("perl -pi", StringComparison.Ordinal) ||
+               normalized.Contains("tee ", StringComparison.Ordinal);
     }
 
     private static TextualToolCall? TryParseToolCall(string responseText)

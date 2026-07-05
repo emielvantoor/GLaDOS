@@ -31,12 +31,13 @@ internal static class PromptLibrary
         "   When Phase 2 is needed, show the ENTIRE adjusted specification again and ask for approval again.\n" +
         "3. PHASE 3 (Approach): After the specification is approved, describe how the task will be completed. " +
         "   Focus on the concrete completion path, not another summary of the user's request. " +
-        "   For feature requests, bug fixes, or any task that changes this project, the approach MUST start with context discovery: identify the project language/framework from real files, inspect the relevant structure, locate the code path that owns the behavior, then edit and verify. " +
+        "   For feature requests, bug fixes, or any task that changes this project, the approach MUST start with context discovery: list files with ListFiles, summarize likely relevant files with SummarizeFilePurpose, read the exact files that own the behavior, then edit and verify. " +
         "   Do not propose a terminal-only workaround for project behavior unless the user explicitly asked for a temporary terminal command instead of a code change. " +
         "   State that execution will use the ReAct loop for inspect/edit/verify cycles. " +
         "   State which available CLI tool or tools you intend to use and why, but do not invent files, configuration, command history stores, or facts that have not been inspected yet. " +
         "   Available CLI tools:\n" +
         BuildToolSummary(includeArguments: false) +
+        "   Prefer ListFiles over ExecuteShellCommandAsync for directory listings. Prefer SummarizeFilePurpose before reading large files when orienting yourself. " +
         "   If no direct available tool fits the task, say whether the task can be solved through ExecuteShellCommandAsync and what kind of shell action would be needed. " +
         "   If neither a direct tool nor shell execution can solve it, say what is missing. " +
         "   Do not emit tool-call JSON or exact shell commands in this phase. " +
@@ -50,12 +51,13 @@ internal static class PromptLibrary
         "Do not show Phase 2. Do not ask for approval again. " +
         "Show only Phase 3: Approach. Describe how the task will be completed in a few bullet points. " +
         "Focus on the concrete completion path, not another summary of the user's request. " +
-        "For feature requests, bug fixes, or any task that changes this project, the approach MUST start with context discovery: identify the project language/framework from real files, inspect the relevant structure, locate the code path that owns the behavior, then edit and verify. " +
+        "For feature requests, bug fixes, or any task that changes this project, the approach MUST start with context discovery: list files with ListFiles, summarize likely relevant files with SummarizeFilePurpose, read the exact files that own the behavior, then edit and verify. " +
         "Do not propose a terminal-only workaround for project behavior unless I explicitly asked for a temporary terminal command instead of a code change. " +
         "State that execution will use the ReAct loop for inspect/edit/verify cycles. " +
         "State which available CLI tool or tools you intend to use and why, but do not invent files, configuration, command history stores, or facts that have not been inspected yet. " +
         "Available CLI tools:\n" +
         BuildToolSummary(includeArguments: false) +
+        "Prefer ListFiles over ExecuteShellCommandAsync for directory listings. Prefer SummarizeFilePurpose before reading large files when orienting yourself. " +
         "If no direct available tool fits the task, say whether the task can be solved through ExecuteShellCommandAsync and what kind of shell action would be needed. " +
         "If neither a direct tool nor shell execution can solve it, say what is missing. " +
         "Do not emit tool-call JSON or exact shell commands in this phase. " +
@@ -78,8 +80,8 @@ internal static class PromptLibrary
         builder.AppendLine("Work in observe-act cycles: inspect the current state, call one targeted tool when needed, use the returned observation, then continue.");
         builder.AppendLine("When the approved task is complete, answer with FINAL: followed by a concise summary and any verification result.");
         builder.AppendLine("Do not claim success or describe repository facts unless the latest tool observations prove the work was done.");
-        builder.AppendLine("For folder or project explanation tasks, begin by listing files or reading relevant project files with tools.");
-        builder.AppendLine("For project changes, do not edit after only a directory listing. First read the likely relevant files, identify the code path that owns the requested behavior, then patch only that path.");
+        builder.AppendLine("For folder or project explanation tasks, begin with ListFiles or SummarizeFilePurpose instead of shell commands.");
+        builder.AppendLine("For project changes, do not edit after only a directory listing. First use ListFiles, summarize likely relevant files with SummarizeFilePurpose, read the exact files that own the requested behavior, then patch only that path.");
         builder.AppendLine("If you need information collected in an earlier iteration but it is not in the latest observation, call GetCollectedContext with index='list'. Use the descriptions in that list to choose the needed index.");
         builder.AppendLine("When execution needs a tool, output ONLY this exact GLaDOS format and no other text:");
         builder.AppendLine("<tool_call>{\"name\":\"ToolName\",\"arguments\":{}}</tool_call>");
@@ -88,7 +90,8 @@ internal static class PromptLibrary
         builder.AppendLine("Available tools:");
         builder.Append(BuildToolSummary(includeArguments: true));
 
-        builder.AppendLine("Use the shell command tool for requests that require listing directories, inspecting files, checking the OS, running commands, or reading system state.");
+        builder.AppendLine("Use ListFiles for directory listings. Use ReadFileContent for exact file content. Use SummarizeFilePurpose to understand a file before deciding whether to read it fully.");
+        builder.AppendLine("Use ExecuteShellCommandAsync only for commands that the direct tools cannot perform, such as builds, tests, git commands, OS checks, or running the application.");
         builder.AppendLine("For code edits, read the relevant file first, then use ApplyDiffPatchAsync with a unified diff. Do not use shell redirection, echo, sed -i, perl -pi, or inline file-writing commands to edit source files.");
         builder.AppendLine("After applying a patch, run focused verification through ExecuteShellCommandAsync when the approved task warrants it.");
         builder.AppendLine("Choose an appropriate command for the current operating system.");
@@ -191,8 +194,9 @@ internal static class PromptLibrary
         builder.AppendLine("Latest observation:");
         builder.AppendLine(Compact(latestObservation, 4_000));
         builder.AppendLine();
-        builder.AppendLine("Available next actions are the registered tools: GetCurrentTime, ReadFileContent, GetCollectedContext, ApplyDiffPatchAsync, ExecuteShellCommandAsync.");
-        builder.AppendLine("If this is a code change and you have only listed files so far, the next action must read the likely relevant source file. Do not patch or finish yet.");
+        builder.AppendLine("Available next actions are the registered tools: GetCurrentTime, ReadFileContent, ListFiles, SummarizeFilePurpose, GetCollectedContext, ApplyDiffPatchAsync, ExecuteShellCommandAsync.");
+        builder.AppendLine("Use ListFiles for directory listings; do not use shell commands for that. Use SummarizeFilePurpose to orient on a likely relevant file before reading or patching it.");
+        builder.AppendLine("If this is a code change and you have only listed files so far, the next action must summarize or read the likely relevant source file. Do not patch or finish yet.");
         builder.AppendLine("If a source edit is needed, use ApplyDiffPatchAsync with a unified diff after reading the relevant file. Do not use shell redirection or append commands to edit files.");
         builder.Append("Next action: use exactly one tool call, or respond with FINAL: only if the original request is fully answered and verified.");
         return builder.ToString();
@@ -209,9 +213,10 @@ internal static class PromptLibrary
         if (ApprovalPolicy.IsProjectChangeRequest(request))
         {
             return "Next action only: begin with read-only project context discovery before any implementation. " +
-                   "Use ExecuteShellCommandAsync with a read-only listing command to identify the project structure and likely language/framework. " +
+                   "Use ListFiles to identify the project structure and likely language/framework. " +
+                   "Do not use ExecuteShellCommandAsync for directory listing. " +
                    "Do not run a terminal animation, workaround command, server, installer, or modifying command as the first action. " +
-                   "After the listing, read the relevant source files before choosing any edit. " +
+                   "After the listing, use SummarizeFilePurpose or ReadFileContent on relevant source files before choosing any edit. " +
                    $"Working directory: {Environment.CurrentDirectory}. " +
                    $"Original request: {OneLine(request)}";
         }
@@ -222,7 +227,7 @@ internal static class PromptLibrary
             normalized.Contains("repository", StringComparison.Ordinal))
         {
             return "Next action only: list files in the current folder to inspect the project. " +
-                   "Use ExecuteShellCommandAsync with a read-only listing command. " +
+                   "Use ListFiles. Do not use ExecuteShellCommandAsync for directory listing. " +
                    $"Working directory: {Environment.CurrentDirectory}. " +
                    $"Original request: {OneLine(request)}";
         }
