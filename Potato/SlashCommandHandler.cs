@@ -6,6 +6,7 @@ internal sealed class SlashCommandHandler(
     ModelSelector modelSelector,
     FileMentionExpander fileMentionExpander,
     Action resetConversationState,
+    Action writeConversationTranscript,
     Func<IChatClient> getClient,
     Action<string, IChatClient, IChatClient> switchModel)
 {
@@ -38,6 +39,10 @@ internal sealed class SlashCommandHandler(
 
             case "/ask":
                 await HandleSideQuestionCommandAsync(arguments);
+                return true;
+
+            case "/transcript":
+                writeConversationTranscript();
                 return true;
 
             case "/abort":

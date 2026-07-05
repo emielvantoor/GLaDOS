@@ -1,3 +1,5 @@
+using Microsoft.Extensions.AI;
+
 internal static class PotatoConsole
 {
     private const string PromptText = "> ";
@@ -186,6 +188,7 @@ internal static class PotatoConsole
         Console.WriteLine("  /model          Show model selection and switch models");
         Console.WriteLine("  /cd [path]      Change the current working directory");
         Console.WriteLine("  /ask question   Ask a side question without changing chat history");
+        Console.WriteLine("  /transcript     Show the current conversation sent to the model");
         Console.WriteLine("  /abort          Cancel the current task and return to the main prompt");
         Console.WriteLine("  Up/Down         Cycle through commands entered in this session");
         Console.WriteLine("  exit, quit      Close Potato Code");
@@ -201,6 +204,29 @@ internal static class PotatoConsole
         Console.ResetColor();
         Console.WriteLine(text);
         Console.WriteLine();
+    }
+
+    public static void WriteModelExchange(int iteration, string prompt, string response)
+    {
+        WriteBoxHeader($"ReAct conversation {iteration}");
+        WriteLabeledBlock("Sent to model", prompt, ConsoleColor.Cyan, maxLines: 10);
+        WriteLabeledBlock("Model replied", response, ConsoleColor.Yellow, maxLines: null);
+        WriteBoxFooter();
+    }
+
+    public static void WriteConversationTranscript(IReadOnlyList<ChatMessage> messages)
+    {
+        WriteBoxHeader("Current model conversation");
+
+        for (int i = 0; i < messages.Count; i++)
+        {
+            ChatMessage message = messages[i];
+            string role = message.Role.ToString();
+            string text = string.IsNullOrWhiteSpace(message.Text) ? "(empty)" : message.Text;
+            WriteLabeledBlock($"{i + 1}. {role}", text, RoleColor(message.Role), maxLines: null);
+        }
+
+        WriteBoxFooter();
     }
 
     public static void WriteError(string message)
@@ -230,6 +256,112 @@ internal static class PotatoConsole
         Console.WriteLine("Model question:");
         Console.WriteLine(message);
         Console.ResetColor();
+    }
+
+    private static void WriteBoxHeader(string title)
+    {
+        int width = GetConsoleWidth();
+        Console.ForegroundColor = ConsoleColor.DarkGray;
+        Console.WriteLine("┌" + new string('─', Math.Max(0, width - 2)) + "┐");
+        Console.Write("│ ");
+        Console.ForegroundColor = ConsoleColor.White;
+        Console.Write(title);
+        Console.ForegroundColor = ConsoleColor.DarkGray;
+        Console.WriteLine(new string(' ', Math.Max(0, width - title.Length - 4)) + " │");
+        Console.ResetColor();
+    }
+
+    private static void WriteBoxFooter()
+    {
+        int width = GetConsoleWidth();
+        Console.ForegroundColor = ConsoleColor.DarkGray;
+        Console.WriteLine("└" + new string('─', Math.Max(0, width - 2)) + "┘");
+        Console.ResetColor();
+    }
+
+    private static void WriteLabeledBlock(string label, string text, ConsoleColor labelColor, int? maxLines)
+    {
+        int contentWidth = Math.Max(24, GetConsoleWidth() - 6);
+        Console.ForegroundColor = ConsoleColor.DarkGray;
+        Console.Write("│ ");
+        Console.ForegroundColor = labelColor;
+        Console.Write(label);
+        Console.ForegroundColor = ConsoleColor.DarkGray;
+        Console.WriteLine(":");
+
+        string normalized = text.Replace("\r\n", "\n").TrimEnd();
+        List<string> lines = [];
+        foreach (string line in normalized.Split('\n'))
+        {
+            lines.AddRange(WrapLine(line, contentWidth));
+        }
+
+        int visibleLineCount = maxLines ?? lines.Count;
+        bool truncated = lines.Count > visibleLineCount;
+        IEnumerable<string> visibleLines = truncated ? lines.Take(visibleLineCount) : lines;
+
+        foreach (string line in visibleLines)
+        {
+            Console.ForegroundColor = ConsoleColor.DarkGray;
+            Console.Write("│   ");
+            Console.ResetColor();
+            Console.WriteLine(line);
+        }
+
+        if (truncated)
+        {
+            Console.ForegroundColor = ConsoleColor.DarkGray;
+            Console.WriteLine($"│   ... {lines.Count - visibleLineCount} more line(s)");
+        }
+
+        Console.ForegroundColor = ConsoleColor.DarkGray;
+        Console.WriteLine("│");
+        Console.ResetColor();
+    }
+
+    private static IEnumerable<string> WrapLine(string line, int width)
+    {
+        if (line.Length == 0)
+        {
+            yield return string.Empty;
+            yield break;
+        }
+
+        string remaining = line;
+        while (remaining.Length > width)
+        {
+            int split = remaining.LastIndexOf(' ', width);
+            if (split <= 0)
+            {
+                split = width;
+            }
+
+            yield return remaining[..split].TrimEnd();
+            remaining = remaining[split..].TrimStart();
+        }
+
+        yield return remaining;
+    }
+
+    private static ConsoleColor RoleColor(ChatRole role)
+    {
+        if (role == ChatRole.System) return ConsoleColor.DarkGray;
+        if (role == ChatRole.User) return ConsoleColor.Cyan;
+        if (role == ChatRole.Assistant) return ConsoleColor.Yellow;
+        if (role == ChatRole.Tool) return ConsoleColor.Magenta;
+        return ConsoleColor.White;
+    }
+
+    private static int GetConsoleWidth()
+    {
+        try
+        {
+            return Math.Clamp(Console.WindowWidth - 1, 40, 120);
+        }
+        catch
+        {
+            return 80;
+        }
     }
 
     private static string TopBorder(int width) => "┌" + new string('─', width - 2) + "┐";

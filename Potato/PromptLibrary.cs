@@ -1,3 +1,5 @@
+using System.ComponentModel;
+using System.Reflection;
 using System.Text;
 
 internal static class PromptLibrary
@@ -29,9 +31,12 @@ internal static class PromptLibrary
         "   When Phase 2 is needed, show the ENTIRE adjusted specification again and ask for approval again.\n" +
         "3. PHASE 3 (Approach): After the specification is approved, describe how the task will be completed. " +
         "   Focus on the concrete completion path, not another summary of the user's request. " +
+        "   For feature requests, bug fixes, or any task that changes this project, the approach MUST start with context discovery: identify the project language/framework from real files, inspect the relevant structure, locate the code path that owns the behavior, then edit and verify. " +
+        "   Do not propose a terminal-only workaround for project behavior unless the user explicitly asked for a temporary terminal command instead of a code change. " +
         "   State that execution will use the ReAct loop for inspect/edit/verify cycles. " +
         "   State which available CLI tool or tools you intend to use and why, but do not invent files, configuration, command history stores, or facts that have not been inspected yet. " +
-        "   Available tools are GetCurrentTime, ReadFileContent, ApplyDiffPatchAsync, and ExecuteShellCommandAsync. " +
+        "   Available CLI tools:\n" +
+        BuildToolSummary(includeArguments: false) +
         "   If no direct available tool fits the task, say whether the task can be solved through ExecuteShellCommandAsync and what kind of shell action would be needed. " +
         "   If neither a direct tool nor shell execution can solve it, say what is missing. " +
         "   Do not emit tool-call JSON or exact shell commands in this phase. " +
@@ -45,9 +50,12 @@ internal static class PromptLibrary
         "Do not show Phase 2. Do not ask for approval again. " +
         "Show only Phase 3: Approach. Describe how the task will be completed in a few bullet points. " +
         "Focus on the concrete completion path, not another summary of the user's request. " +
+        "For feature requests, bug fixes, or any task that changes this project, the approach MUST start with context discovery: identify the project language/framework from real files, inspect the relevant structure, locate the code path that owns the behavior, then edit and verify. " +
+        "Do not propose a terminal-only workaround for project behavior unless I explicitly asked for a temporary terminal command instead of a code change. " +
         "State that execution will use the ReAct loop for inspect/edit/verify cycles. " +
         "State which available CLI tool or tools you intend to use and why, but do not invent files, configuration, command history stores, or facts that have not been inspected yet. " +
-        "Available tools are GetCurrentTime, ReadFileContent, ApplyDiffPatchAsync, and ExecuteShellCommandAsync. " +
+        "Available CLI tools:\n" +
+        BuildToolSummary(includeArguments: false) +
         "If no direct available tool fits the task, say whether the task can be solved through ExecuteShellCommandAsync and what kind of shell action would be needed. " +
         "If neither a direct tool nor shell execution can solve it, say what is missing. " +
         "Do not emit tool-call JSON or exact shell commands in this phase. " +
@@ -64,15 +72,6 @@ internal static class PromptLibrary
 
     public static string BuildToolInstructions()
     {
-        var tools = new[]
-        {
-            $"{nameof(AgentTools.GetCurrentTime)}: use for current date or time. Arguments: {{}}.",
-            $"{nameof(AgentTools.ReadFileContent)}: use to read one known text file. Arguments: filePath can be absolute or relative to the current working directory.",
-            $"{nameof(AgentTools.GetCollectedContext)}: use to retrieve earlier ReAct observations or responses by contextual index. Arguments: index is 'list', 'latest', or a number; full defaults to false. The list includes descriptions for choosing the right index.",
-            $"{nameof(AgentTools.ApplyDiffPatchAsync)}: use to edit files by applying a unified diff patch. Arguments: patch is the full unified diff, workingDirectory is optional.",
-            $"{nameof(AgentTools.ExecuteShellCommandAsync)}: use for filesystem, directory listing, OS, process, or shell tasks. Arguments: command is the shell command to execute, workingDirectory is optional, timeoutSeconds defaults to 60."
-        };
-
         var builder = new StringBuilder();
         builder.AppendLine("Execution tool instructions for the ReAct loop:");
         builder.AppendLine("The following tools are available in this CLI. Do not say a listed tool is unavailable.");
@@ -86,11 +85,7 @@ internal static class PromptLibrary
         builder.AppendLine("Do not ask the user to type execute during the ReAct loop. Execution has already been approved at the approach level.");
         builder.AppendLine("If native tool calling fails and you need a shell command, output one fenced shell block with the exact command; Potato will route it through the permissioned shell tool.");
         builder.AppendLine("Available tools:");
-
-        foreach (string tool in tools)
-        {
-            builder.AppendLine($"- {tool}");
-        }
+        builder.Append(BuildToolSummary(includeArguments: true));
 
         builder.AppendLine("Use the shell command tool for requests that require listing directories, inspecting files, checking the OS, running commands, or reading system state.");
         builder.AppendLine("For code edits, read the relevant file first, then use ApplyDiffPatchAsync with a unified diff. Prefer patches over shell redirection or inline file writes.");
@@ -101,6 +96,60 @@ internal static class PromptLibrary
         builder.AppendLine("Do not print commands as prose. Do not wrap tool calls in Markdown fences. The CLI will show shell commands to the user for permission before running them.");
         builder.Append("If a listed tool matches the task, emit the tool call. Do not ask the user for an alternative method.");
         return builder.ToString();
+    }
+
+    private static string BuildToolSummary(bool includeArguments)
+    {
+        var builder = new StringBuilder();
+
+        foreach (MethodInfo method in GetToolMethods())
+        {
+            string description = method.GetCustomAttribute<DescriptionAttribute>()?.Description
+                ?? "No description provided.";
+
+            builder.Append("- ");
+            builder.Append(method.Name);
+            builder.Append(": ");
+            builder.Append(description);
+
+            if (includeArguments)
+            {
+                builder.Append(" Arguments: ");
+                builder.Append(FormatArguments(method));
+            }
+
+            builder.AppendLine();
+        }
+
+        return builder.ToString();
+    }
+
+    private static IEnumerable<MethodInfo> GetToolMethods()
+    {
+        return typeof(AgentTools)
+            .GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.DeclaredOnly)
+            .Where(method => !method.IsSpecialName)
+            .OrderBy(method => method.MetadataToken);
+    }
+
+    private static string FormatArguments(MethodInfo method)
+    {
+        ParameterInfo[] parameters = method.GetParameters();
+        if (parameters.Length == 0)
+        {
+            return "{}.";
+        }
+
+        return string.Join("; ", parameters.Select(FormatArgument)) + ".";
+    }
+
+    private static string FormatArgument(ParameterInfo parameter)
+    {
+        string description = parameter.GetCustomAttribute<DescriptionAttribute>()?.Description
+            ?? "No description provided.";
+        string optional = parameter.HasDefaultValue ? " Optional." : string.Empty;
+
+        return $"{parameter.Name}: {description}{optional}";
     }
 
     public static string ContinueReActMessage(bool requireToolUse)
@@ -152,6 +201,15 @@ internal static class PromptLibrary
     {
         string request = latestUserRequest ?? string.Empty;
         string normalized = request.ToLowerInvariant();
+
+        if (ApprovalPolicy.IsProjectChangeRequest(request))
+        {
+            return "Next action only: begin with read-only project context discovery before any implementation. " +
+                   "Use ExecuteShellCommandAsync with a read-only listing command to identify the project structure and likely language/framework. " +
+                   "Do not run a terminal animation, workaround command, server, installer, or modifying command as the first action. " +
+                   $"Working directory: {Environment.CurrentDirectory}. " +
+                   $"Original request: {OneLine(request)}";
+        }
 
         if (normalized.Contains("project", StringComparison.Ordinal) ||
             normalized.Contains("folder", StringComparison.Ordinal) ||

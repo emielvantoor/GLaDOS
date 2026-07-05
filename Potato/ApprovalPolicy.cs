@@ -48,6 +48,30 @@ internal static class ApprovalPolicy
         return readOnlySignals.Any(text.Contains) && !writeSignals.Any(text.Contains);
     }
 
+    public static bool IsProjectChangeRequest(string? userRequest)
+    {
+        string text = userRequest?.ToLowerInvariant() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return false;
+        }
+
+        string[] changeSignals =
+        [
+            "add", "change", "edit", "modify", "fix", "implement", "create",
+            "update", "remove", "delete", "rename", "refactor", "support",
+            "make ", "build", "wire", "integrate"
+        ];
+
+        string[] terminalOnlySignals =
+        [
+            "one-off command", "shell command", "terminal command", "temporary command",
+            "run a command", "execute a command"
+        ];
+
+        return changeSignals.Any(text.Contains) && !terminalOnlySignals.Any(text.Contains);
+    }
+
     public static bool ShouldAutoExecuteAfterApproach(
         string? latestUserRequest,
         string? latestSpecification,
@@ -56,6 +80,11 @@ internal static class ApprovalPolicy
         if (IsReadOnlyInspectionRequest(latestUserRequest))
         {
             return true;
+        }
+
+        if (IsProjectChangeRequest(latestUserRequest))
+        {
+            return false;
         }
 
         return !RequiresExplicitExecutionApproval(latestSpecification, latestApproach);
