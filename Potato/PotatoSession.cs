@@ -240,6 +240,8 @@ internal sealed partial class PotatoSession
 
     private async Task RunReActLoopAsync(ChatOptions toolOptions, CancellationToken cancellationToken)
     {
+        int successfulEditsBeforeExecution = agentTools.SuccessfulEditCount;
+
         for (int iteration = 1; iteration <= MaxReActIterations; iteration++)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -261,6 +263,14 @@ internal sealed partial class PotatoSession
 
             if (IsFinalResponse(responseText))
             {
+                if (RequiresSuccessfulEditBeforeFinal(successfulEditsBeforeExecution))
+                {
+                    chatHistory.Add(new ChatMessage(
+                        ChatRole.User,
+                        "You returned FINAL for a project change, but no edit tool has successfully changed a file in this execution. Read the relevant file if needed, then use ApplyDiffPatchAsync or ApplySearchReplaceAsync. Do not claim the file was modified until the latest observation confirms a successful edit."));
+                    continue;
+                }
+
                 PotatoConsole.WriteAgentResponse(RemoveFinalMarker(responseText));
                 return;
             }
@@ -327,6 +337,10 @@ internal sealed partial class PotatoSession
 
         PotatoConsole.WriteError($"Stopped after {MaxReActIterations} ReAct iterations without a FINAL response.");
     }
+
+    private bool RequiresSuccessfulEditBeforeFinal(int successfulEditsBeforeExecution) =>
+        ApprovalPolicy.IsProjectChangeRequest(latestUserRequest) &&
+        agentTools.SuccessfulEditCount <= successfulEditsBeforeExecution;
 
     private static bool IsFinalResponse(string responseText) =>
         FinalMarkerRegex().IsMatch(responseText);
