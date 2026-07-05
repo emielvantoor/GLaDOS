@@ -81,7 +81,7 @@ internal static class PromptLibrary
         builder.AppendLine("When the approved task is complete, answer with FINAL: followed by a concise summary and any verification result.");
         builder.AppendLine("Do not claim success or describe repository facts unless the latest tool observations prove the work was done.");
         builder.AppendLine("For folder or project explanation tasks, begin with ListFiles or SummarizeFilePurpose instead of shell commands.");
-        builder.AppendLine("For project changes, do not edit after only a directory listing. First use ListFiles, summarize likely relevant files with SummarizeFilePurpose, read the exact files that own the requested behavior, then patch only that path.");
+        builder.AppendLine("For project changes, do not edit after only a directory listing. First use ListFiles, summarize likely relevant files with SummarizeFilePurpose, read the exact files that own the requested behavior, then edit only that path.");
         builder.AppendLine("If you need information collected in an earlier iteration but it is not in the latest observation, call GetCollectedContext with index='list'. Use the descriptions in that list to choose the needed index.");
         builder.AppendLine("When execution needs a tool, output ONLY this exact GLaDOS format and no other text:");
         builder.AppendLine("<tool_call>{\"name\":\"ToolName\",\"arguments\":{}}</tool_call>");
@@ -92,7 +92,7 @@ internal static class PromptLibrary
 
         builder.AppendLine("Use ListFiles for directory listings. Use ReadFileContent for exact file content. Use SummarizeFilePurpose to understand a file before deciding whether to read it fully.");
         builder.AppendLine("Use ExecuteShellCommandAsync only for commands that the direct tools cannot perform, such as builds, tests, git commands, OS checks, or running the application.");
-        builder.AppendLine("For code edits, read the relevant file first, then use ApplyDiffPatchAsync with a unified diff or ApplySearchReplaceAsync with exact SEARCH and REPLACE text. Do not use shell redirection, echo, sed -i, perl -pi, or inline file-writing commands to edit source files.");
+        builder.AppendLine("For code edits after reading the relevant file, prefer ApplySearchReplaceAsync with exact SEARCH and REPLACE text copied from the latest file content. Use ApplyDiffPatchAsync only when SEARCH/REPLACE is not practical, such as broad multi-location changes. Do not use shell redirection, echo, sed -i, perl -pi, or inline file-writing commands to edit source files.");
         builder.AppendLine("After applying a patch, run focused verification through ExecuteShellCommandAsync when the approved task warrants it.");
         builder.AppendLine("Choose an appropriate command for the current operating system.");
         builder.AppendLine("Never copy placeholder argument values. Do not use paths like /full/path/to/file, /full/path/to/program.cs, path/to/file, or example commands.");
@@ -133,8 +133,23 @@ internal static class PromptLibrary
         return typeof(AgentTools)
             .GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.DeclaredOnly)
             .Where(method => !method.IsSpecialName)
-            .OrderBy(method => method.MetadataToken);
+            .OrderBy(GetToolDisplayOrder)
+            .ThenBy(method => method.MetadataToken);
     }
+
+    private static int GetToolDisplayOrder(MethodInfo method) =>
+        method.Name switch
+        {
+            nameof(AgentTools.GetCurrentTime) => 0,
+            nameof(AgentTools.ReadFileContent) => 1,
+            nameof(AgentTools.ListFiles) => 2,
+            nameof(AgentTools.SummarizeFilePurpose) => 3,
+            nameof(AgentTools.GetCollectedContext) => 4,
+            nameof(AgentTools.ApplySearchReplaceAsync) => 5,
+            nameof(AgentTools.ApplyDiffPatchAsync) => 6,
+            nameof(AgentTools.ExecuteShellCommandAsync) => 7,
+            _ => 100
+        };
 
     private static string FormatArguments(MethodInfo method)
     {
@@ -176,7 +191,7 @@ internal static class PromptLibrary
         builder.AppendLine($"Original request: {OneLine(latestUserRequest)}");
         builder.AppendLine($"Working directory: {workingDirectory}");
         builder.AppendLine($"Required current step: {OneLine(previousQuestion)}");
-        builder.AppendLine("ApplyDiffPatchAsync and ApplySearchReplaceAsync are registered and available. Do not claim they are unavailable.");
+        builder.AppendLine("ApplySearchReplaceAsync and ApplyDiffPatchAsync are registered and available. Do not claim they are unavailable.");
         builder.AppendLine("Execution is already approved inside the ReAct loop. Do not ask the user to type execute.");
         builder.Append("Now respond with exactly one tool call, or one fenced shell command if native tool calls are unavailable.");
         return builder.ToString();
@@ -189,7 +204,7 @@ internal static class PromptLibrary
         builder.AppendLine("Use this answer as additional context for the already-approved execution.");
         builder.AppendLine("Do not restart Phase 1, Phase 2, or Phase 3. Continue the ReAct loop.");
         builder.AppendLine("Do not ask the user to type execute. Execution is already in progress.");
-        builder.AppendLine("ApplyDiffPatchAsync and ApplySearchReplaceAsync are registered and available for file edits.");
+        builder.AppendLine("ApplySearchReplaceAsync and ApplyDiffPatchAsync are registered and available for file edits.");
         builder.AppendLine("Next action: use exactly one tool call, or respond with FINAL: only if the original request is fully answered and verified.");
         builder.AppendLine();
         builder.AppendLine("User answer:");
@@ -211,10 +226,10 @@ internal static class PromptLibrary
         builder.AppendLine("Latest observation:");
         builder.AppendLine(Compact(latestObservation, 4_000));
         builder.AppendLine();
-        builder.AppendLine("Available next actions are the registered tools: GetCurrentTime, ReadFileContent, ListFiles, SummarizeFilePurpose, GetCollectedContext, ApplyDiffPatchAsync, ApplySearchReplaceAsync, ExecuteShellCommandAsync.");
+        builder.AppendLine("Available next actions are the registered tools: GetCurrentTime, ReadFileContent, ListFiles, SummarizeFilePurpose, GetCollectedContext, ApplySearchReplaceAsync, ApplyDiffPatchAsync, ExecuteShellCommandAsync.");
         builder.AppendLine("Use ListFiles for directory listings; do not use shell commands for that. Use SummarizeFilePurpose to orient on a likely relevant file before reading or patching it.");
         builder.AppendLine("If this is a code change and you have only listed files so far, the next action must summarize or read the likely relevant source file. Do not patch or finish yet.");
-        builder.AppendLine("If a source edit is needed, use ApplyDiffPatchAsync with a unified diff or ApplySearchReplaceAsync with exact SEARCH and REPLACE text after reading the relevant file. Do not use shell redirection or append commands to edit files.");
+        builder.AppendLine("If a source edit is needed, prefer ApplySearchReplaceAsync with exact SEARCH and REPLACE text after reading the relevant file. Use ApplyDiffPatchAsync only when SEARCH/REPLACE is not practical. Do not use shell redirection or append commands to edit files.");
         builder.Append("Next action: use exactly one tool call, or respond with FINAL: only if the original request is fully answered and verified.");
         return builder.ToString();
     }

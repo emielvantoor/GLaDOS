@@ -223,8 +223,8 @@ internal sealed partial class PotatoSession
                 AIFunctionFactory.Create(agentTools.ListFiles),
                 AIFunctionFactory.Create(agentTools.SummarizeFilePurpose),
                 AIFunctionFactory.Create(agentTools.GetCollectedContext),
-                AIFunctionFactory.Create(agentTools.ApplyDiffPatchAsync),
                 AIFunctionFactory.Create(agentTools.ApplySearchReplaceAsync),
+                AIFunctionFactory.Create(agentTools.ApplyDiffPatchAsync),
                 AIFunctionFactory.Create(agentTools.ExecuteShellCommandAsync)
             ]
         };
@@ -269,7 +269,7 @@ internal sealed partial class PotatoSession
                 {
                     chatHistory.Add(new ChatMessage(
                         ChatRole.User,
-                        "You returned FINAL for a project change, but no edit tool has successfully changed a file in this execution. Read the relevant file if needed, then use ApplyDiffPatchAsync or ApplySearchReplaceAsync. Do not claim the file was modified until the latest observation confirms a successful edit."));
+                        "You returned FINAL for a project change, but no edit tool has successfully changed a file in this execution. Read the relevant file if needed, then prefer ApplySearchReplaceAsync with exact SEARCH and REPLACE text, or use ApplyDiffPatchAsync if SEARCH/REPLACE is not practical. Do not claim the file was modified until the latest observation confirms a successful edit."));
                     continue;
                 }
 
@@ -328,13 +328,22 @@ internal sealed partial class PotatoSession
                 continue;
             }
 
+            string latestObservation = reActMemory.GetRange(memoryItemsBeforeToolCalls, memoryItemsAfterToolCalls, full: true);
+            if (LooksLikeUnavailableToolClaim(responseText))
+            {
+                latestObservation +=
+                    Environment.NewLine +
+                    Environment.NewLine +
+                    "Correction: The assistant text incorrectly claimed one or more tools are unavailable. Native tool calls just executed successfully in this environment. Continue by using the registered tools, and for source edits prefer ApplySearchReplaceAsync with exact SEARCH and REPLACE text.";
+            }
+
             chatHistory.Add(new ChatMessage(
                 ChatRole.User,
                 PromptLibrary.NextStepAfterObservationMessage(
                     latestUserRequest ?? string.Empty,
                     Environment.CurrentDirectory,
                     "native tool call",
-                    reActMemory.GetRange(memoryItemsBeforeToolCalls, memoryItemsAfterToolCalls, full: true))));
+                    latestObservation)));
         }
 
         PotatoConsole.WriteError($"Stopped after {MaxReActIterations} ReAct iterations without a FINAL response.");
@@ -417,6 +426,7 @@ internal sealed partial class PotatoSession
     {
         TextualToolCall? toolCall = TryParseToolCall(responseText) ??
                                     TryParseSearchReplaceBlock(responseText) ??
+                                    TryParseDiffPatchBlock(responseText) ??
                                     TryParseShellFence(responseText);
         if (toolCall is null)
         {
@@ -554,7 +564,7 @@ internal sealed partial class PotatoSession
 
         if (LooksLikeShellFileEditCommand(command))
         {
-            return "Rejected shell-based file edit. Read the relevant file, then use ApplyDiffPatchAsync with a unified diff.";
+            return "Rejected shell-based file edit. Read the relevant file, then use ApplySearchReplaceAsync with exact SEARCH and REPLACE text.";
         }
 
         return await agentTools.ExecuteShellCommandAsync(
@@ -647,7 +657,83 @@ internal sealed partial class PotatoSession
             return aiderStyleCall;
         }
 
-        return TryParseMarkdownSearchReplaceBlock(responseText);
+        TextualToolCall? markdownCall = TryParseMarkdownSearchReplaceBlock(responseText);
+        if (markdownCall is not null)
+        {
+            return markdownCall;
+        }
+
+        return TryParseReplaceThisWithThisBlock(responseText);
+    }
+
+    private static TextualToolCall? TryParseReplaceThisWithThisBlock(string responseText)
+    {
+        Match match = Regex.Match(
+            responseText,
+            @"(?:replace\s+(?:this\s+)?(?:line|code|block)\s*:?)\s*```(?:[^\r\n`]*)?\r?\n(?<search>[\s\S]*?)\r?\n```\s*(?:with\s+(?:this\s+)?(?:animation\s+and\s+message|line|code|block)?\s*:?)\s*```(?:[^\r\n`]*)?\r?\n(?<replace>[\s\S]*?)\r?\n```",
+            RegexOptions.IgnoreCase);
+
+        if (!match.Success)
+        {
+            return null;
+        }
+
+        string? filePath = TryInferEditFilePath(responseText);
+        string search = match.Groups["search"].Value;
+        string replace = match.Groups["replace"].Value;
+        if (string.IsNullOrWhiteSpace(filePath) || string.IsNullOrEmpty(search))
+        {
+            return null;
+        }
+
+        return new TextualToolCall(
+            nameof(AgentTools.ApplySearchReplaceAsync),
+            new JsonObject
+            {
+                ["filePath"] = filePath,
+                ["search"] = search,
+                ["replace"] = replace
+            });
+    }
+
+    private static TextualToolCall? TryParseDiffPatchBlock(string responseText)
+    {
+        Match match = Regex.Match(
+            responseText,
+            @"```diff\s*\r?\n(?<patch>[\s\S]*?)\r?\n```",
+            RegexOptions.IgnoreCase);
+
+        if (!match.Success)
+        {
+            return null;
+        }
+
+        string patch = match.Groups["patch"].Value.Trim();
+        if (string.IsNullOrWhiteSpace(patch) ||
+            !patch.Contains("--- ", StringComparison.Ordinal) ||
+            !patch.Contains("+++ ", StringComparison.Ordinal) ||
+            !patch.Contains("@@", StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        return new TextualToolCall(
+            nameof(AgentTools.ApplyDiffPatchAsync),
+            new JsonObject
+            {
+                ["patch"] = patch,
+                ["workingDirectory"] = Environment.CurrentDirectory
+            });
+    }
+
+    private static bool LooksLikeUnavailableToolClaim(string responseText)
+    {
+        string normalized = responseText.ToLowerInvariant();
+        return normalized.Contains("tool", StringComparison.Ordinal) &&
+               (normalized.Contains("not available", StringComparison.Ordinal) ||
+                normalized.Contains("unavailable", StringComparison.Ordinal) ||
+                normalized.Contains("missing from the available", StringComparison.Ordinal) ||
+                normalized.Contains("missing from the current", StringComparison.Ordinal));
     }
 
     private static TextualToolCall? TryParseAiderSearchReplaceBlock(string responseText)
