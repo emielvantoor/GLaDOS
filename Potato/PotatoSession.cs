@@ -246,11 +246,13 @@ internal sealed partial class PotatoSession
         {
             cancellationToken.ThrowIfCancellationRequested();
             int toolCallsBefore = agentTools.ToolInvocationCount;
+            int memoryItemsBeforeToolCalls = reActMemory.Count;
             PotatoConsole.WriteStatus($"ReAct iteration {iteration}/{MaxReActIterations}...");
             PotatoConsole.WriteModelQuestion(GetLatestModelQuestion());
 
             ChatResponse response = await currentClient.GetResponseAsync(chatHistory, toolOptions, cancellationToken);
             string responseText = response.Text.Trim();
+            int memoryItemsAfterToolCalls = reActMemory.Count;
 
             if (string.IsNullOrWhiteSpace(responseText))
             {
@@ -332,7 +334,7 @@ internal sealed partial class PotatoSession
                     latestUserRequest ?? string.Empty,
                     Environment.CurrentDirectory,
                     "native tool call",
-                    responseText)));
+                    reActMemory.GetRange(memoryItemsBeforeToolCalls, memoryItemsAfterToolCalls, full: true))));
         }
 
         PotatoConsole.WriteError($"Stopped after {MaxReActIterations} ReAct iterations without a FINAL response.");

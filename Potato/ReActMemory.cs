@@ -7,6 +7,8 @@ internal sealed class ReActMemory
 
     private readonly List<ReActMemoryItem> items = [];
 
+    public int Count => items.Count;
+
     public int Add(string source, string content)
     {
         if (string.IsNullOrWhiteSpace(content))
@@ -46,6 +48,24 @@ internal sealed class ReActMemory
         return item is null
             ? $"Error: No collected context item exists at index {itemIndex}."
             : FormatItem(item, full);
+    }
+
+    public string GetRange(int startInclusive, int endExclusive, bool full = false)
+    {
+        if (startInclusive < 0 ||
+            endExclusive < startInclusive ||
+            startInclusive >= items.Count)
+        {
+            return "No collected context is available for this range.";
+        }
+
+        int boundedEnd = Math.Min(endExclusive, items.Count);
+        return string.Join(
+            $"{Environment.NewLine}{Environment.NewLine}",
+            items
+                .Skip(startInclusive)
+                .Take(boundedEnd - startInclusive)
+                .Select(item => FormatItem(item, full)));
     }
 
     public async Task SummarizeLargeUnsummarizedItemsAsync(
