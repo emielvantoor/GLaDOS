@@ -1,4 +1,3 @@
-using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.AI;
@@ -312,7 +311,7 @@ internal sealed partial class PotatoSession
                 {
                     chatHistory.Add(new ChatMessage(
                         ChatRole.User,
-                        "Correction: ApplySearchReplaceAsync, CreateFileAsync, and ApplyDiffPatchAsync are available. If you still believe a listed tool is unavailable, name the exact tool and the concrete observation proving it. Do not use ExecuteShellCommandAsync or manual editor instructions for source edits. The next response must be exactly one registered tool call, preferably ApplySearchReplaceAsync with exact SEARCH and REPLACE text copied from the latest file content, or CreateFileAsync for a new file. " +
+                        "Correction: ApplySearchReplaceAsync, CreateFileAsync, and ApplyDiffPatchAsync are available in the CLI. Lack of native model tool visibility is not proof that a CLI tool is unavailable; use textual <tool_call> JSON instead. If you still believe a listed tool is unavailable, name the exact tool and the concrete observation proving it, then continue with one registered textual tool call. Do not use ExecuteShellCommandAsync or manual editor instructions for source edits. The next response must be exactly one registered tool call, preferably ApplySearchReplaceAsync with exact SEARCH and REPLACE text copied from the latest file content, or CreateFileAsync for a new file. " +
                         PromptLibrary.SearchReplaceToolCallExample));
                     continue;
                 }
@@ -360,7 +359,7 @@ internal sealed partial class PotatoSession
                 latestObservation +=
                     Environment.NewLine +
                     Environment.NewLine +
-                    "Correction: The assistant text incorrectly claimed one or more tools are unavailable. Native tool calls just executed successfully in this environment. If you still believe a listed tool is unavailable, name the exact tool and the concrete observation proving it. Continue by using the registered tools. For source edits prefer ApplySearchReplaceAsync with exact SEARCH and REPLACE text; for new files use CreateFileAsync. " +
+                    "Correction: The assistant text incorrectly claimed one or more tools are unavailable. Native tool calls just executed successfully in this environment. Lack of native model tool visibility is not proof that a CLI tool is unavailable; use textual <tool_call> JSON instead. If you still believe a listed tool is unavailable, name the exact tool and the concrete observation proving it, then continue with one registered textual tool call. For source edits prefer ApplySearchReplaceAsync with exact SEARCH and REPLACE text; for new files use CreateFileAsync. " +
                     PromptLibrary.SearchReplaceToolCallExample;
             }
 
