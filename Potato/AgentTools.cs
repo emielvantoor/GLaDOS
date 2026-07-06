@@ -18,6 +18,8 @@ internal class AgentTools(ReActMemory memory, Func<IChatClient> getSideQuestionC
 
     public CancellationToken CurrentCancellationToken { get; set; }
 
+    private bool toolResultWritten;
+
     [Description("Gets the current local system date and time.")]
     public string GetCurrentTime()
     {
@@ -857,6 +859,7 @@ internal class AgentTools(ReActMemory memory, Func<IChatClient> getSideQuestionC
     private void WriteToolCall(string toolName, IReadOnlyList<(string Name, string Value)> parameters)
     {
         using var _ = PotatoConsole.SuspendProgress();
+        toolResultWritten = false;
 
         if (!options.Verbose)
         {
@@ -897,21 +900,21 @@ internal class AgentTools(ReActMemory memory, Func<IChatClient> getSideQuestionC
             nameof(ExecuteShellCommandAsync) => "Execute command",
             _ => toolName
         };
-        string prefix = toolName is nameof(ApplySearchReplaceAsync) or
+        bool waitsForResult = toolName is nameof(ApplySearchReplaceAsync) or
             nameof(CreateFileAsync) or
             nameof(ApplyDiffPatchAsync) or
-            nameof(ExecuteShellCommandAsync)
-            ? "?"
-            : "✓";
+            nameof(ExecuteShellCommandAsync);
+        string prefix = waitsForResult ? "?" : "✓";
 
-        Console.ForegroundColor = ConsoleColor.DarkGray;
+        Console.ForegroundColor = waitsForResult ? ConsoleColor.DarkGray : ConsoleColor.Green;
         Console.WriteLine($"{prefix} {label}{displayPath}");
         Console.ResetColor();
     }
 
-    private static void WriteCompactToolResult(bool success, string label, string detail)
+    private void WriteCompactToolResult(bool success, string label, string detail)
     {
         using var _ = PotatoConsole.SuspendProgress();
+        toolResultWritten = true;
 
         string displayDetail = string.IsNullOrWhiteSpace(detail)
             ? string.Empty
@@ -924,8 +927,23 @@ internal class AgentTools(ReActMemory memory, Func<IChatClient> getSideQuestionC
 
     private string StoreAndReturn(string source, string result)
     {
+        if (!toolResultWritten && IsFailureResult(result))
+        {
+            WriteCompactToolResult(false, "Tool failed", source);
+        }
+
         memory.Add(source, result);
         return result;
+    }
+
+    private static bool IsFailureResult(string result)
+    {
+        string trimmed = result.TrimStart();
+        return trimmed.StartsWith("Error:", StringComparison.OrdinalIgnoreCase) ||
+               trimmed.StartsWith("Rejected ", StringComparison.OrdinalIgnoreCase) ||
+               trimmed.Contains(" denied", StringComparison.OrdinalIgnoreCase) ||
+               trimmed.Contains(" failed", StringComparison.OrdinalIgnoreCase) ||
+               trimmed.Contains(" timed out", StringComparison.OrdinalIgnoreCase);
     }
 
     private ToolPermissionChoice RequestPermission(
