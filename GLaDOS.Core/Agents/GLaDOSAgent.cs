@@ -13,20 +13,23 @@ public class GLaDOSAgent
     private readonly ToolRegistry _toolRegistry;
     private readonly ToolRouter _toolRouter;
     private readonly ToolCallAdapterPipeline _toolCallAdapterPipeline;
-    private readonly IAgentProtocol _protocol;
+    private readonly QwenProtocol _defaultProtocol;
+    private readonly IReadOnlyList<IAgentProtocol> _protocols;
     private readonly ILogger<GLaDOSAgent> _logger;
 
     public GLaDOSAgent(
         ToolRegistry toolRegistry,
         ToolRouter toolRouter,
         ToolCallAdapterPipeline toolCallAdapterPipeline,
-        IAgentProtocol protocol,
+        QwenProtocol defaultProtocol,
+        IEnumerable<IAgentProtocol> protocols,
         ILogger<GLaDOSAgent> logger)
     {
         _toolRegistry = toolRegistry;
         _toolRouter = toolRouter;
         _toolCallAdapterPipeline = toolCallAdapterPipeline;
-        _protocol = protocol;
+        _defaultProtocol = defaultProtocol;
+        _protocols = protocols.ToList();
         _logger = logger;
     }
 
@@ -35,9 +38,11 @@ public class GLaDOSAgent
         List<AgentMessage> chatHistory,
         ChatOptions options,
         List<AgentToolDefinition>? externalTools = null, 
+        string? protocolName = null,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        _logger.LogInformation("Starting GLaDOSAgent.RunAsync with {Protocol} protocol", _protocol.Name);
+        var protocol = ResolveProtocol(protocolName);
+        _logger.LogInformation("Starting GLaDOSAgent.RunAsync with {Protocol} protocol", protocol.Name);
 
         var toolDefinitions = _toolRegistry.GetDefinitions().ToList();
 
@@ -57,14 +62,14 @@ public class GLaDOSAgent
         {
             currentIteration++;
 
-            var promptHistory = ApplyContextSize(chatHistory, toolDefinitions, options.ContextSize);
-            var prompt = _protocol.BuildPrompt(promptHistory, toolDefinitions);
+            var promptHistory = ApplyContextSize(protocol, chatHistory, toolDefinitions, options.ContextSize);
+            var prompt = protocol.BuildPrompt(promptHistory, toolDefinitions);
             var response = await model.GenerateResponseAsync(prompt, options, cancellationToken);
-            var toolCall = _protocol.ParseResponse(response).FirstOrDefault();
+            var toolCall = protocol.ParseResponse(response).FirstOrDefault();
 
             if (toolCall == null)
             {
-                var text = CleanAssistantText(response);
+                var text = CleanAssistantText(protocol, response);
                 if (!string.IsNullOrEmpty(text))
                 {
                     yieldedAssistantText = true;
@@ -105,7 +110,20 @@ public class GLaDOSAgent
         _logger.LogInformation("Finished GLaDOSAgent.RunAsync");
     }
 
-    private List<AgentMessage> ApplyContextSize(
+    private IAgentProtocol ResolveProtocol(string? protocolName)
+    {
+        if (string.IsNullOrWhiteSpace(protocolName))
+        {
+            return _defaultProtocol;
+        }
+
+        return _protocols.FirstOrDefault(protocol =>
+                   string.Equals(protocol.Name, protocolName, StringComparison.OrdinalIgnoreCase))
+               ?? _defaultProtocol;
+    }
+
+    private static List<AgentMessage> ApplyContextSize(
+        IAgentProtocol protocol,
         List<AgentMessage> chatHistory,
         IReadOnlyList<AgentToolDefinition> toolDefinitions,
         int? contextSize)
@@ -117,7 +135,7 @@ public class GLaDOSAgent
 
         var promptHistory = chatHistory.ToList();
         while (promptHistory.Count > 1 &&
-               EstimateTokenCount(_protocol.BuildPrompt(promptHistory, toolDefinitions)) > contextSize.Value)
+               EstimateTokenCount(protocol.BuildPrompt(promptHistory, toolDefinitions)) > contextSize.Value)
         {
             if (!RemoveOldestNonSystemMessage(promptHistory))
             {
@@ -155,10 +173,10 @@ public class GLaDOSAgent
         return (int)Math.Ceiling(text.Length / 4.0);
     }
 
-    private string CleanAssistantText(string response)
+    private static string CleanAssistantText(IAgentProtocol protocol, string response)
     {
-        return _protocol is QwenProtocol qwenProtocol
-            ? qwenProtocol.StripThinking(response)
+        return protocol.SupportsThinking
+            ? GLaDOSProtocol.StripThinking(response)
             : response.Trim();
     }
 }
