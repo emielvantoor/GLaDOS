@@ -5,7 +5,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.AI;
 
-internal class AgentTools(ReActMemory memory, Func<IChatClient> getSideQuestionClient)
+internal class AgentTools(ReActMemory memory, Func<IChatClient> getSideQuestionClient, PotatoRuntimeOptions options)
 {
     private const int DefaultCommandTimeoutSeconds = 60;
     private const int MaxCommandTimeoutSeconds = 600;
@@ -239,18 +239,19 @@ internal class AgentTools(ReActMemory memory, Func<IChatClient> getSideQuestionC
         var shell = GetShell();
         timeoutSeconds = Math.Clamp(timeoutSeconds, 1, MaxCommandTimeoutSeconds);
 
-        Console.ForegroundColor = ConsoleColor.Magenta;
-        Console.WriteLine("Tool permission requested: execute shell command");
-        Console.WriteLine($"Shell: {shell.DisplayName}");
-        Console.WriteLine($"Working directory: {workingDirectory ?? Environment.CurrentDirectory}");
-        Console.WriteLine("Command:");
-        Console.WriteLine(command);
-        Console.ResetColor();
-        Console.Write("Allow execution? [y/N] ");
-
-        string? approval = ReadLineWithCancellation(CurrentCancellationToken);
-        if (!IsApproval(approval))
+        ToolPermissionChoice approval = RequestPermission(
+            PermissionKey(nameof(ExecuteShellCommandAsync), command),
+            "Tool permission requested: execute shell command",
+            [
+                $"Shell: {shell.DisplayName}",
+                $"Working directory: {workingDirectory ?? Environment.CurrentDirectory}",
+                "Command:",
+                command
+            ],
+            "Run this command?");
+        if (approval == ToolPermissionChoice.Deny)
         {
+            WriteCompactToolResult(false, "Command denied", command);
             return StoreAndReturn($"{nameof(ExecuteShellCommandAsync)} {command}", "Command execution denied by user.");
         }
 
@@ -305,6 +306,7 @@ internal class AgentTools(ReActMemory memory, Func<IChatClient> getSideQuestionC
             }
 
             await waitTask;
+            WriteCompactToolResult(process.ExitCode == 0, "Command finished", command);
             return StoreAndReturn(
                 $"{nameof(ExecuteShellCommandAsync)} {command}",
                 FormatCommandResult(process.ExitCode, outputBuilder.ToString(), errorBuilder.ToString()));
@@ -352,17 +354,17 @@ internal class AgentTools(ReActMemory memory, Func<IChatClient> getSideQuestionC
             return StoreAndReturn(nameof(ApplyDiffPatchAsync), $"Error: Working directory '{effectiveWorkingDirectory}' does not exist.");
         }
 
-        Console.ForegroundColor = ConsoleColor.Magenta;
-        Console.WriteLine("Tool permission requested: apply diff patch");
-        Console.WriteLine($"Working directory: {effectiveWorkingDirectory}");
-        Console.WriteLine("Patch:");
-        Console.WriteLine(patch);
-        Console.ResetColor();
-        Console.Write("Apply patch? [y/N] ");
-
-        string? approval = ReadLineWithCancellation(CurrentCancellationToken);
-        if (!IsApproval(approval))
+        ToolPermissionChoice approval = RequestPermission(
+            PermissionKey(nameof(ApplyDiffPatchAsync), effectiveWorkingDirectory),
+            "Tool permission requested: apply diff patch",
+            [
+                $"Working directory: {effectiveWorkingDirectory}",
+                "Patch:",
+                patch
+            ]);
+        if (approval == ToolPermissionChoice.Deny)
         {
+            WriteCompactToolResult(false, "Patch denied", effectiveWorkingDirectory);
             return StoreAndReturn(nameof(ApplyDiffPatchAsync), "Patch application denied by user.");
         }
 
@@ -401,6 +403,7 @@ internal class AgentTools(ReActMemory memory, Func<IChatClient> getSideQuestionC
             builder.AppendLine("Changed files:");
             builder.AppendLine(FormatPatchedFiles(patch));
             SuccessfulEditCount++;
+            WriteCompactToolResult(true, "Patch applied", effectiveWorkingDirectory);
             return StoreAndReturn(nameof(ApplyDiffPatchAsync), builder.ToString());
         }
         catch (OperationCanceledException) when (CurrentCancellationToken.IsCancellationRequested)
@@ -471,25 +474,20 @@ internal class AgentTools(ReActMemory memory, Func<IChatClient> getSideQuestionC
             return StoreAndReturn(nameof(ApplySearchReplaceAsync), $"Error: SEARCH text matched {matchCount} times. Provide a larger unique SEARCH block.");
         }
 
-        Console.ForegroundColor = ConsoleColor.Magenta;
-        Console.WriteLine("Tool permission requested: apply SEARCH/REPLACE edit");
-        Console.WriteLine($"File: {resolvedPath}");
-        Console.WriteLine("SEARCH:");
-        Console.WriteLine(search);
-        Console.WriteLine("REPLACE:");
-        Console.WriteLine(replace);
-        Console.ResetColor();
-        Console.Write("Apply edit? [y/N] ");
-
-        string? approval = ReadLineWithCancellation(CurrentCancellationToken);
-        if (!IsApproval(approval))
+        ToolPermissionChoice approval = RequestPermission(
+            PermissionKey(nameof(ApplySearchReplaceAsync), resolvedPath),
+            $"WriteFile Writing to {PathResolver.FormatPathForDisplay(resolvedPath)}",
+            FormatSearchReplacePreview(search ?? string.Empty, replace ?? string.Empty));
+        if (approval == ToolPermissionChoice.Deny)
         {
+            WriteCompactToolResult(false, "WriteFile denied", resolvedPath);
             return StoreAndReturn(nameof(ApplySearchReplaceAsync), "SEARCH/REPLACE edit denied by user.");
         }
 
-        string updatedContent = content.Replace(search, replace, StringComparison.Ordinal);
+        string updatedContent = content.Replace(search!, replace ?? string.Empty, StringComparison.Ordinal);
         await File.WriteAllTextAsync(resolvedPath, updatedContent, CurrentCancellationToken);
         SuccessfulEditCount++;
+        WriteCompactToolResult(true, "WriteFile wrote", resolvedPath);
         return StoreAndReturn(nameof(ApplySearchReplaceAsync), $"SEARCH/REPLACE edit applied successfully to {resolvedPath}.");
     }
 
@@ -524,22 +522,19 @@ internal class AgentTools(ReActMemory memory, Func<IChatClient> getSideQuestionC
             return StoreAndReturn(nameof(CreateFileAsync), $"Error: Parent directory '{parentDirectory}' does not exist. Create or choose an existing directory first.");
         }
 
-        Console.ForegroundColor = ConsoleColor.Magenta;
-        Console.WriteLine("Tool permission requested: create file");
-        Console.WriteLine($"File: {resolvedPath}");
-        Console.WriteLine("CONTENT:");
-        Console.WriteLine(content);
-        Console.ResetColor();
-        Console.Write("Create file? [y/N] ");
-
-        string? approval = ReadLineWithCancellation(CurrentCancellationToken);
-        if (!IsApproval(approval))
+        ToolPermissionChoice approval = RequestPermission(
+            PermissionKey(nameof(CreateFileAsync), resolvedPath),
+            $"WriteFile Creating {PathResolver.FormatPathForDisplay(resolvedPath)}",
+            FormatCreateFilePreview(content ?? string.Empty));
+        if (approval == ToolPermissionChoice.Deny)
         {
+            WriteCompactToolResult(false, "WriteFile denied", resolvedPath);
             return StoreAndReturn(nameof(CreateFileAsync), "File creation denied by user.");
         }
 
         await File.WriteAllTextAsync(resolvedPath, content, CurrentCancellationToken);
         SuccessfulEditCount++;
+        WriteCompactToolResult(true, "WriteFile created", resolvedPath);
         return StoreAndReturn(nameof(CreateFileAsync), $"File created successfully at {resolvedPath}.");
     }
 
@@ -859,8 +854,16 @@ internal class AgentTools(ReActMemory memory, Func<IChatClient> getSideQuestionC
                normalized.Contains("tee ", StringComparison.Ordinal);
     }
 
-    private static void WriteToolCall(string toolName, IReadOnlyList<(string Name, string Value)> parameters)
+    private void WriteToolCall(string toolName, IReadOnlyList<(string Name, string Value)> parameters)
     {
+        using var _ = PotatoConsole.SuspendProgress();
+
+        if (!options.Verbose)
+        {
+            WriteCompactToolCall(toolName, parameters);
+            return;
+        }
+
         Console.ForegroundColor = ConsoleColor.DarkGray;
         Console.WriteLine($"Tool call: {toolName}");
         foreach ((string name, string value) in parameters)
@@ -871,61 +874,136 @@ internal class AgentTools(ReActMemory memory, Func<IChatClient> getSideQuestionC
         Console.ResetColor();
     }
 
+    private static void WriteCompactToolCall(string toolName, IReadOnlyList<(string Name, string Value)> parameters)
+    {
+        string? path = parameters.FirstOrDefault(parameter =>
+            parameter.Name.Equals("resolvedPath", StringComparison.OrdinalIgnoreCase) ||
+            parameter.Name.Equals("filePath", StringComparison.OrdinalIgnoreCase) ||
+            parameter.Name.Equals("directoryPath", StringComparison.OrdinalIgnoreCase)).Value;
+
+        string displayPath = string.IsNullOrWhiteSpace(path) || path == "(unresolved)"
+            ? string.Empty
+            : $" {PathResolver.FormatPathForDisplay(path)}";
+
+        string label = toolName switch
+        {
+            nameof(ReadFileContent) => "Read file",
+            nameof(ListFiles) => "List files",
+            nameof(SummarizeFilePurpose) => "Summarize file",
+            nameof(GetCollectedContext) => "Read context",
+            nameof(ApplySearchReplaceAsync) => "WriteFile",
+            nameof(CreateFileAsync) => "WriteFile",
+            nameof(ApplyDiffPatchAsync) => "Apply patch",
+            nameof(ExecuteShellCommandAsync) => "Execute command",
+            _ => toolName
+        };
+        string prefix = toolName is nameof(ApplySearchReplaceAsync) or
+            nameof(CreateFileAsync) or
+            nameof(ApplyDiffPatchAsync) or
+            nameof(ExecuteShellCommandAsync)
+            ? "?"
+            : "✓";
+
+        Console.ForegroundColor = ConsoleColor.DarkGray;
+        Console.WriteLine($"{prefix} {label}{displayPath}");
+        Console.ResetColor();
+    }
+
+    private static void WriteCompactToolResult(bool success, string label, string detail)
+    {
+        using var _ = PotatoConsole.SuspendProgress();
+
+        string displayDetail = string.IsNullOrWhiteSpace(detail)
+            ? string.Empty
+            : $" {PathResolver.FormatPathForDisplay(detail)}";
+
+        Console.ForegroundColor = success ? ConsoleColor.Green : ConsoleColor.Red;
+        Console.WriteLine($"{(success ? "✓" : "x")} {label}{displayDetail}");
+        Console.ResetColor();
+    }
+
     private string StoreAndReturn(string source, string result)
     {
         memory.Add(source, result);
         return result;
     }
 
-    private static bool IsApproval(string? input)
+    private ToolPermissionChoice RequestPermission(
+        string permissionKey,
+        string title,
+        IReadOnlyList<string> details,
+        string prompt = "Apply this change?")
     {
-        string normalized = input?.Trim().ToLowerInvariant() ?? string.Empty;
-        return normalized is "y" or "yes";
-    }
-
-    private static string? ReadLineWithCancellation(CancellationToken cancellationToken)
-    {
-        if (Console.IsInputRedirected)
+        if (options.AlwaysAllowedPermissionKeys.Contains(permissionKey))
         {
-            return Console.ReadLine();
+            return ToolPermissionChoice.AllowAlways;
         }
 
-        var buffer = new StringBuilder();
-        while (true)
+        ToolPermissionChoice choice = PotatoConsole.RequestToolPermission(title, details, prompt);
+        if (choice == ToolPermissionChoice.AllowAlways)
         {
-            cancellationToken.ThrowIfCancellationRequested();
+            options.AlwaysAllowedPermissionKeys.Add(permissionKey);
+        }
 
-            if (!Console.KeyAvailable)
+        return choice;
+    }
+
+    private static string PermissionKey(string toolName, string scope) =>
+        $"{toolName}:{scope}";
+
+    private static IReadOnlyList<string> FormatSearchReplacePreview(string search, string replace)
+    {
+        string[] searchLines = NormalizeLines(search);
+        string[] replaceLines = NormalizeLines(replace);
+        if (searchLines.Length == 1 && replaceLines.Length == 1)
+        {
+            return [$"1 - {searchLines[0]}", $"1 + {replaceLines[0]}"];
+        }
+
+        var lines = new List<string>();
+        int maxLines = Math.Max(searchLines.Length, replaceLines.Length);
+        int visibleLines = Math.Min(maxLines, 20);
+        for (int i = 0; i < visibleLines; i++)
+        {
+            if (i < searchLines.Length)
             {
-                Thread.Sleep(50);
-                continue;
+                lines.Add($"{i + 1} - {searchLines[i]}");
             }
 
-            ConsoleKeyInfo key = Console.ReadKey(intercept: true);
-            switch (key.Key)
+            if (i < replaceLines.Length)
             {
-                case ConsoleKey.Enter:
-                    Console.WriteLine();
-                    return buffer.ToString();
-
-                case ConsoleKey.Backspace:
-                    if (buffer.Length > 0)
-                    {
-                        buffer.Length--;
-                        Console.Write("\b \b");
-                    }
-                    break;
-
-                default:
-                    if (!char.IsControl(key.KeyChar))
-                    {
-                        buffer.Append(key.KeyChar);
-                        Console.Write(key.KeyChar);
-                    }
-                    break;
+                lines.Add($"{i + 1} + {replaceLines[i]}");
             }
         }
+
+        if (maxLines > visibleLines)
+        {
+            lines.Add($"... {maxLines - visibleLines} more changed line(s)");
+        }
+
+        return lines;
     }
+
+    private static IReadOnlyList<string> FormatCreateFilePreview(string content)
+    {
+        string[] lines = NormalizeLines(content);
+        var preview = new List<string>();
+        int visibleLines = Math.Min(lines.Length, 20);
+        for (int i = 0; i < visibleLines; i++)
+        {
+            preview.Add($"{i + 1} + {lines[i]}");
+        }
+
+        if (lines.Length > visibleLines)
+        {
+            preview.Add($"... {lines.Length - visibleLines} more line(s)");
+        }
+
+        return preview;
+    }
+
+    private static string[] NormalizeLines(string text) =>
+        text.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
 
     private static ShellCommand GetShell()
     {

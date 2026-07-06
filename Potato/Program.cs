@@ -5,6 +5,7 @@ class Program
     static async Task Main(string[] args)
     {
         Console.Title = "Potato Code";
+        PotatoRuntimeOptions options = PotatoRuntimeOptions.FromArgs(args);
 
         Uri gladosEndpoint = GladosConfiguration.GetEndpoint();
         var clientFactory = new GladosChatClientFactory();
@@ -21,7 +22,8 @@ class Program
             openAiClient,
             client,
             clientFactory,
-            modelSelector);
+            modelSelector,
+            options);
 
         await session.RunAsync();
     }

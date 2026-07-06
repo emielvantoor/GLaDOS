@@ -13,6 +13,7 @@ internal sealed partial class PotatoSession
     private readonly ReActMemory reActMemory = new();
     private readonly AgentTools agentTools;
     private readonly FileMentionExpander fileMentionExpander = new();
+    private readonly PotatoRuntimeOptions options;
     private readonly List<string> inputHistory = [];
     private readonly List<ChatMessage> chatHistory =
     [
@@ -33,14 +34,16 @@ internal sealed partial class PotatoSession
         IChatClient openAiClient,
         IChatClient client,
         GladosChatClientFactory clientFactory,
-        ModelSelector modelSelector)
+        ModelSelector modelSelector,
+        PotatoRuntimeOptions options)
     {
         this.gladosEndpoint = gladosEndpoint;
         this.clientFactory = clientFactory;
         this.modelSelector = modelSelector;
+        this.options = options;
         currentOpenAiClient = openAiClient;
         currentClient = client;
-        agentTools = new AgentTools(reActMemory, () => currentOpenAiClient);
+        agentTools = new AgentTools(reActMemory, () => currentOpenAiClient, options);
     }
 
     public async Task RunAsync()
@@ -170,7 +173,12 @@ internal sealed partial class PotatoSession
                 return;
             }
 
-            ChatResponse response = await currentClient.GetResponseAsync(chatHistory, currentOptions, cancellationToken);
+            ChatResponse response;
+            using (PotatoConsole.StartProgress("Waiting for response..."))
+            {
+                response = await currentClient.GetResponseAsync(chatHistory, currentOptions, cancellationToken);
+            }
+
             chatHistory.Add(new ChatMessage(ChatRole.Assistant, response.Text));
             StoreLatestResponse(response.Text);
             PotatoConsole.WriteAgentResponse(response.Text);
@@ -250,9 +258,17 @@ internal sealed partial class PotatoSession
             int toolCallsBefore = agentTools.ToolInvocationCount;
             int memoryItemsBeforeToolCalls = reActMemory.Count;
             PotatoConsole.WriteStatus($"ReAct iteration {iteration}/{MaxReActIterations}...");
-            PotatoConsole.WriteModelQuestion(GetLatestModelQuestion());
+            if (options.Verbose)
+            {
+                PotatoConsole.WriteModelQuestion(GetLatestModelQuestion());
+            }
 
-            ChatResponse response = await currentClient.GetResponseAsync(chatHistory, toolOptions, cancellationToken);
+            ChatResponse response;
+            using (PotatoConsole.StartProgress($"ReAct iteration {iteration}/{MaxReActIterations}..."))
+            {
+                response = await currentClient.GetResponseAsync(chatHistory, toolOptions, cancellationToken);
+            }
+
             string responseText = response.Text.Trim();
             int memoryItemsAfterToolCalls = reActMemory.Count;
 
@@ -263,7 +279,10 @@ internal sealed partial class PotatoSession
 
             chatHistory.Add(new ChatMessage(ChatRole.Assistant, responseText));
             reActMemory.Add("Assistant ReAct response", responseText);
-            PotatoConsole.WriteModelExchange(iteration, GetLatestModelQuestion(), responseText);
+            if (options.Verbose)
+            {
+                PotatoConsole.WriteModelExchange(iteration, GetLatestModelQuestion(), responseText);
+            }
 
             if (IsFinalResponse(responseText))
             {
@@ -280,7 +299,10 @@ internal sealed partial class PotatoSession
             }
 
             int toolCallsThisIteration = agentTools.ToolInvocationCount - toolCallsBefore;
-            await reActMemory.SummarizeLargeUnsummarizedItemsAsync(currentOpenAiClient, cancellationToken);
+            using (PotatoConsole.StartProgress("Summarizing context..."))
+            {
+                await reActMemory.SummarizeLargeUnsummarizedItemsAsync(currentOpenAiClient, cancellationToken);
+            }
             if (toolCallsThisIteration <= 0)
             {
                 if (await TryExecuteTextualActionAsync(responseText, cancellationToken))
@@ -343,7 +365,10 @@ internal sealed partial class PotatoSession
                 continue;
             }
 
-            PotatoConsole.WriteAgentResponse(responseText);
+            if (options.Verbose)
+            {
+                PotatoConsole.WriteAgentResponse(responseText);
+            }
 
             if (toolCallsThisIteration > MaxToolCallsPerIteration)
             {
@@ -363,6 +388,11 @@ internal sealed partial class PotatoSession
                     PromptLibrary.SearchReplaceToolCallExample;
             }
 
+            if (TryCompleteVerifiedDirectReplace(successfulEditsBeforeExecution))
+            {
+                return;
+            }
+
             chatHistory.Add(new ChatMessage(
                 ChatRole.User,
                 PromptLibrary.NextStepAfterObservationMessage(
@@ -378,6 +408,30 @@ internal sealed partial class PotatoSession
     private bool RequiresSuccessfulEditBeforeFinal(int successfulEditsBeforeExecution) =>
         ApprovalPolicy.IsProjectChangeRequest(latestUserRequest) &&
         agentTools.SuccessfulEditCount <= successfulEditsBeforeExecution;
+
+    private bool TryCompleteVerifiedDirectReplace(int successfulEditsBeforeExecution)
+    {
+        if (agentTools.SuccessfulEditCount <= successfulEditsBeforeExecution ||
+            !TryParseDirectReplaceFileContentRequest(latestUserRequest, out string filePath, out string expectedContent))
+        {
+            return false;
+        }
+
+        string resolvedPath = ResolveUserFilePath(filePath);
+        if (!File.Exists(resolvedPath))
+        {
+            return false;
+        }
+
+        string currentContent = File.ReadAllText(resolvedPath);
+        if (!string.Equals(currentContent, expectedContent, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        PotatoConsole.WriteAgentResponse($"File content updated and verified: {PathResolver.FormatPathForDisplay(resolvedPath)}");
+        return true;
+    }
 
     private static bool IsFinalResponse(string responseText) =>
         FinalMarkerRegex().IsMatch(responseText);
@@ -461,7 +515,10 @@ internal sealed partial class PotatoSession
 
         PotatoConsole.WriteStatus($"Interpreting textual action as tool call: {toolCall.Name}");
         string result = await ExecuteTextualToolCallAsync(toolCall, cancellationToken);
-        await reActMemory.SummarizeLargeUnsummarizedItemsAsync(currentOpenAiClient, cancellationToken);
+        using (PotatoConsole.StartProgress("Summarizing context..."))
+        {
+            await reActMemory.SummarizeLargeUnsummarizedItemsAsync(currentOpenAiClient, cancellationToken);
+        }
         chatHistory.Add(new ChatMessage(
             ChatRole.User,
             PromptLibrary.NextStepAfterObservationMessage(
@@ -490,7 +547,10 @@ internal sealed partial class PotatoSession
             PotatoConsole.WriteStatus("Model did not call ApplySearchReplaceAsync for a direct file content replacement; running deterministic replacement fallback...");
             string currentContent = await File.ReadAllTextAsync(resolvedPath, cancellationToken);
             string replaceResult = await agentTools.ApplySearchReplaceAsync(resolvedPath, currentContent, replacementContent);
-            await reActMemory.SummarizeLargeUnsummarizedItemsAsync(currentOpenAiClient, cancellationToken);
+            using (PotatoConsole.StartProgress("Summarizing context..."))
+            {
+                await reActMemory.SummarizeLargeUnsummarizedItemsAsync(currentOpenAiClient, cancellationToken);
+            }
 
             chatHistory.Add(new ChatMessage(
                 ChatRole.User,
@@ -507,7 +567,10 @@ internal sealed partial class PotatoSession
         {
             PotatoConsole.WriteStatus("Model did not call CreateFileAsync for a direct file creation request; running deterministic file creation fallback...");
             string createResult = await agentTools.CreateFileAsync(filePath, content);
-            await reActMemory.SummarizeLargeUnsummarizedItemsAsync(currentOpenAiClient, cancellationToken);
+            using (PotatoConsole.StartProgress("Summarizing context..."))
+            {
+                await reActMemory.SummarizeLargeUnsummarizedItemsAsync(currentOpenAiClient, cancellationToken);
+            }
 
             chatHistory.Add(new ChatMessage(
                 ChatRole.User,
@@ -527,7 +590,10 @@ internal sealed partial class PotatoSession
 
         PotatoConsole.WriteStatus("Model did not choose the first project inspection action; running deterministic directory listing fallback...");
         string result = agentTools.ListFiles(Environment.CurrentDirectory);
-        await reActMemory.SummarizeLargeUnsummarizedItemsAsync(currentOpenAiClient, cancellationToken);
+        using (PotatoConsole.StartProgress("Summarizing context..."))
+        {
+            await reActMemory.SummarizeLargeUnsummarizedItemsAsync(currentOpenAiClient, cancellationToken);
+        }
 
         chatHistory.Add(new ChatMessage(
             ChatRole.User,
