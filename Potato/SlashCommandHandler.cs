@@ -69,9 +69,13 @@ internal sealed class SlashCommandHandler(
 
     private static void HandleChangeDirectoryCommand(string arguments)
     {
-        string rawPath = string.IsNullOrWhiteSpace(arguments)
-            ? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)
-            : arguments.Trim().Trim('"', '\'');
+        if (string.IsNullOrWhiteSpace(arguments))
+        {
+            PotatoConsole.WriteStatus("Type /cd <path>. Inline directory completion is shown while typing and accepted with Enter.");
+            return;
+        }
+
+        string rawPath = arguments.Trim().Trim('"', '\'');
 
         string? resolvedPath = PathResolver.ResolveMentionedPath(rawPath);
         if (resolvedPath is null)
@@ -80,9 +84,14 @@ internal sealed class SlashCommandHandler(
             return;
         }
 
+        ChangeWorkingDirectory(resolvedPath);
+    }
+
+    private static void ChangeWorkingDirectory(string resolvedPath)
+    {
         if (File.Exists(resolvedPath))
         {
-            resolvedPath = Path.GetDirectoryName(resolvedPath);
+            resolvedPath = Path.GetDirectoryName(resolvedPath) ?? string.Empty;
         }
 
         if (string.IsNullOrWhiteSpace(resolvedPath) || !Directory.Exists(resolvedPath))

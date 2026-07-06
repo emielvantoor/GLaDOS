@@ -80,7 +80,7 @@ Type `?` to show shortcuts.
 
 The prompt keeps an in-memory history of commands entered during the current session. Press `Up` to recall older commands and `Down` to move back toward the current draft.
 
-Messages can include `@path/to/file` references. Potato resolves relative paths from the current project folder, reads the referenced text files, and appends their contents to the message sent to the model.
+Messages can include `@path/to/file` references. While typing an `@` path, matching folders and files are shown inline in gray. Use Left/Right to cycle suggestions and Enter to accept the current gray completion. Potato resolves relative paths from the current project folder, reads the referenced text files, and appends their contents to the message sent to the model.
 
 Supported examples:
 
@@ -97,8 +97,8 @@ Slash commands are handled by the CLI before a message is sent to the staged age
 - `/model`
   Shows the model selection prompt again and switches the active chat client to the selected model.
 
-- `/cd [path]`
-  Changes the CLI working directory. Relative paths are resolved from the current working directory, `~/` paths are expanded, and `file://` paths are supported.
+- `/cd path`
+  Changes the CLI working directory. While typing the path, matching directory names are shown inline in gray. Use Left/Right to cycle folder suggestions, press Enter once to accept the gray completion, then Enter again to run the completed command. Relative paths are resolved from the current working directory, `~/` paths are expanded, and `file://` paths are supported.
 
 - `/ask question`
   Sends a one-off side question to the selected model without adding the question or answer to the main staged conversation history.
