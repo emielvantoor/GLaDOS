@@ -14,6 +14,7 @@ internal sealed partial class PotatoSession
     private readonly AgentTools agentTools;
     private readonly FileMentionExpander fileMentionExpander = new();
     private readonly PotatoRuntimeOptions options;
+    private readonly PotatoAppSettingsStore appSettingsStore;
     private readonly List<string> inputHistory = [];
     private readonly List<ChatMessage> chatHistory =
     [
@@ -35,12 +36,14 @@ internal sealed partial class PotatoSession
         IChatClient client,
         GladosChatClientFactory clientFactory,
         ModelSelector modelSelector,
-        PotatoRuntimeOptions options)
+        PotatoRuntimeOptions options,
+        PotatoAppSettingsStore appSettingsStore)
     {
         this.gladosEndpoint = gladosEndpoint;
         this.clientFactory = clientFactory;
         this.modelSelector = modelSelector;
         this.options = options;
+        this.appSettingsStore = appSettingsStore;
         currentOpenAiClient = openAiClient;
         currentClient = client;
         agentTools = new AgentTools(reActMemory, () => currentOpenAiClient, options);
@@ -59,6 +62,8 @@ internal sealed partial class PotatoSession
             modelSelector,
             fileMentionExpander,
             ResetConversationState,
+            SetUseCompiledDefaultPrompts,
+            appSettingsStore.SetSelectedModel,
             () => PotatoConsole.WriteConversationTranscript(chatHistory),
             () => currentClient,
             SwitchModel);
@@ -1213,6 +1218,14 @@ internal sealed partial class PotatoSession
         {
             chatHistory.RemoveRange(1, chatHistory.Count - 1);
         }
+    }
+
+    private void SetUseCompiledDefaultPrompts(bool useCompiledDefaultsOnly)
+    {
+        appSettingsStore.SetUseCompiledDefaultPrompts(useCompiledDefaultsOnly);
+        PromptLibrary.SetUseCompiledDefaultsOnly(useCompiledDefaultsOnly);
+        ResetConversationState();
+        chatHistory[0] = new ChatMessage(ChatRole.System, PromptLibrary.SystemPrompt);
     }
 
     private CancellationTokenSource BeginTaskCancellation()

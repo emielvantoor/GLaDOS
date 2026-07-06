@@ -334,6 +334,7 @@ internal static class PotatoConsole
         Console.WriteLine("  /model          Show model selection and switch models");
         Console.WriteLine("  /cd path        Change directory; Left/Right cycle completions, Enter accepts");
         Console.WriteLine("  /ask question   Ask a side question without changing chat history");
+        Console.WriteLine("  /prompts        Show or change prompt source: status, defaults, external");
         Console.WriteLine("  /transcript     Show the current conversation sent to the model");
         Console.WriteLine("  /abort          Cancel the current task and return to the main prompt");
         Console.WriteLine("  --verbose       Start Potato with model prompt/response debug output");

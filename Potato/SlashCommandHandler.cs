@@ -6,6 +6,8 @@ internal sealed class SlashCommandHandler(
     ModelSelector modelSelector,
     FileMentionExpander fileMentionExpander,
     Action resetConversationState,
+    Action<bool> setUseCompiledDefaultPrompts,
+    Action<string> setSelectedModel,
     Action writeConversationTranscript,
     Func<IChatClient> getClient,
     Action<string, IChatClient, IChatClient> switchModel)
@@ -41,6 +43,10 @@ internal sealed class SlashCommandHandler(
                 await HandleSideQuestionCommandAsync(arguments);
                 return true;
 
+            case "/prompts":
+                HandlePromptsCommand(arguments);
+                return true;
+
             case "/transcript":
                 writeConversationTranscript();
                 return true;
@@ -57,6 +63,44 @@ internal sealed class SlashCommandHandler(
         }
     }
 
+    private void HandlePromptsCommand(string arguments)
+    {
+        string mode = arguments.Trim().ToLowerInvariant();
+        switch (mode)
+        {
+            case "":
+            case "status":
+                WritePromptModeStatus();
+                return;
+
+            case "default":
+            case "defaults":
+            case "compiled":
+            case "internal":
+                setUseCompiledDefaultPrompts(true);
+                PotatoConsole.WriteSuccess("Prompt mode: compiled defaults. External prompt files are ignored for this session.");
+                return;
+
+            case "external":
+            case "files":
+                setUseCompiledDefaultPrompts(false);
+                PotatoConsole.WriteSuccess("Prompt mode: external files. Missing prompt files will be created from compiled defaults.");
+                return;
+
+            default:
+                PotatoConsole.WriteStatus("Type /prompts status, /prompts defaults, or /prompts external.");
+                return;
+        }
+    }
+
+    private static void WritePromptModeStatus()
+    {
+        string mode = PromptLibrary.UseCompiledDefaultsOnly
+            ? "compiled defaults; external prompt files are ignored"
+            : "external files; missing prompt files are created from compiled defaults";
+        PotatoConsole.WriteStatus($"Prompt mode: {mode}.");
+    }
+
     private async Task HandleModelCommandAsync()
     {
         string selectedModel = await modelSelector.PromptForModelAsync(gladosEndpoint);
@@ -64,6 +108,7 @@ internal sealed class SlashCommandHandler(
         IChatClient selectedClient = clientFactory.CreateFunctionClient(selectedOpenAiClient);
 
         switchModel(selectedModel, selectedOpenAiClient, selectedClient);
+        setSelectedModel(selectedModel);
         PotatoConsole.WriteSuccess($"Selected model: {selectedModel}");
     }
 
