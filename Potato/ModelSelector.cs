@@ -3,6 +3,32 @@ using System.Text.Json.Serialization;
 
 internal sealed class ModelSelector
 {
+    public async Task<string> SelectStartupModelAsync(Uri gladosEndpoint, string? selectedModel)
+    {
+        Console.ForegroundColor = ConsoleColor.DarkGray;
+        Console.WriteLine($"Loading models from {gladosEndpoint}models...");
+        Console.ResetColor();
+
+        List<string> models = await GetAvailableModelsAsync(gladosEndpoint);
+        if (!string.IsNullOrWhiteSpace(selectedModel))
+        {
+            string? matchingModel = models.FirstOrDefault(model =>
+                string.Equals(model, selectedModel, StringComparison.OrdinalIgnoreCase));
+            if (matchingModel is not null)
+            {
+                PotatoConsole.WriteStatus($"Using selected model from appsettings: {matchingModel}");
+                return matchingModel;
+            }
+
+            if (models.Count > 0)
+            {
+                PotatoConsole.WriteStatus($"Saved model not found: {selectedModel}");
+            }
+        }
+
+        return PromptForModel(models);
+    }
+
     public async Task<string> PromptForModelAsync(Uri gladosEndpoint)
     {
         Console.ForegroundColor = ConsoleColor.DarkGray;
@@ -10,6 +36,11 @@ internal sealed class ModelSelector
         Console.ResetColor();
 
         List<string> models = await GetAvailableModelsAsync(gladosEndpoint);
+        return PromptForModel(models);
+    }
+
+    private static string PromptForModel(List<string> models)
+    {
         if (models.Count > 0)
         {
             Console.ForegroundColor = ConsoleColor.Cyan;
@@ -60,7 +91,7 @@ internal sealed class ModelSelector
         }
     }
 
-    private static async Task<List<string>> GetAvailableModelsAsync(Uri gladosEndpoint)
+    public static async Task<List<string>> GetAvailableModelsAsync(Uri gladosEndpoint)
     {
         try
         {
