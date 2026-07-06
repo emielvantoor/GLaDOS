@@ -447,7 +447,7 @@ internal static class PotatoConsole
         Console.WriteLine(title);
         foreach (string detail in details)
         {
-            Console.WriteLine(detail);
+            WritePermissionDetail(detail);
         }
 
         Console.ResetColor();
@@ -491,6 +491,56 @@ internal static class PotatoConsole
                     return ToolPermissionChoice.AllowAlways;
             }
         }
+    }
+
+    private static void WritePermissionDetail(string detail)
+    {
+        string normalized = detail.Replace("\r\n", "\n", StringComparison.Ordinal);
+        foreach (string line in normalized.Split('\n'))
+        {
+            Console.ForegroundColor = PermissionDetailColor(line);
+            Console.WriteLine(line);
+        }
+    }
+
+    private static ConsoleColor PermissionDetailColor(string line)
+    {
+        if (IsAddedDiffLine(line))
+        {
+            return ConsoleColor.Green;
+        }
+
+        if (IsRemovedDiffLine(line))
+        {
+            return ConsoleColor.Red;
+        }
+
+        return ConsoleColor.Magenta;
+    }
+
+    private static bool IsAddedDiffLine(string line) =>
+        line.StartsWith("+", StringComparison.Ordinal) &&
+        !line.StartsWith("+++", StringComparison.Ordinal) ||
+        HasNumberedChangePrefix(line, '+');
+
+    private static bool IsRemovedDiffLine(string line) =>
+        line.StartsWith("-", StringComparison.Ordinal) &&
+        !line.StartsWith("---", StringComparison.Ordinal) ||
+        HasNumberedChangePrefix(line, '-');
+
+    private static bool HasNumberedChangePrefix(string line, char marker)
+    {
+        int index = 0;
+        while (index < line.Length && char.IsDigit(line[index]))
+        {
+            index++;
+        }
+
+        return index > 0 &&
+               index + 2 < line.Length &&
+               line[index] == ' ' &&
+               line[index + 1] == marker &&
+               line[index + 2] == ' ';
     }
 
     private static void WriteBoxHeader(string title)
