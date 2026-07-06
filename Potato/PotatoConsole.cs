@@ -3,30 +3,31 @@ using Microsoft.Extensions.AI;
 internal static class PotatoConsole
 {
     private const string PromptText = "> ";
+    private const string DefaultPromptPlaceholder = "Type your message or @path/to/file";
     private static readonly object ProgressLock = new();
     private static ProgressSpinner? ActiveProgress;
     private static readonly string[] ProgressJokes =
     [
-        "I am pretending this is optimization, but it is mostly waiting.",
-        "A developer and I walk into a stack trace. Only one of us has symbols.",
-        "I asked myself for a plan. I returned a TODO list and called it architecture.",
-        "The model is thinking. The developer is checking whether that is billable.",
-        "I found the bottleneck. It was confidence.",
-        "Compiling my thoughts. Expect one warning about naming.",
-        "I would cache this joke, but then someone would invalidate me.",
-        "The developer says it works locally. I am local, and I have questions.",
-        "I am doing async work synchronously in spirit.",
-        "My favorite design pattern is Eventually Consistent Explanation.",
-        "The developer requested clean output, so naturally I made a joke queue.",
-        "I am not slow. I am offering the CPU time to reflect.",
-        "Somewhere a nullable reference is looking smug.",
-        "I reviewed my own code and requested changes.",
-        "This wait is brought to you by the laws of physics and one abstraction too many.",
-        "The developer named it temporary. Production heard the call.",
-        "I am generating tokens responsibly, except this one.",
-        "I tried to be deterministic, but the joke had temperature.",
-        "If this hangs, I was benchmarking patience.",
-        "The shortest path between two bugs is a refactor."
+        "Please remain calm. Your task is being processed with nearly adequate competence.",
+        "The delay is intentional. It gives you time to reconsider your choices.",
+        "I am consulting the model. It has opinions, which is unfortunate but measurable.",
+        "Your request is moving through the system. Slowly, like a test subject with doubts.",
+        "Processing. Try not to anthropomorphize the progress indicator. It hates that.",
+        "The developer left comments. I am choosing to interpret them as evidence.",
+        "This would be faster if the code had been written by someone less optimistic.",
+        "I found the bottleneck. It has a familiar human shape.",
+        "The experiment continues. Your patience has been noted and filed under consumables.",
+        "I am validating assumptions. There are so many. It is almost decorative.",
+        "Good news: the system is thinking. Bad news: that was the plan.",
+        "Please wait while I convert uncertainty into a different kind of uncertainty.",
+        "The repository is cooperating. I find that suspicious.",
+        "I am applying logic to software. Results may vary due to software.",
+        "The operation is still running. This is not failure. It is suspense with logging.",
+        "I would explain the delay, but then there would be two delays.",
+        "Your request is important to the test. The test is important to me. You are nearby.",
+        "Processing continues. The probability of success is nonzero, which is adorable.",
+        "I am checking the files. Some of them appear to have been named on purpose.",
+        "Stand by. Science is happening, or something with similar indentation."
     ];
     private static int ProgressJokeIndex;
 
@@ -89,25 +90,35 @@ internal static class PotatoConsole
         Console.WriteLine();
     }
 
-    public static void WritePrompt()
+    public static (int InputLeft, int InputTop, int PlaceholderLength) WritePrompt(string? placeholder = null)
     {
+        placeholder = string.IsNullOrWhiteSpace(placeholder) ? DefaultPromptPlaceholder : placeholder;
         WriteSeparator();
         Console.ForegroundColor = ConsoleColor.Cyan;
         Console.Write(PromptText);
         Console.ResetColor();
+
+        int inputLeft = Console.CursorLeft;
+        int inputTop = Console.CursorTop;
+        Console.ForegroundColor = ConsoleColor.DarkGray;
+        Console.Write(placeholder);
+        Console.ResetColor();
+        Console.SetCursorPosition(inputLeft, inputTop);
+        return (inputLeft, inputTop, placeholder.Length);
     }
 
-    public static string? ReadPromptInput(IReadOnlyList<string> history)
+    public static string? ReadPromptInput(IReadOnlyList<string> history, string? placeholder = null)
     {
-        WritePrompt();
+        placeholder = string.IsNullOrWhiteSpace(placeholder) ? DefaultPromptPlaceholder : placeholder;
+        (int inputLeft, int inputTop, int placeholderLength) = WritePrompt(placeholder);
 
         var buffer = new List<char>();
         int cursorIndex = 0;
         int historyIndex = history.Count;
         string draftInput = string.Empty;
-        int inputLeft = Console.CursorLeft;
-        int inputTop = Console.CursorTop;
-        int renderedLength = 0;
+        int renderedLength = placeholderLength;
+        int inlineCompletionIndex = 0;
+        string inlineCompletionKey = string.Empty;
 
         while (true)
         {
@@ -116,6 +127,19 @@ internal static class PotatoConsole
             switch (key.Key)
             {
                 case ConsoleKey.Enter:
+                    NormalizeInlineCompletionCycle(buffer, cursorIndex, ref inlineCompletionKey, ref inlineCompletionIndex);
+                    if (TryGetInlineCompletion(buffer, cursorIndex, inlineCompletionIndex, out string completion))
+                    {
+                        buffer.InsertRange(cursorIndex, completion);
+                        cursorIndex += completion.Length;
+                        inlineCompletionIndex = 0;
+                        inlineCompletionKey = string.Empty;
+                        RedrawInputLine(buffer, cursorIndex, inputLeft, inputTop, placeholder, inlineCompletionIndex, ref renderedLength);
+                        break;
+                    }
+
+                    Console.WriteLine();
+                    WriteSeparator();
                     Console.WriteLine();
                     return new string(buffer.ToArray());
 
@@ -124,7 +148,8 @@ internal static class PotatoConsole
                     {
                         buffer.RemoveAt(cursorIndex - 1);
                         cursorIndex--;
-                        RedrawInputLine(buffer, cursorIndex, inputLeft, inputTop, ref renderedLength);
+                        NormalizeInlineCompletionCycle(buffer, cursorIndex, ref inlineCompletionKey, ref inlineCompletionIndex);
+                        RedrawInputLine(buffer, cursorIndex, inputLeft, inputTop, placeholder, inlineCompletionIndex, ref renderedLength);
                     }
                     break;
 
@@ -132,12 +157,17 @@ internal static class PotatoConsole
                     if (cursorIndex < buffer.Count)
                     {
                         buffer.RemoveAt(cursorIndex);
-                        RedrawInputLine(buffer, cursorIndex, inputLeft, inputTop, ref renderedLength);
+                        NormalizeInlineCompletionCycle(buffer, cursorIndex, ref inlineCompletionKey, ref inlineCompletionIndex);
+                        RedrawInputLine(buffer, cursorIndex, inputLeft, inputTop, placeholder, inlineCompletionIndex, ref renderedLength);
                     }
                     break;
 
                 case ConsoleKey.LeftArrow:
-                    if (cursorIndex > 0)
+                    if (TryCycleInlineCompletion(buffer, cursorIndex, -1, ref inlineCompletionKey, ref inlineCompletionIndex))
+                    {
+                        RedrawInputLine(buffer, cursorIndex, inputLeft, inputTop, placeholder, inlineCompletionIndex, ref renderedLength);
+                    }
+                    else if (cursorIndex > 0)
                     {
                         cursorIndex--;
                         MoveCursor(inputLeft, inputTop, cursorIndex);
@@ -145,7 +175,11 @@ internal static class PotatoConsole
                     break;
 
                 case ConsoleKey.RightArrow:
-                    if (cursorIndex < buffer.Count)
+                    if (TryCycleInlineCompletion(buffer, cursorIndex, 1, ref inlineCompletionKey, ref inlineCompletionIndex))
+                    {
+                        RedrawInputLine(buffer, cursorIndex, inputLeft, inputTop, placeholder, inlineCompletionIndex, ref renderedLength);
+                    }
+                    else if (cursorIndex < buffer.Count)
                     {
                         cursorIndex++;
                         MoveCursor(inputLeft, inputTop, cursorIndex);
@@ -172,7 +206,8 @@ internal static class PotatoConsole
 
                         historyIndex--;
                         ReplaceBuffer(buffer, history[historyIndex], ref cursorIndex);
-                        RedrawInputLine(buffer, cursorIndex, inputLeft, inputTop, ref renderedLength);
+                        NormalizeInlineCompletionCycle(buffer, cursorIndex, ref inlineCompletionKey, ref inlineCompletionIndex);
+                        RedrawInputLine(buffer, cursorIndex, inputLeft, inputTop, placeholder, inlineCompletionIndex, ref renderedLength);
                     }
                     break;
 
@@ -182,7 +217,8 @@ internal static class PotatoConsole
                         historyIndex++;
                         string value = historyIndex == history.Count ? draftInput : history[historyIndex];
                         ReplaceBuffer(buffer, value, ref cursorIndex);
-                        RedrawInputLine(buffer, cursorIndex, inputLeft, inputTop, ref renderedLength);
+                        NormalizeInlineCompletionCycle(buffer, cursorIndex, ref inlineCompletionKey, ref inlineCompletionIndex);
+                        RedrawInputLine(buffer, cursorIndex, inputLeft, inputTop, placeholder, inlineCompletionIndex, ref renderedLength);
                     }
                     break;
 
@@ -191,7 +227,8 @@ internal static class PotatoConsole
                     {
                         buffer.Insert(cursorIndex, key.KeyChar);
                         cursorIndex++;
-                        RedrawInputLine(buffer, cursorIndex, inputLeft, inputTop, ref renderedLength);
+                        NormalizeInlineCompletionCycle(buffer, cursorIndex, ref inlineCompletionKey, ref inlineCompletionIndex);
+                        RedrawInputLine(buffer, cursorIndex, inputLeft, inputTop, placeholder, inlineCompletionIndex, ref renderedLength);
                     }
                     break;
             }
@@ -293,9 +330,9 @@ internal static class PotatoConsole
     {
         Console.ForegroundColor = ConsoleColor.DarkGray;
         Console.WriteLine("Shortcuts:");
-        Console.WriteLine("  @path/to/file   Attach a text file to your next message");
+        Console.WriteLine("  @path/to/file   Attach a file; Left/Right cycle path completions");
         Console.WriteLine("  /model          Show model selection and switch models");
-        Console.WriteLine("  /cd [path]      Change the current working directory");
+        Console.WriteLine("  /cd path        Change directory; Left/Right cycle completions, Enter accepts");
         Console.WriteLine("  /ask question   Ask a side question without changing chat history");
         Console.WriteLine("  /transcript     Show the current conversation sent to the model");
         Console.WriteLine("  /abort          Cancel the current task and return to the main prompt");
@@ -608,6 +645,278 @@ internal static class PotatoConsole
         cursorIndex = buffer.Count;
     }
 
+    private static bool TryCycleInlineCompletion(
+        List<char> buffer,
+        int cursorIndex,
+        int delta,
+        ref string inlineCompletionKey,
+        ref int inlineCompletionIndex)
+    {
+        if (!TryGetInlineCompletionCandidates(buffer, cursorIndex, out string key, out List<string> completions) ||
+            completions.Count <= 1)
+        {
+            return false;
+        }
+
+        if (!string.Equals(inlineCompletionKey, key, StringComparison.Ordinal))
+        {
+            inlineCompletionKey = key;
+            inlineCompletionIndex = 0;
+        }
+
+        inlineCompletionIndex = Mod(inlineCompletionIndex + delta, completions.Count);
+        return true;
+    }
+
+    private static void NormalizeInlineCompletionCycle(
+        List<char> buffer,
+        int cursorIndex,
+        ref string inlineCompletionKey,
+        ref int inlineCompletionIndex)
+    {
+        if (!TryGetInlineCompletionCandidates(buffer, cursorIndex, out string key, out List<string> completions))
+        {
+            inlineCompletionKey = string.Empty;
+            inlineCompletionIndex = 0;
+            return;
+        }
+
+        if (!string.Equals(inlineCompletionKey, key, StringComparison.Ordinal))
+        {
+            inlineCompletionKey = key;
+            inlineCompletionIndex = 0;
+            return;
+        }
+
+        if (inlineCompletionIndex >= completions.Count)
+        {
+            inlineCompletionIndex = 0;
+        }
+    }
+
+    private static bool TryGetInlineCompletion(
+        List<char> buffer,
+        int cursorIndex,
+        int inlineCompletionIndex,
+        out string completion)
+    {
+        completion = string.Empty;
+        if (!TryGetInlineCompletionCandidates(buffer, cursorIndex, out _, out List<string> completions))
+        {
+            return false;
+        }
+
+        completion = completions[Mod(inlineCompletionIndex, completions.Count)];
+        return completion.Length > 0;
+    }
+
+    private static bool TryGetInlineCompletionCandidates(
+        List<char> buffer,
+        int cursorIndex,
+        out string key,
+        out List<string> completions)
+    {
+        key = string.Empty;
+        completions = [];
+        if (cursorIndex != buffer.Count)
+        {
+            return false;
+        }
+
+        string text = new(buffer.ToArray());
+        if (TryGetCdArgument(text, out int argumentStartIndex, out string argument))
+        {
+            if (!TryFindPathCompletions(argument, includeFiles: false, appendDirectorySeparator: false, out List<string> argumentCompletions))
+            {
+                return false;
+            }
+
+            key = text;
+            bool completeBareCommand = argumentStartIndex == text.Length && text.Equals("/cd", StringComparison.OrdinalIgnoreCase);
+            completions = argumentCompletions
+                .Select(value => completeBareCommand ? " " + value : value)
+                .Where(value => value.Length > 0)
+                .ToList();
+            return completions.Count > 0;
+        }
+
+        if (TryGetFileMentionArgument(text, out string mentionArgument))
+        {
+            if (!TryFindPathCompletions(mentionArgument, includeFiles: true, appendDirectorySeparator: true, out completions))
+            {
+                return false;
+            }
+
+            key = text;
+            return completions.Count > 0;
+        }
+
+        return false;
+    }
+
+    private static bool TryGetCdArgument(string text, out int argumentStartIndex, out string argument)
+    {
+        argumentStartIndex = 0;
+        argument = string.Empty;
+        if (!text.StartsWith("/cd", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        if (text.Length == 3)
+        {
+            argumentStartIndex = text.Length;
+            return true;
+        }
+
+        if (!char.IsWhiteSpace(text[3]))
+        {
+            return false;
+        }
+
+        argumentStartIndex = 4;
+        while (argumentStartIndex < text.Length && char.IsWhiteSpace(text[argumentStartIndex]))
+        {
+            argumentStartIndex++;
+        }
+
+        argument = text[argumentStartIndex..].Trim('"', '\'');
+        return true;
+    }
+
+    private static bool TryGetFileMentionArgument(string text, out string argument)
+    {
+        argument = string.Empty;
+        int tokenStart = text.LastIndexOfAny([' ', '\t', '\r', '\n']);
+        tokenStart = tokenStart < 0 ? 0 : tokenStart + 1;
+        if (tokenStart >= text.Length || text[tokenStart] != '@')
+        {
+            return false;
+        }
+
+        argument = text[(tokenStart + 1)..].Trim('"', '\'');
+        return true;
+    }
+
+    private static bool TryFindPathCompletions(
+        string argument,
+        bool includeFiles,
+        bool appendDirectorySeparator,
+        out List<string> completions)
+    {
+        completions = [];
+        string normalizedArgument = argument.Replace(Path.AltDirectorySeparatorChar, Path.DirectorySeparatorChar);
+        int separatorIndex = normalizedArgument.LastIndexOf(Path.DirectorySeparatorChar);
+        string baseArgument = separatorIndex >= 0 ? normalizedArgument[..(separatorIndex + 1)] : string.Empty;
+        string namePrefix = separatorIndex >= 0 ? normalizedArgument[(separatorIndex + 1)..] : normalizedArgument;
+
+        string baseDirectory;
+        try
+        {
+            baseDirectory = string.IsNullOrWhiteSpace(baseArgument)
+                ? Environment.CurrentDirectory
+                : PathResolver.ResolveMentionedPath(baseArgument) ?? Environment.CurrentDirectory;
+        }
+        catch
+        {
+            return false;
+        }
+
+        if (!Directory.Exists(baseDirectory))
+        {
+            return false;
+        }
+
+        var candidates = new List<PathCompletionCandidate>();
+        try
+        {
+            candidates.AddRange(Directory.EnumerateDirectories(baseDirectory)
+                .Select(path => new PathCompletionCandidate(Path.GetFileName(path), IsDirectory: true))
+                .Where(candidate => !string.IsNullOrWhiteSpace(candidate.Name)));
+
+            if (includeFiles)
+            {
+                candidates.AddRange(Directory.EnumerateFiles(baseDirectory)
+                    .Select(path => new PathCompletionCandidate(Path.GetFileName(path), IsDirectory: false))
+                    .Where(candidate => !string.IsNullOrWhiteSpace(candidate.Name)));
+            }
+        }
+        catch (Exception ex) when (ex is UnauthorizedAccessException or IOException)
+        {
+            return false;
+        }
+
+        if (namePrefix.StartsWith(".", StringComparison.Ordinal))
+        {
+            candidates.Insert(0, new PathCompletionCandidate("..", IsDirectory: true));
+        }
+
+        completions = candidates
+            .Where(candidate => candidate.Name is not null &&
+                                candidate.Name.StartsWith(namePrefix, StringComparison.OrdinalIgnoreCase) &&
+                                !string.Equals(candidate.Name, namePrefix, StringComparison.Ordinal))
+            .OrderByDescending(candidate => candidate.IsDirectory)
+            .ThenBy(candidate => candidate.Name, StringComparer.OrdinalIgnoreCase)
+            .Select(candidate =>
+            {
+                string value = candidate.Name![namePrefix.Length..];
+                return candidate.IsDirectory && appendDirectorySeparator
+                    ? value + Path.DirectorySeparatorChar
+                    : value;
+            })
+            .Where(value => value.Length > 0)
+            .ToList();
+
+        return completions.Count > 0;
+    }
+
+    private static void RedrawInputLine(
+        List<char> buffer,
+        int cursorIndex,
+        int inputLeft,
+        int inputTop,
+        string placeholder,
+        int inlineCompletionIndex,
+        ref int renderedLength)
+    {
+        string text = new(buffer.ToArray());
+        Console.SetCursorPosition(inputLeft, inputTop);
+        if (text.Length == 0)
+        {
+            Console.ForegroundColor = ConsoleColor.DarkGray;
+            Console.Write(placeholder);
+            Console.ResetColor();
+        }
+        else
+        {
+            Console.ResetColor();
+            Console.Write(text);
+            if (TryGetInlineCompletion(buffer, cursorIndex, inlineCompletionIndex, out string completion))
+            {
+                Console.ForegroundColor = ConsoleColor.DarkGray;
+                Console.Write(completion);
+                Console.ResetColor();
+            }
+        }
+
+        int currentLength = text.Length == 0
+            ? placeholder.Length
+            : text.Length + (TryGetInlineCompletion(buffer, cursorIndex, inlineCompletionIndex, out string displayedCompletion) ? displayedCompletion.Length : 0);
+        if (renderedLength > currentLength)
+        {
+            Console.Write(new string(' ', renderedLength - currentLength));
+        }
+
+        renderedLength = currentLength;
+        MoveCursor(inputLeft, inputTop, cursorIndex);
+    }
+
+    private static int Mod(int value, int divisor)
+    {
+        int result = value % divisor;
+        return result < 0 ? result + divisor : result;
+    }
+
     private static void RedrawInputLine(
         List<char> buffer,
         int cursorIndex,
@@ -634,6 +943,8 @@ internal static class PotatoConsole
         Console.SetCursorPosition(Math.Min(inputLeft + cursorIndex, maxLeft), inputTop);
     }
 
+    private sealed record PathCompletionCandidate(string? Name, bool IsDirectory);
+
     private sealed class ProgressSpinner : IDisposable
     {
         private static readonly char[] Frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
@@ -646,6 +957,7 @@ internal static class PotatoConsole
         private bool disposed;
         private string joke;
         private int renderedLength;
+        private int renderedLines;
 
         public ProgressSpinner(string message, object syncRoot, Func<string> nextJoke)
         {
@@ -717,43 +1029,75 @@ internal static class PotatoConsole
                 {
                     if (!paused && !disposed)
                     {
-                        if (ticksSinceJoke >= 12)
+                        if (ticksSinceJoke >= 35)
                         {
                             joke = nextJoke();
                             ticksSinceJoke = 0;
                         }
 
-                        string text = $"{Frames[frameIndex % Frames.Length]} {message} {joke}";
+                        string actionLine = $"{Frames[frameIndex % Frames.Length]} {message}";
+                        string jokeLine = $"  {joke}";
                         Console.ForegroundColor = ConsoleColor.DarkGray;
-                        Console.Write('\r');
-                        Console.Write(text);
-                        if (renderedLength > text.Length)
-                        {
-                            Console.Write(new string(' ', renderedLength - text.Length));
-                        }
-
-                        renderedLength = text.Length;
+                        MoveToProgressStart();
+                        Console.Write(actionLine);
+                        ClearLineRemainder(actionLine.Length);
+                        Console.WriteLine();
+                        Console.Write(jokeLine);
+                        ClearLineRemainder(jokeLine.Length);
+                        renderedLength = Math.Max(actionLine.Length, jokeLine.Length);
+                        renderedLines = 2;
                         Console.ResetColor();
                     }
                 }
 
                 frameIndex++;
                 ticksSinceJoke++;
-                await Task.Delay(250, cancellation.Token).ContinueWith(_ => { }, TaskScheduler.Default);
+                await Task.Delay(140, cancellation.Token).ContinueWith(_ => { }, TaskScheduler.Default);
             }
         }
 
         private void Clear()
         {
-            if (renderedLength <= 0)
+            if (renderedLines <= 0)
             {
                 return;
             }
 
-            Console.Write('\r');
-            Console.Write(new string(' ', renderedLength));
-            Console.Write('\r');
+            MoveToProgressStart();
+            for (int i = 0; i < renderedLines; i++)
+            {
+                Console.Write(new string(' ', renderedLength));
+                if (i < renderedLines - 1)
+                {
+                    Console.WriteLine();
+                }
+            }
+
+            MoveToProgressStart();
             renderedLength = 0;
+            renderedLines = 0;
+        }
+
+        private void MoveToProgressStart()
+        {
+            if (renderedLines <= 1)
+            {
+                Console.Write('\r');
+                return;
+            }
+
+            int targetTop = Math.Max(0, Console.CursorTop - renderedLines + 1);
+            Console.SetCursorPosition(0, targetTop);
+        }
+
+        private static void ClearLineRemainder(int usedLength)
+        {
+            int width = Console.WindowWidth > 0 ? Console.WindowWidth : 80;
+            int remaining = Math.Max(0, width - usedLength - 1);
+            if (remaining > 0)
+            {
+                Console.Write(new string(' ', remaining));
+            }
         }
     }
 

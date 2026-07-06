@@ -67,7 +67,7 @@ internal sealed partial class PotatoSession
         {
             while (true)
             {
-                string? userInput = PotatoConsole.ReadPromptInput(inputHistory);
+                string? userInput = PotatoConsole.ReadPromptInput(inputHistory, GetPromptPlaceholder());
 
                 if (string.IsNullOrWhiteSpace(userInput))
                 {
@@ -109,6 +109,21 @@ internal sealed partial class PotatoSession
         {
             inputHistory.Add(input);
         }
+    }
+
+    private string GetPromptPlaceholder()
+    {
+        if (currentState == AgentState.Specifying && latestSpecification is not null)
+        {
+            return "yes/ok to approve, or type requested changes";
+        }
+
+        if (currentState == AgentState.Approaching && latestApproach is not null)
+        {
+            return "execute/yes to start, or type requested changes";
+        }
+
+        return "Type your message or @path/to/file";
     }
 
     private async Task HandleUserInputAsync(string userInput, ChatOptions toolOptions)
@@ -307,6 +322,11 @@ internal sealed partial class PotatoSession
             {
                 if (await TryExecuteTextualActionAsync(responseText, cancellationToken))
                 {
+                    if (TryCompleteVerifiedDirectReplace(successfulEditsBeforeExecution))
+                    {
+                        return;
+                    }
+
                     continue;
                 }
 
@@ -324,6 +344,11 @@ internal sealed partial class PotatoSession
                     if (TryParseDirectReplaceFileContentRequest(latestUserRequest, out _, out _))
                     {
                         directReplaceFileFallbackAttempted = true;
+                    }
+
+                    if (TryCompleteVerifiedDirectReplace(successfulEditsBeforeExecution))
+                    {
+                        return;
                     }
 
                     continue;
@@ -1157,7 +1182,12 @@ internal sealed partial class PotatoSession
                 new(ChatRole.User, "Greet the user.")
             };
 
-            ChatResponse greeting = await currentClient.GetResponseAsync(greetingMessages, new ChatOptions());
+            ChatResponse greeting;
+            using (PotatoConsole.StartProgress("Loading welcome message..."))
+            {
+                greeting = await currentClient.GetResponseAsync(greetingMessages, new ChatOptions());
+            }
+
             PotatoConsole.WriteAgentResponse(greeting.Text);
         }
         catch (Exception ex)
