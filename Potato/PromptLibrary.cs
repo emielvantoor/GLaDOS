@@ -78,7 +78,7 @@ internal static class PromptLibrary
     {
         var builder = new StringBuilder();
         builder.AppendLine("Execution tool instructions for the ReAct loop:");
-        builder.AppendLine("The following tools are available in this CLI. Do not say a listed tool is unavailable.");
+        builder.AppendLine("The following tools are available in this CLI. Do not say a listed tool is unavailable merely because you cannot see it as a native model tool.");
         builder.AppendLine("Work in observe-act cycles: inspect the current state, call one targeted tool when needed, use the returned observation, then continue.");
         builder.AppendLine("When the approved task is complete, answer with FINAL: followed by a concise summary and any verification result.");
         builder.AppendLine("Do not claim success or describe repository facts unless the latest tool observations prove the work was done.");
@@ -88,7 +88,7 @@ internal static class PromptLibrary
         builder.AppendLine("When execution needs a tool, output ONLY this exact GLaDOS format and no other text:");
         builder.AppendLine("<tool_call>{\"name\":\"ToolName\",\"arguments\":{}}</tool_call>");
         builder.AppendLine("Do not ask the user to type execute during the ReAct loop. Execution has already been approved at the approach level.");
-        builder.AppendLine("If native tool calling fails, output the same tool action as textual <tool_call> JSON. Do not switch to shell for source edits.");
+        builder.AppendLine("If native tool calling fails or you cannot locate the native tool registry, output the same tool action as textual <tool_call> JSON. The CLI parses textual <tool_call> JSON and routes it to the registered tool. Do not switch to shell for source edits.");
         builder.AppendLine("Available tools:");
         builder.Append(BuildToolSummary(includeArguments: true));
 
@@ -100,12 +100,12 @@ internal static class PromptLibrary
         builder.AppendLine("Never copy placeholder argument values. Do not use paths like /full/path/to/file, /full/path/to/program.cs, path/to/file, or example commands.");
         builder.AppendLine("When reading a file from a directory listing, use the listed relative path. When reading an attached file, use the exact absolute path shown in the '--- begin file: ... ---' header.");
         builder.AppendLine("Do not print commands as prose. Do not wrap tool calls in Markdown fences. The CLI will show shell commands to the user for permission before running them.");
-        builder.Append("If a listed tool matches the task, emit the tool call. Do not ask the user for an alternative method.");
+        builder.Append("If a listed tool matches the task, emit the tool call. Do not ask the user for an alternative method. Lack of native tool visibility is not a blocker; use textual <tool_call> JSON.");
         return builder.ToString();
     }
 
     public static string SearchReplaceToolCallExample =>
-        "Use this exact textual tool-call shape if native tool calling is not produced: " +
+        "Use this exact textual tool-call shape if native tool calling is not produced or the native tool registry is not visible: " +
         "<tool_call>{\"name\":\"ApplySearchReplaceAsync\",\"arguments\":{\"filePath\":\"actual/path/from/observation\",\"search\":\"exact current text from ReadFileContent\",\"replace\":\"requested replacement text\"}}</tool_call>";
 
     private static string BuildToolSummary(bool includeArguments)
@@ -198,7 +198,7 @@ internal static class PromptLibrary
         builder.AppendLine($"Original request: {OneLine(latestUserRequest)}");
         builder.AppendLine($"Working directory: {workingDirectory}");
         builder.AppendLine($"Required current step: {OneLine(previousQuestion)}");
-        builder.AppendLine("ApplySearchReplaceAsync, CreateFileAsync, and ApplyDiffPatchAsync are registered and available. Do not claim they are unavailable.");
+        builder.AppendLine("ApplySearchReplaceAsync, CreateFileAsync, and ApplyDiffPatchAsync are registered and available in the CLI. Do not claim they are unavailable merely because native model tool calling did not expose them.");
         builder.AppendLine("Execution is already approved inside the ReAct loop. Do not ask the user to type execute.");
         builder.Append("Now respond with exactly one registered tool call. For source edits, use ApplySearchReplaceAsync with exact SEARCH and REPLACE text. ");
         builder.Append(SearchReplaceToolCallExample);
