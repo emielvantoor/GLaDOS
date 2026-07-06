@@ -20,6 +20,7 @@ public static class OpenAiEndpoints
     private static readonly SemaphoreSlim _llmLock = new(1, 1);
     private static readonly Encoding SseEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
     private const string PotatoProtocolName = "GLaDOS";
+    private const string QwenProtocolName = "Qwen";
 
     public static void MapOpenAiEndpoints(this IEndpointRouteBuilder app)
     {
@@ -407,14 +408,32 @@ public static class OpenAiEndpoints
         ChatCompletionRequest request,
         IReadOnlyList<AgentToolDefinition> domainTools)
     {
-        if (!string.IsNullOrWhiteSpace(request.Protocol))
+        if (LooksLikeQwenAgentRequest(request))
         {
-            return request.Protocol;
+            return QwenProtocolName;
         }
 
         return LooksLikePotatoRequest(request, domainTools)
             ? PotatoProtocolName
             : null;
+    }
+
+    private static bool LooksLikeQwenAgentRequest(ChatCompletionRequest request)
+    {
+        return ContainsQwenAgentIdentifier(request.Model) ||
+               request.Messages.Any(message =>
+                   string.Equals(message.Role, "system", StringComparison.OrdinalIgnoreCase) &&
+                   ContainsQwenAgentIdentifier(message.Content));
+    }
+
+    private static bool ContainsQwenAgentIdentifier(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return false;
+        }
+
+        return value.Contains("You are Qwen Code", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool LooksLikePotatoRequest(
