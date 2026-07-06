@@ -21,6 +21,9 @@ namespace GLaDOS.Models
         [JsonPropertyName("tool_choice")]
         public object? ToolChoice { get; set; }
 
+        [JsonPropertyName("protocol")]
+        public string? Protocol { get; set; }
+
         // NIEUW: Temperature setting for controlling randomness
         [JsonPropertyName("temperature")]
         public float? Temperature { get; set; }

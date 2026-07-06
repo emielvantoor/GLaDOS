@@ -13,7 +13,10 @@ public static class AddCoreServicesBootstrapper
     public static void AddCoreServices(this IServiceCollection services)
     {
         services.AddSingleton<IModelManager, ModelManager>();
-        services.AddSingleton<IAgentProtocol, QwenProtocol>();
+        services.AddSingleton<QwenProtocol>();
+        services.AddSingleton<GLaDOSProtocol>();
+        services.AddSingleton<IAgentProtocol>(sp => sp.GetRequiredService<QwenProtocol>());
+        services.AddSingleton<IAgentProtocol>(sp => sp.GetRequiredService<GLaDOSProtocol>());
         services.AddSingleton<ToolRegistry>();
         services.AddSingleton<ToolRouter>();
         services.AddSingleton<ToolCallAdapterPipeline>();

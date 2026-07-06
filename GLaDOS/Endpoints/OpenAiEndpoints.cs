@@ -19,6 +19,7 @@ public static class OpenAiEndpoints
 {
     private static readonly SemaphoreSlim _llmLock = new(1, 1);
     private static readonly Encoding SseEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+    private const string PotatoProtocolName = "GLaDOS";
 
     public static void MapOpenAiEndpoints(this IEndpointRouteBuilder app)
     {
@@ -125,13 +126,14 @@ public static class OpenAiEndpoints
         // 4. Transform to internal domain architecture
         var domainMessages = request.Messages.Select(message => message.ToDomainModel()).ToList();
         var domainTools = request.Tools?.Select(tool => tool.ToDomainModel()).ToList() ?? [];
+        var protocolName = SelectProtocolName(request, domainTools);
 
         var agentResultStream = agent.RunAsync(model, domainMessages, new ChatOptions
         {
             Temperature = request.Temperature,
             ContextSize = request.ContextSize,
             MaxTokenLength = request.MaxCompletionTokens ?? request.MaxTokenLength
-        }, domainTools, token);
+        }, domainTools, protocolName, token);
 
         var serializerOptions = new JsonSerializerOptions
         {
@@ -399,6 +401,37 @@ public static class OpenAiEndpoints
     {
         return !string.IsNullOrWhiteSpace(text)
                && text.TrimStart().StartsWith("[Systeem:", StringComparison.Ordinal);
+    }
+
+    private static string? SelectProtocolName(
+        ChatCompletionRequest request,
+        IReadOnlyList<AgentToolDefinition> domainTools)
+    {
+        if (!string.IsNullOrWhiteSpace(request.Protocol))
+        {
+            return request.Protocol;
+        }
+
+        return LooksLikePotatoRequest(request, domainTools)
+            ? PotatoProtocolName
+            : null;
+    }
+
+    private static bool LooksLikePotatoRequest(
+        ChatCompletionRequest request,
+        IReadOnlyList<AgentToolDefinition> domainTools)
+    {
+        if (request.Messages.Any(message =>
+                string.Equals(message.Role, "system", StringComparison.OrdinalIgnoreCase) &&
+                message.Content?.Contains("You are PotatOS", StringComparison.Ordinal) == true))
+        {
+            return true;
+        }
+
+        return domainTools.Any(tool =>
+            string.Equals(tool.Name, "ApplySearchReplaceAsync", StringComparison.Ordinal) ||
+            string.Equals(tool.Name, "CreateFileAsync", StringComparison.Ordinal) ||
+            string.Equals(tool.Name, "ApplyDiffPatchAsync", StringComparison.Ordinal));
     }
 
     private sealed record ToolExecutionRequest(string Name, JsonObject? Arguments);
