@@ -120,7 +120,71 @@ internal class AgentTools(ReActMemory memory, Func<IChatClient> getSideQuestionC
             builder.AppendLine("(empty)");
         }
 
-        return StoreAndReturn($"{nameof(ListFiles)} {resolvedPath}", builder.ToString());
+        string mode = recursive ? "recursive" : "top-level";
+        return StoreAndReturn($"{nameof(ListFiles)} {resolvedPath} ({mode}, maxEntries={maxEntries})", builder.ToString());
+    }
+
+    [Description("Lists project and solution manifest files in a repository without dumping the whole directory tree. Hidden folders and common build/dependency folders are skipped. Use this before documenting all projects in a repository.")]
+    public string ListProjectFiles(
+        [Description("Optional directory path. Absolute paths are accepted; relative paths resolve from the current working directory. Leave empty to inspect the current working directory.")] string? directoryPath = null)
+    {
+        CurrentCancellationToken.ThrowIfCancellationRequested();
+        ToolInvocationCount++;
+        string? resolvedPath = ResolveReadableDirectoryPath(directoryPath);
+        WriteToolCall(nameof(ListProjectFiles),
+        [
+            ("directoryPath", directoryPath ?? Environment.CurrentDirectory),
+            ("resolvedPath", resolvedPath ?? "(unresolved)")
+        ]);
+
+        if (resolvedPath is null || !Directory.Exists(resolvedPath))
+        {
+            return StoreAndReturn(nameof(ListProjectFiles), $"Error: Directory '{directoryPath}' does not exist. Current working directory: {Environment.CurrentDirectory}");
+        }
+
+        FileInfo[] projectFiles = EnumerateSearchFiles(resolvedPath, recursive: true)
+            .Where(IsProjectManifestFile)
+            .OrderBy(file => file.FullName, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        var builder = new StringBuilder();
+        builder.AppendLine($"Directory: {resolvedPath}");
+        builder.AppendLine("Project manifests:");
+
+        if (projectFiles.Length == 0)
+        {
+            builder.AppendLine("(none found)");
+        }
+        else
+        {
+            foreach (FileInfo file in projectFiles)
+            {
+                string relativePath = Path.GetRelativePath(resolvedPath, file.FullName);
+                builder.AppendLine($"[{ProjectManifestKind(file)}] {relativePath}");
+            }
+        }
+
+        string[] projectDirectories = projectFiles
+            .Select(file => Path.GetRelativePath(resolvedPath, file.DirectoryName ?? resolvedPath))
+            .Select(path => path == "." ? Path.GetFileName(resolvedPath) : path)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        builder.AppendLine("Project directories:");
+        if (projectDirectories.Length == 0)
+        {
+            builder.AppendLine("(none found)");
+        }
+        else
+        {
+            foreach (string projectDirectory in projectDirectories)
+            {
+                builder.AppendLine($"[dir] {projectDirectory}/");
+            }
+        }
+
+        return StoreAndReturn($"{nameof(ListProjectFiles)} {resolvedPath}", builder.ToString());
     }
 
     [Description("Searches inside text/code file contents for one or more terms. Use this when you know text, symbols, or code snippets to locate; it does not search by file name. Provide multiple terms separated by '|'.")]
@@ -240,7 +304,7 @@ internal class AgentTools(ReActMemory memory, Func<IChatClient> getSideQuestionC
             builder.AppendLine($"... truncated after {matchCount} match(es) or {MaxSearchFiles} scanned file(s)");
         }
 
-        return StoreAndReturn($"{nameof(SearchFileContents)} {resolvedPath}", builder.ToString());
+        return StoreAndReturn($"{nameof(SearchFileContents)} {resolvedPath} ({string.Join(" | ", terms)})", builder.ToString());
     }
 
     [Description("Searches for non-hidden files and directories by name, extension, or relative path. Hidden folders and common build/dependency folders are skipped. Use this when you know part of a file/folder name or an extension; it does not search file contents. Provide multiple terms separated by '|'.")]
@@ -338,7 +402,7 @@ internal class AgentTools(ReActMemory memory, Func<IChatClient> getSideQuestionC
             builder.AppendLine($"... truncated after {matchCount} match(es) or {MaxSearchFiles} scanned entries");
         }
 
-        return StoreAndReturn($"{nameof(SearchFiles)} {resolvedPath}", builder.ToString());
+        return StoreAndReturn($"{nameof(SearchFiles)} {resolvedPath} ({string.Join(" | ", terms)})", builder.ToString());
     }
 
     [Description("Summarizes a text file's visible contents and likely purpose without returning the full file. Use this to choose which files need deeper reading.")]
@@ -414,7 +478,7 @@ internal class AgentTools(ReActMemory memory, Func<IChatClient> getSideQuestionC
         return StoreAndReturn($"{nameof(SummarizeFilePurpose)} {resolvedPath}", builder.ToString());
     }
 
-    [Description("Gets collected ReAct context by index. Use index 'list' to list available items with descriptions, 'latest' for the newest item, or a numeric index. Set full to true only when exact full content is needed.")]
+    [Description("Gets collected ReAct context by index. Use index 'list' to list available items with descriptions, 'latest' for the newest item, or a numeric index. Use this to retrieve earlier ReadFileContent or SummarizeFilePurpose results for a file instead of reading or summarizing that same unchanged file again. Set full to true only when exact full content is needed. After a file has been edited, earlier collected context for that file is stale and the file must be read or summarized again.")]
     public string GetCollectedContext(
         [Description("Use 'list', 'latest', or a numeric index from the collected context list.")] string index = "list",
         [Description("Whether to return full stored content instead of a summary when available.")] bool full = false)
@@ -950,6 +1014,46 @@ internal class AgentTools(ReActMemory memory, Func<IChatClient> getSideQuestionC
         file.Length <= MaxSearchFileBytes &&
         !SkippedSearchExtensions.Contains(file.Extension);
 
+    private static bool IsProjectManifestFile(FileInfo file)
+    {
+        string fileName = file.Name;
+        string extension = file.Extension;
+
+        return extension.Equals(".sln", StringComparison.OrdinalIgnoreCase) ||
+               extension.Equals(".csproj", StringComparison.OrdinalIgnoreCase) ||
+               extension.Equals(".fsproj", StringComparison.OrdinalIgnoreCase) ||
+               extension.Equals(".vbproj", StringComparison.OrdinalIgnoreCase) ||
+               fileName.Equals("package.json", StringComparison.OrdinalIgnoreCase) ||
+               fileName.Equals("pyproject.toml", StringComparison.OrdinalIgnoreCase) ||
+               fileName.Equals("Cargo.toml", StringComparison.OrdinalIgnoreCase) ||
+               fileName.Equals("go.mod", StringComparison.OrdinalIgnoreCase) ||
+               fileName.Equals("pom.xml", StringComparison.OrdinalIgnoreCase) ||
+               fileName.Equals("build.gradle", StringComparison.OrdinalIgnoreCase) ||
+               fileName.Equals("build.gradle.kts", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string ProjectManifestKind(FileInfo file)
+    {
+        string fileName = file.Name;
+        string extension = file.Extension.ToLowerInvariant();
+
+        return extension switch
+        {
+            ".sln" => "solution",
+            ".csproj" => "csharp-project",
+            ".fsproj" => "fsharp-project",
+            ".vbproj" => "vb-project",
+            _ when fileName.Equals("package.json", StringComparison.OrdinalIgnoreCase) => "node-project",
+            _ when fileName.Equals("pyproject.toml", StringComparison.OrdinalIgnoreCase) => "python-project",
+            _ when fileName.Equals("Cargo.toml", StringComparison.OrdinalIgnoreCase) => "rust-project",
+            _ when fileName.Equals("go.mod", StringComparison.OrdinalIgnoreCase) => "go-module",
+            _ when fileName.Equals("pom.xml", StringComparison.OrdinalIgnoreCase) => "maven-project",
+            _ when fileName.Equals("build.gradle", StringComparison.OrdinalIgnoreCase) ||
+                   fileName.Equals("build.gradle.kts", StringComparison.OrdinalIgnoreCase) => "gradle-project",
+            _ => "project"
+        };
+    }
+
     private static string[] ParseSearchTerms(string? searchTerms) =>
         (searchTerms ?? string.Empty)
         .Split('|', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
@@ -1168,11 +1272,18 @@ internal class AgentTools(ReActMemory memory, Func<IChatClient> getSideQuestionC
         string displayPath = string.IsNullOrWhiteSpace(path) || path == "(unresolved)"
             ? string.Empty
             : $" {PathResolver.FormatPathForDisplay(path)}";
+        string query = parameters.FirstOrDefault(parameter =>
+            parameter.Name.Equals("searchTerms", StringComparison.OrdinalIgnoreCase) ||
+            parameter.Name.Equals("query", StringComparison.OrdinalIgnoreCase)).Value;
+        string displayQuery = string.IsNullOrWhiteSpace(query)
+            ? string.Empty
+            : $" query: {Truncate(query, 120)}";
 
         string label = toolName switch
         {
             nameof(ReadFileContent) => "Read file",
             nameof(ListFiles) => "List files",
+            nameof(ListProjectFiles) => "List project files",
             nameof(SearchFiles) => "Search files",
             nameof(SearchFileContents) => "Search file contents",
             nameof(SummarizeFilePurpose) => "Summarize file",
@@ -1190,7 +1301,7 @@ internal class AgentTools(ReActMemory memory, Func<IChatClient> getSideQuestionC
         string prefix = waitsForResult ? "?" : "✓";
 
         Console.ForegroundColor = waitsForResult ? ConsoleColor.DarkGray : ConsoleColor.Green;
-        Console.WriteLine($"{prefix} {label}{displayPath}");
+        Console.WriteLine($"{prefix} {label}{displayPath}{displayQuery}");
         Console.ResetColor();
     }
 

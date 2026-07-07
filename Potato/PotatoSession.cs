@@ -7,6 +7,7 @@ internal sealed partial class PotatoSession
 {
     private const int MaxReActIterations = 12;
     private const int MaxToolCallsPerIteration = 8;
+    private const int MaxConsecutiveInvalidReActResponses = 2;
 
     private readonly Uri gladosEndpoint;
     private readonly GladosChatClientFactory clientFactory;
@@ -248,24 +249,31 @@ internal sealed partial class PotatoSession
         }
     }
 
-    private ChatOptions CreateToolOptions()
+    private ChatOptions CreateToolOptions(bool includeEditTools = true)
     {
+        List<AITool> tools =
+        [
+            AIFunctionFactory.Create(agentTools.GetCurrentTime),
+            AIFunctionFactory.Create(agentTools.ReadFileContent),
+            AIFunctionFactory.Create(agentTools.ListFiles),
+            AIFunctionFactory.Create(agentTools.ListProjectFiles),
+            AIFunctionFactory.Create(agentTools.SearchFiles),
+            AIFunctionFactory.Create(agentTools.SearchFileContents),
+            AIFunctionFactory.Create(agentTools.SummarizeFilePurpose),
+            AIFunctionFactory.Create(agentTools.GetCollectedContext),
+            AIFunctionFactory.Create(agentTools.ExecuteShellCommandAsync)
+        ];
+
+        if (includeEditTools)
+        {
+            tools.Add(AIFunctionFactory.Create(agentTools.ApplySearchReplaceAsync));
+            tools.Add(AIFunctionFactory.Create(agentTools.CreateFileAsync));
+            tools.Add(AIFunctionFactory.Create(agentTools.ApplyDiffPatchAsync));
+        }
+
         return new ChatOptions
         {
-            Tools =
-            [
-                AIFunctionFactory.Create(agentTools.GetCurrentTime),
-                AIFunctionFactory.Create(agentTools.ReadFileContent),
-                AIFunctionFactory.Create(agentTools.ListFiles),
-                AIFunctionFactory.Create(agentTools.SearchFiles),
-                AIFunctionFactory.Create(agentTools.SearchFileContents),
-                AIFunctionFactory.Create(agentTools.SummarizeFilePurpose),
-                AIFunctionFactory.Create(agentTools.GetCollectedContext),
-                AIFunctionFactory.Create(agentTools.ApplySearchReplaceAsync),
-                AIFunctionFactory.Create(agentTools.CreateFileAsync),
-                AIFunctionFactory.Create(agentTools.ApplyDiffPatchAsync),
-                AIFunctionFactory.Create(agentTools.ExecuteShellCommandAsync)
-            ]
+            Tools = tools
         };
     }
 
@@ -277,12 +285,20 @@ internal sealed partial class PotatoSession
         };
     }
 
+    private ChatOptions CreateCurrentReActOptions(ChatOptions toolOptions)
+    {
+        return reActSubtaskTracker.CurrentAllowsEditTools()
+            ? toolOptions
+            : CreateToolOptions(includeEditTools: false);
+    }
+
     private async Task RunReActLoopAsync(ChatOptions toolOptions, CancellationToken cancellationToken)
     {
         reActSubtaskTracker.LoadFromApproach(latestApproach);
         int successfulEditsBeforeExecution = agentTools.SuccessfulEditCount;
         bool directCreateFileFallbackAttempted = false;
         bool directReplaceFileFallbackAttempted = false;
+        int consecutiveInvalidReActResponses = 0;
 
         for (int iteration = 1; iteration <= MaxReActIterations; iteration++)
         {
@@ -293,10 +309,18 @@ internal sealed partial class PotatoSession
             int memoryItemsBeforeToolCalls = reActMemory.Count;
             PotatoConsole.WriteStatus($"ReAct iteration {iteration}/{MaxReActIterations} - subtask: {currentSubtask}");
 
+            if (await EnsureProjectInventoryBeforeEditsAsync(cancellationToken))
+            {
+                continue;
+            }
+
             ChatResponse response;
             using (PotatoConsole.StartProgress($"ReAct iteration {iteration}/{MaxReActIterations} - {currentSubtask}..."))
             {
-                response = await currentClient.GetResponseAsync(chatHistory, toolOptions, cancellationToken);
+                response = await currentClient.GetResponseAsync(
+                    chatHistory,
+                    CreateCurrentReActOptions(toolOptions),
+                    cancellationToken);
             }
 
             string responseText = response.Text.Trim();
@@ -335,11 +359,7 @@ internal sealed partial class PotatoSession
             {
                 if (await TryExecuteTextualActionAsync(responseText, cancellationToken))
                 {
-                    if (TryCompleteVerifiedDirectReplace(successfulEditsBeforeExecution))
-                    {
-                        return;
-                    }
-
+                    consecutiveInvalidReActResponses = 0;
                     continue;
                 }
 
@@ -349,6 +369,7 @@ internal sealed partial class PotatoSession
                         directReplaceFileFallbackAttempted,
                         cancellationToken))
                 {
+                    consecutiveInvalidReActResponses = 0;
                     if (TryParseDirectCreateFileRequest(latestUserRequest, out _, out _))
                     {
                         directCreateFileFallbackAttempted = true;
@@ -359,9 +380,17 @@ internal sealed partial class PotatoSession
                         directReplaceFileFallbackAttempted = true;
                     }
 
-                    if (TryCompleteVerifiedDirectReplace(successfulEditsBeforeExecution))
+                    continue;
+                }
+
+                consecutiveInvalidReActResponses++;
+                ReActFallbackResult recoveryResult =
+                    await TryExecuteGenericReActFallbackAsync(responseText, consecutiveInvalidReActResponses, cancellationToken);
+                if (recoveryResult != ReActFallbackResult.None)
+                {
+                    if (recoveryResult == ReActFallbackResult.ExecutedTool)
                     {
-                        return;
+                        consecutiveInvalidReActResponses = 0;
                     }
 
                     continue;
@@ -369,10 +398,20 @@ internal sealed partial class PotatoSession
 
                 if (LooksLikeUnavailableToolClaim(responseText) || LooksLikeShellEditFallbackClaim(responseText))
                 {
-                    chatHistory.Add(new ChatMessage(
-                        ChatRole.User,
-                        "Correction: ApplySearchReplaceAsync, CreateFileAsync, and ApplyDiffPatchAsync are available in the CLI. Lack of native model tool visibility is not proof that a CLI tool is unavailable; use textual <tool_call> JSON instead. If you still believe a listed tool is unavailable, name the exact tool and the concrete observation proving it, then continue with one registered textual tool call. Do not use ExecuteShellCommandAsync or manual editor instructions for source edits. The next response must be exactly one registered tool call, preferably ApplySearchReplaceAsync with exact SEARCH and REPLACE text copied from the latest file content, or CreateFileAsync for a new file. " +
-                        PromptLibrary.SearchReplaceToolCallExample));
+                    if (consecutiveInvalidReActResponses >= MaxConsecutiveInvalidReActResponses)
+                    {
+                        chatHistory.Add(new ChatMessage(
+                            ChatRole.User,
+                            "The previous response repeated a false tool-unavailable or manual-edit claim. Continue with exactly one registered textual <tool_call> JSON. Do not include prose. The tool list in the system message is authoritative."));
+                    }
+                    else
+                    {
+                        chatHistory.Add(new ChatMessage(
+                            ChatRole.User,
+                            "Correction: ApplySearchReplaceAsync, CreateFileAsync, and ApplyDiffPatchAsync are available in the CLI. Lack of native model tool visibility is not proof that a CLI tool is unavailable; use textual <tool_call> JSON instead. If you still believe a listed tool is unavailable, name the exact tool and the concrete observation proving it, then continue with one registered textual tool call. Do not use ExecuteShellCommandAsync or manual editor instructions for source edits. The next response must be exactly one registered tool call, preferably ApplySearchReplaceAsync with exact SEARCH and REPLACE text copied from the latest file content, or CreateFileAsync for a new file. " +
+                            PromptLibrary.SearchReplaceToolCallExample));
+                    }
+
                     continue;
                 }
 
@@ -405,6 +444,7 @@ internal sealed partial class PotatoSession
 
             if (toolCallsThisIteration > MaxToolCallsPerIteration)
             {
+                consecutiveInvalidReActResponses = 0;
                 chatHistory.Add(new ChatMessage(
                     ChatRole.User,
                     $"You used {toolCallsThisIteration} tools in the previous iteration. Finish with FINAL: if the task is complete, otherwise continue with one targeted next action."));
@@ -421,11 +461,7 @@ internal sealed partial class PotatoSession
                     PromptLibrary.SearchReplaceToolCallExample;
             }
 
-            if (TryCompleteVerifiedDirectReplace(successfulEditsBeforeExecution))
-            {
-                return;
-            }
-
+            consecutiveInvalidReActResponses = 0;
             reActSubtaskTracker.UpdateFromObservation("native tool call", latestObservation);
             chatHistory.Add(new ChatMessage(
                 ChatRole.User,
@@ -443,30 +479,6 @@ internal sealed partial class PotatoSession
     private bool RequiresSuccessfulEditBeforeFinal(int successfulEditsBeforeExecution) =>
         ApprovalPolicy.IsProjectChangeRequest(latestUserRequest) &&
         agentTools.SuccessfulEditCount <= successfulEditsBeforeExecution;
-
-    private bool TryCompleteVerifiedDirectReplace(int successfulEditsBeforeExecution)
-    {
-        if (agentTools.SuccessfulEditCount <= successfulEditsBeforeExecution ||
-            !TryParseDirectReplaceFileContentRequest(latestUserRequest, out string filePath, out string expectedContent))
-        {
-            return false;
-        }
-
-        string resolvedPath = ResolveUserFilePath(filePath);
-        if (!File.Exists(resolvedPath))
-        {
-            return false;
-        }
-
-        string currentContent = File.ReadAllText(resolvedPath);
-        if (!string.Equals(currentContent, expectedContent, StringComparison.Ordinal))
-        {
-            return false;
-        }
-
-        PotatoConsole.WriteAgentResponse($"File content updated and verified: {PathResolver.FormatPathForDisplay(resolvedPath)}");
-        return true;
-    }
 
     private static bool IsFinalResponse(string responseText) =>
         FinalMarkerRegex().IsMatch(responseText);
@@ -548,6 +560,16 @@ internal sealed partial class PotatoSession
             return false;
         }
 
+        if (IsEditToolCall(toolCall.Name) &&
+            !reActSubtaskTracker.CurrentAllowsEditTools())
+        {
+            string currentSubtask = reActSubtaskTracker.CurrentDisplayName();
+            chatHistory.Add(new ChatMessage(
+                ChatRole.User,
+                $"Rejected {toolCall.Name}: the current planned subtask is '{currentSubtask}', which is not an edit/write subtask. Continue the approved approach in order. Finish the current discovery, inspection, preparation, or verification subtask before using ApplySearchReplaceAsync, CreateFileAsync, or ApplyDiffPatchAsync."));
+            return true;
+        }
+
         PotatoConsole.WriteStatus($"Interpreting textual action as tool call: {toolCall.Name}");
         string result = await ExecuteTextualToolCallAsync(toolCall, cancellationToken);
         reActSubtaskTracker.UpdateFromObservation(toolCall.Name, result);
@@ -575,6 +597,11 @@ internal sealed partial class PotatoSession
         if (!directReplaceFileFallbackAttempted &&
             TryParseDirectReplaceFileContentRequest(latestUserRequest, out string replaceFilePath, out string replacementContent))
         {
+            if (!reActSubtaskTracker.CurrentAllowsEditTools())
+            {
+                return false;
+            }
+
             string resolvedPath = ResolveUserFilePath(replaceFilePath);
             if (!File.Exists(resolvedPath))
             {
@@ -604,6 +631,11 @@ internal sealed partial class PotatoSession
         if (!directCreateFileFallbackAttempted &&
             TryParseDirectCreateFileRequest(latestUserRequest, out string filePath, out string content))
         {
+            if (!reActSubtaskTracker.CurrentAllowsEditTools())
+            {
+                return false;
+            }
+
             PotatoConsole.WriteStatus("Model did not call CreateFileAsync for a direct file creation request; running deterministic file creation fallback...");
             string createResult = await agentTools.CreateFileAsync(filePath, content);
             reActSubtaskTracker.UpdateFromObservation(nameof(AgentTools.CreateFileAsync), createResult);
@@ -629,9 +661,120 @@ internal sealed partial class PotatoSession
             return false;
         }
 
-        PotatoConsole.WriteStatus("Model did not choose the first project inspection action; running deterministic recursive directory listing fallback...");
-        string result = agentTools.ListFiles(Environment.CurrentDirectory, recursive: true, maxEntries: 500);
-        reActSubtaskTracker.UpdateFromObservation(nameof(AgentTools.ListFiles), result);
+        PotatoConsole.WriteStatus("Model did not choose the first project inspection action; running deterministic project inventory fallback...");
+        string result = agentTools.ListProjectFiles(Environment.CurrentDirectory);
+        reActSubtaskTracker.UpdateFromObservation(nameof(AgentTools.ListProjectFiles), result);
+        using (PotatoConsole.StartProgress("Summarizing context..."))
+        {
+            await reActMemory.SummarizeLargeUnsummarizedItemsAsync(currentOpenAiClient, cancellationToken);
+        }
+
+        chatHistory.Add(new ChatMessage(
+            ChatRole.User,
+            PromptLibrary.NextStepAfterObservationMessage(
+                    latestUserRequest ?? string.Empty,
+                    Environment.CurrentDirectory,
+                    reActSubtaskTracker.BuildPromptContext(),
+                    nameof(AgentTools.ListProjectFiles),
+                    result)));
+        return true;
+    }
+
+    private async Task<ReActFallbackResult> TryExecuteGenericReActFallbackAsync(
+        string responseText,
+        int consecutiveInvalidReActResponses,
+        CancellationToken cancellationToken)
+    {
+        if (TryFindRequestedOutputFilePath(out string outputFilePath) &&
+            TryExtractProposedFileContent(responseText, out string proposedContent))
+        {
+            if (!reActSubtaskTracker.CurrentAllowsEditTools())
+            {
+                return ReActFallbackResult.None;
+            }
+
+            string resolvedPath = ResolveUserFilePath(outputFilePath);
+            string result;
+            string observationSource;
+            if (File.Exists(resolvedPath))
+            {
+                PotatoConsole.WriteStatus($"Model returned requested file content as prose; applying it through ApplySearchReplaceAsync for {PathResolver.FormatPathForDisplay(resolvedPath)}...");
+                string currentContent = await File.ReadAllTextAsync(resolvedPath, cancellationToken);
+                result = await agentTools.ApplySearchReplaceAsync(resolvedPath, currentContent, proposedContent);
+                observationSource = nameof(AgentTools.ApplySearchReplaceAsync);
+            }
+            else
+            {
+                PotatoConsole.WriteStatus($"Model returned requested file content as prose; creating {PathResolver.FormatPathForDisplay(resolvedPath)} through CreateFileAsync...");
+                result = await agentTools.CreateFileAsync(resolvedPath, proposedContent);
+                observationSource = nameof(AgentTools.CreateFileAsync);
+            }
+
+            await AddToolObservationAndContinueAsync(observationSource, result, cancellationToken);
+            return ReActFallbackResult.ExecutedTool;
+        }
+
+        if (!ShouldStartWithProjectInspection(GetExecutionIntentText()))
+        {
+            return ReActFallbackResult.None;
+        }
+
+        string collectedContextList = reActMemory.Get("list");
+        if (!HasCollectedSource(collectedContextList, nameof(AgentTools.ListProjectFiles)))
+        {
+            PotatoConsole.WriteStatus("Model did not gather project inventory; running deterministic project inventory...");
+            string result = agentTools.ListProjectFiles(Environment.CurrentDirectory);
+            await AddToolObservationAndContinueAsync(nameof(AgentTools.ListProjectFiles), result, cancellationToken);
+            return ReActFallbackResult.ExecutedTool;
+        }
+
+        if (!HasCollectedSource(collectedContextList, nameof(AgentTools.ListFiles)))
+        {
+            PotatoConsole.WriteStatus("Model did not gather project structure; running deterministic top-level project listing...");
+            string result = agentTools.ListFiles(Environment.CurrentDirectory, recursive: false, maxEntries: 500);
+            await AddToolObservationAndContinueAsync(nameof(AgentTools.ListFiles), result, cancellationToken);
+            return ReActFallbackResult.ExecutedTool;
+        }
+
+        if (!HasCollectedSource(collectedContextList, nameof(AgentTools.SearchFiles)))
+        {
+            PotatoConsole.WriteStatus("Model did not search project files; running deterministic project file search...");
+            string result = agentTools.SearchFiles(
+                BuildProjectDiscoverySearchTerms(),
+                Environment.CurrentDirectory,
+                recursive: true,
+                matchCase: false,
+                maxMatches: 300);
+            await AddToolObservationAndContinueAsync(nameof(AgentTools.SearchFiles), result, cancellationToken);
+            return ReActFallbackResult.ExecutedTool;
+        }
+
+        string? summaryTarget = FindNextRepresentativeSummaryTarget(collectedContextList);
+        if (summaryTarget is not null)
+        {
+            PotatoConsole.WriteStatus($"Model did not summarize representative project files; summarizing {summaryTarget}...");
+            string result = await agentTools.SummarizeFilePurpose(summaryTarget);
+            await AddToolObservationAndContinueAsync(nameof(AgentTools.SummarizeFilePurpose), result, cancellationToken);
+            return ReActFallbackResult.ExecutedTool;
+        }
+
+        if (consecutiveInvalidReActResponses >= MaxConsecutiveInvalidReActResponses)
+        {
+            chatHistory.Add(new ChatMessage(
+                ChatRole.User,
+                "You have enough tool-backed context for the current subtask. The next response must be exactly one registered textual <tool_call> JSON for the next required action, or FINAL: only if the approved task is complete and verified. Do not include prose, markdown fences, approval questions, manual copy instructions, or tool-unavailable claims."));
+            return ReActFallbackResult.Prompted;
+        }
+
+        return ReActFallbackResult.None;
+    }
+
+    private async Task AddToolObservationAndContinueAsync(
+        string observationSource,
+        string observation,
+        CancellationToken cancellationToken)
+    {
+        reActSubtaskTracker.UpdateFromObservation(observationSource, observation);
         using (PotatoConsole.StartProgress("Summarizing context..."))
         {
             await reActMemory.SummarizeLargeUnsummarizedItemsAsync(currentOpenAiClient, cancellationToken);
@@ -643,8 +786,21 @@ internal sealed partial class PotatoSession
                 latestUserRequest ?? string.Empty,
                 Environment.CurrentDirectory,
                 reActSubtaskTracker.BuildPromptContext(),
-                nameof(AgentTools.ListFiles),
-                result)));
+                observationSource,
+                observation)));
+    }
+
+    private async Task<bool> EnsureProjectInventoryBeforeEditsAsync(CancellationToken cancellationToken)
+    {
+        if (!RequiresProjectInventoryBeforeEdits() ||
+            HasCollectedProjectInventory())
+        {
+            return false;
+        }
+
+        PotatoConsole.WriteStatus("Collecting project inventory before allowing documentation edits...");
+        string result = agentTools.ListProjectFiles(Environment.CurrentDirectory);
+        await AddToolObservationAndContinueAsync(nameof(AgentTools.ListProjectFiles), result, cancellationToken);
         return true;
     }
 
@@ -749,6 +905,64 @@ internal sealed partial class PotatoSession
         ApprovalPolicy.IsProjectChangeRequest(request) ||
         ApprovalPolicy.IsReadOnlyInspectionRequest(request) && LooksLikeProjectOrFolderRequest(request);
 
+    private bool RequiresProjectInventoryBeforeEdits()
+    {
+        string text = GetExecutionIntentText().ToLowerInvariant();
+        if (!LooksLikeDocumentationInventoryRequest(text))
+        {
+            return false;
+        }
+
+        return text.Contains("all project", StringComparison.Ordinal) ||
+               text.Contains("all folder", StringComparison.Ordinal) ||
+               text.Contains("all director", StringComparison.Ordinal) ||
+               text.Contains("several project", StringComparison.Ordinal) ||
+               text.Contains("missing project", StringComparison.Ordinal) ||
+               text.Contains("missing folder", StringComparison.Ordinal) ||
+               text.Contains("repository structure", StringComparison.Ordinal) ||
+               text.Contains("repo structure", StringComparison.Ordinal);
+    }
+
+    private bool HasCollectedProjectInventory()
+    {
+        string collectedContextList = reActMemory.Get("list");
+        return HasCollectedSource(collectedContextList, nameof(AgentTools.ListProjectFiles));
+    }
+
+    private static bool LooksLikeDocumentationInventoryRequest(string text) =>
+        (text.Contains("readme", StringComparison.Ordinal) ||
+         text.Contains("documentation", StringComparison.Ordinal) ||
+         text.Contains("document", StringComparison.Ordinal) ||
+         text.Contains("description", StringComparison.Ordinal)) &&
+        LooksLikeProjectOrFolderRequest(text);
+
+    private string GetExecutionIntentText() =>
+        $"{latestUserRequest}\n{latestSpecification}\n{latestApproach}";
+
+    private bool TryFindRequestedOutputFilePath(out string filePath)
+    {
+        filePath = string.Empty;
+        string text = GetExecutionIntentText();
+        Match match = Regex.Match(
+            text,
+            @"\b(?:create|write|generate|make|add)\s+(?:a\s+|an\s+|the\s+)?(?:new\s+)?(?:file\s+)?(?:named\s+|called\s+)?[`""']?(?<path>[\w./\\-]+\.[A-Za-z0-9][A-Za-z0-9._-]*)[`""']?",
+            RegexOptions.IgnoreCase);
+        if (!match.Success)
+        {
+            return false;
+        }
+
+        string candidate = match.Groups["path"].Value.Trim();
+        if (string.IsNullOrWhiteSpace(candidate) ||
+            IsPlaceholderPath(candidate))
+        {
+            return false;
+        }
+
+        filePath = candidate;
+        return true;
+    }
+
     private static bool LooksLikeProjectOrFolderRequest(string? request)
     {
         string text = request?.ToLowerInvariant() ?? string.Empty;
@@ -758,12 +972,131 @@ internal sealed partial class PotatoSession
                text.Contains("repository", StringComparison.Ordinal);
     }
 
+    private static bool HasCollectedSource(string collectedContextList, string sourceName) =>
+        collectedContextList.Contains($"source: {sourceName} ", StringComparison.OrdinalIgnoreCase) ||
+        collectedContextList.Contains($"source: {sourceName} |", StringComparison.OrdinalIgnoreCase);
+
+    private static string BuildProjectDiscoverySearchTerms() =>
+        string.Join(
+            '|',
+            [
+                ".sln",
+                ".csproj",
+                ".fsproj",
+                ".vbproj",
+                "package.json",
+                "pyproject.toml",
+                "Cargo.toml",
+                "go.mod",
+                "pom.xml",
+                "build.gradle",
+                "README",
+                "FEATURE",
+                "Program.cs",
+                "main.",
+                "src",
+                "app",
+                "test",
+                "docs",
+                "config"
+            ]);
+
+    private static string? FindNextRepresentativeSummaryTarget(string collectedContextList)
+    {
+        foreach (string candidate in EnumerateRepresentativeSummaryCandidates())
+        {
+            if (!File.Exists(Path.Combine(Environment.CurrentDirectory, candidate)) ||
+                HasCollectedFileInspection(collectedContextList, candidate))
+            {
+                continue;
+            }
+
+            return candidate;
+        }
+
+        return null;
+    }
+
+    private static IEnumerable<string> EnumerateRepresentativeSummaryCandidates()
+    {
+        string[] exactNames =
+        [
+            "README.md",
+            "FEATURE.md",
+            "agents.md",
+            "Program.cs",
+            "appsettings.json",
+            "package.json",
+            "pyproject.toml",
+            "Cargo.toml",
+            "go.mod",
+            "pom.xml",
+            "build.gradle"
+        ];
+
+        foreach (string file in Directory.EnumerateFiles(Environment.CurrentDirectory, "*", SearchOption.AllDirectories)
+                     .Where(path => !PathContainsSkippedSegment(path))
+                     .Where(path => exactNames.Contains(Path.GetFileName(path), StringComparer.OrdinalIgnoreCase))
+                     .OrderBy(path => path, StringComparer.OrdinalIgnoreCase))
+        {
+            yield return Path.GetRelativePath(Environment.CurrentDirectory, file);
+        }
+
+        foreach (string projectFile in Directory.EnumerateFiles(Environment.CurrentDirectory, "*.*proj", SearchOption.AllDirectories)
+                     .Where(path => !PathContainsSkippedSegment(path))
+                     .OrderBy(path => path, StringComparer.OrdinalIgnoreCase))
+        {
+            yield return Path.GetRelativePath(Environment.CurrentDirectory, projectFile);
+        }
+
+        foreach (string programFile in Directory.EnumerateFiles(Environment.CurrentDirectory, "Program.cs", SearchOption.AllDirectories)
+                     .Where(path => !PathContainsSkippedSegment(path))
+                     .OrderBy(path => path, StringComparer.OrdinalIgnoreCase))
+        {
+            yield return Path.GetRelativePath(Environment.CurrentDirectory, programFile);
+        }
+    }
+
+    private static bool IsPlaceholderPath(string path)
+    {
+        string normalized = path.Replace('\\', '/');
+        return normalized.Contains("path/to/", StringComparison.OrdinalIgnoreCase) ||
+               normalized.Contains("/full/path", StringComparison.OrdinalIgnoreCase) ||
+               normalized.Contains("actual/path", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool PathContainsSkippedSegment(string path)
+    {
+        string relativePath = Path.GetRelativePath(Environment.CurrentDirectory, path);
+        string[] segments = relativePath.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        return segments.Any(segment =>
+            segment.StartsWith(".", StringComparison.Ordinal) ||
+            segment.Equals("bin", StringComparison.OrdinalIgnoreCase) ||
+            segment.Equals("obj", StringComparison.OrdinalIgnoreCase) ||
+            segment.Equals("node_modules", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool HasCollectedFileInspection(string collectedContextList, string relativePath)
+    {
+        string fullPath = Path.GetFullPath(Path.Combine(Environment.CurrentDirectory, relativePath));
+        return collectedContextList.Contains($"source: {nameof(AgentTools.SummarizeFilePurpose)} {fullPath}", StringComparison.OrdinalIgnoreCase) ||
+               collectedContextList.Contains($"source: {nameof(AgentTools.SummarizeFilePurpose)} {relativePath}", StringComparison.OrdinalIgnoreCase) ||
+               collectedContextList.Contains($"source: {nameof(AgentTools.ReadFileContent)} {fullPath}", StringComparison.OrdinalIgnoreCase) ||
+               collectedContextList.Contains($"source: {nameof(AgentTools.ReadFileContent)} {relativePath}", StringComparison.OrdinalIgnoreCase);
+    }
+
     private async Task<string> ExecuteTextualToolCallAsync(TextualToolCall toolCall, CancellationToken cancellationToken)
     {
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
             string toolName = NormalizeTextualToolName(toolCall.Name);
+            if (IsEditToolCall(toolName) &&
+                !reActSubtaskTracker.CurrentAllowsEditTools())
+            {
+                return $"Rejected {toolName}: the current planned subtask is '{reActSubtaskTracker.CurrentDisplayName()}', not an edit/write subtask.";
+            }
+
             return toolName switch
             {
                 nameof(AgentTools.GetCurrentTime) => agentTools.GetCurrentTime(),
@@ -779,6 +1112,10 @@ internal sealed partial class PotatoSession
                     GetIntArgument(toolCall.Arguments, "maxEntries") ??
                     GetIntArgument(toolCall.Arguments, "max_entries") ??
                     200),
+                nameof(AgentTools.ListProjectFiles) => agentTools.ListProjectFiles(
+                    GetStringArgument(toolCall.Arguments, "directoryPath") ??
+                    GetStringArgument(toolCall.Arguments, "directory_path") ??
+                    GetStringArgument(toolCall.Arguments, "path")),
                 nameof(AgentTools.SearchFiles) => agentTools.SearchFiles(
                     GetStringArgument(toolCall.Arguments, "searchTerms") ??
                     GetStringArgument(toolCall.Arguments, "search_terms") ??
@@ -859,6 +1196,11 @@ internal sealed partial class PotatoSession
         }
     }
 
+    private static bool IsEditToolCall(string toolName) =>
+        NormalizeTextualToolName(toolName) is nameof(AgentTools.ApplySearchReplaceAsync) or
+            nameof(AgentTools.CreateFileAsync) or
+            nameof(AgentTools.ApplyDiffPatchAsync);
+
     private static string NormalizeTextualToolName(string name)
     {
         string normalized = name.Trim();
@@ -868,6 +1210,7 @@ internal sealed partial class PotatoSession
             "CreateFile" or "create_file" or "write_new_file" or "new_file" => nameof(AgentTools.CreateFileAsync),
             "read_file" => nameof(AgentTools.ReadFileContent),
             "list_files" => nameof(AgentTools.ListFiles),
+            "ListProjects" or "list_projects" or "list_project_files" or "project_inventory" => nameof(AgentTools.ListProjectFiles),
             "SearchFileContents" or "SearchInFiles" or "search_in_files" or "search_file_contents" or "grep" => nameof(AgentTools.SearchFileContents),
             "search_files" or "find_files" or "search_file_names" or "find_file_names" => nameof(AgentTools.SearchFiles),
             _ => normalized
@@ -939,6 +1282,75 @@ internal sealed partial class PotatoSession
         {
             return null;
         }
+    }
+
+    private static bool TryExtractProposedFileContent(string responseText, out string fileContent)
+    {
+        fileContent = string.Empty;
+        if (string.IsNullOrWhiteSpace(responseText) ||
+            !LooksLikeProposedFileContent(responseText))
+        {
+            return false;
+        }
+
+        string normalized = responseText.Replace("\r\n", "\n", StringComparison.Ordinal);
+        Match fencedContent = Regex.Match(
+            normalized,
+            @"```(?:[A-Za-z0-9_+.-]+)?\s*\n(?<content>[\s\S]*?)\n```",
+            RegexOptions.IgnoreCase);
+        if (fencedContent.Success)
+        {
+            fileContent = NormalizeGeneratedFileContent(fencedContent.Groups["content"].Value);
+            return fileContent.Length > 0;
+        }
+
+        string[] lines = normalized.Split('\n');
+        int startIndex = Array.FindIndex(lines, line =>
+            Regex.IsMatch(line, @"^\s*#\s+\S") ||
+            line.TrimStart().StartsWith("{", StringComparison.Ordinal) ||
+            line.TrimStart().StartsWith("[", StringComparison.Ordinal));
+        if (startIndex < 0)
+        {
+            return false;
+        }
+
+        int endIndex = lines.Length;
+        for (int i = startIndex + 1; i < lines.Length; i++)
+        {
+            string trimmed = lines[i].Trim();
+            if (trimmed.Equals("---", StringComparison.Ordinal) ||
+                trimmed.StartsWith("**Finalized", StringComparison.OrdinalIgnoreCase) ||
+                trimmed.StartsWith("Finalized", StringComparison.OrdinalIgnoreCase) ||
+                trimmed.StartsWith("The file content is ready", StringComparison.OrdinalIgnoreCase) ||
+                trimmed.StartsWith("The requested file content is ready", StringComparison.OrdinalIgnoreCase) ||
+                trimmed.StartsWith("You can manually copy", StringComparison.OrdinalIgnoreCase) ||
+                trimmed.StartsWith("Copy this", StringComparison.OrdinalIgnoreCase) ||
+                trimmed.StartsWith("Let me know", StringComparison.OrdinalIgnoreCase))
+            {
+                endIndex = i;
+                break;
+            }
+        }
+
+        fileContent = NormalizeGeneratedFileContent(string.Join('\n', lines[startIndex..endIndex]));
+        return fileContent.Length > 0;
+    }
+
+    private static bool LooksLikeProposedFileContent(string responseText)
+    {
+        string normalized = responseText.ToLowerInvariant();
+        return normalized.Contains("```", StringComparison.Ordinal) ||
+               normalized.Contains("copy", StringComparison.Ordinal) ||
+               normalized.Contains("manually", StringComparison.Ordinal) ||
+               normalized.Contains("save", StringComparison.Ordinal) ||
+               normalized.Contains("here's the", StringComparison.Ordinal) ||
+               normalized.Contains("here is the", StringComparison.Ordinal);
+    }
+
+    private static string NormalizeGeneratedFileContent(string content)
+    {
+        string normalized = content.Trim();
+        return normalized.Length == 0 ? normalized : normalized + Environment.NewLine;
     }
 
     private static TextualToolCall? TryParseShellFence(string responseText)
@@ -1565,6 +1977,13 @@ internal sealed partial class PotatoSession
         eventArgs.Cancel = true;
         cancellationSource.Cancel();
         PotatoConsole.WriteStatus("Abort requested. Cancelling current task...");
+    }
+
+    private enum ReActFallbackResult
+    {
+        None,
+        Prompted,
+        ExecutedTool
     }
 
     private sealed record SessionTranscript(

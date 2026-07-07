@@ -44,6 +44,16 @@ internal sealed partial class ReActSubtaskTracker
                 subtasks[^1]).Name;
     }
 
+    public bool CurrentAllowsEditTools()
+    {
+        if (subtasks.Count == 0)
+        {
+            return true;
+        }
+
+        return LooksLikeWriteSubtask(CurrentDisplayName().ToLowerInvariant());
+    }
+
     public string BuildPromptContext()
     {
         if (subtasks.Count == 0)
@@ -128,10 +138,17 @@ internal sealed partial class ReActSubtaskTracker
 
         if (LooksLikeContextSubtask(normalizedName) &&
             (current.ObservationCount >= 2 ||
+             normalizedSource.Contains("listfiles", StringComparison.Ordinal) ||
+             normalizedSource.Contains("listprojectfiles", StringComparison.Ordinal) ||
              normalizedSource.Contains("readfilecontent", StringComparison.Ordinal) ||
              normalizedSource.Contains("searchfiles", StringComparison.Ordinal) ||
              normalizedSource.Contains("searchfilecontents", StringComparison.Ordinal) ||
              normalizedSource.Contains("summarizefilepurpose", StringComparison.Ordinal) ||
+             normalizedObservation.Contains("source: listfiles", StringComparison.Ordinal) ||
+             normalizedObservation.Contains("source: listprojectfiles", StringComparison.Ordinal) ||
+             normalizedObservation.Contains("source: searchfiles", StringComparison.Ordinal) ||
+             normalizedObservation.Contains("source: searchfilecontents", StringComparison.Ordinal) ||
+             normalizedObservation.Contains("source: summarizefilepurpose", StringComparison.Ordinal) ||
              normalizedObservation.Contains("file content:", StringComparison.Ordinal)))
         {
             CompleteCurrentAndStartNext(current);
@@ -199,6 +216,7 @@ internal sealed partial class ReActSubtaskTracker
     {
         string name = value.Trim().Trim('*', '`', '.', ':', '-', ' ');
         name = Regex.Replace(name, @"\s+", " ");
+        name = Regex.Replace(name, @"^(?:subtask|step|task)\s+\d+\s*[:.-]\s*", string.Empty, RegexOptions.IgnoreCase);
         return name.Length <= 80 ? name : name[..80].Trim();
     }
 
@@ -239,6 +257,7 @@ internal sealed partial class ReActSubtaskTracker
     private static bool ObservationHasError(string normalizedObservation) =>
         normalizedObservation.Contains("error:", StringComparison.Ordinal) ||
         normalizedObservation.Contains("failed", StringComparison.Ordinal) ||
+        normalizedObservation.Contains("rejected", StringComparison.Ordinal) ||
         normalizedObservation.Contains("denied", StringComparison.Ordinal) ||
         normalizedObservation.Contains("timed out", StringComparison.Ordinal) ||
         normalizedObservation.Contains("exit code: 1", StringComparison.Ordinal);
@@ -247,7 +266,10 @@ internal sealed partial class ReActSubtaskTracker
         normalizedName.Contains("context", StringComparison.Ordinal) ||
         normalizedName.Contains("discover", StringComparison.Ordinal) ||
         normalizedName.Contains("inspect", StringComparison.Ordinal) ||
+        normalizedName.Contains("inventory", StringComparison.Ordinal) ||
+        normalizedName.Contains("list", StringComparison.Ordinal) ||
         normalizedName.Contains("read", StringComparison.Ordinal) ||
+        normalizedName.Contains("summar", StringComparison.Ordinal) ||
         normalizedName.Contains("understand", StringComparison.Ordinal);
 
     private static bool LooksLikeEditSubtask(string normalizedName) =>
@@ -257,6 +279,32 @@ internal sealed partial class ReActSubtaskTracker
         normalizedName.Contains("change", StringComparison.Ordinal) ||
         normalizedName.Contains("document", StringComparison.Ordinal) ||
         normalizedName.Contains("patch", StringComparison.Ordinal);
+
+    private static bool LooksLikeWriteSubtask(string normalizedName)
+    {
+        if (normalizedName.Contains("preparation", StringComparison.Ordinal) ||
+            normalizedName.Contains("prepare", StringComparison.Ordinal) ||
+            normalizedName.Contains("planning", StringComparison.Ordinal) ||
+            normalizedName.Contains("compare", StringComparison.Ordinal) ||
+            normalizedName.Contains("summar", StringComparison.Ordinal) ||
+            LooksLikeContextSubtask(normalizedName) ||
+            LooksLikeVerificationSubtask(normalizedName))
+        {
+            return false;
+        }
+
+        return normalizedName.Contains("modification", StringComparison.Ordinal) ||
+               normalizedName.Contains("modify", StringComparison.Ordinal) ||
+               normalizedName.Contains("write", StringComparison.Ordinal) ||
+               normalizedName.Contains("append", StringComparison.Ordinal) ||
+               normalizedName.Contains("insert", StringComparison.Ordinal) ||
+               normalizedName.Contains("create", StringComparison.Ordinal) ||
+               normalizedName.Contains("apply", StringComparison.Ordinal) ||
+               normalizedName.Contains("patch", StringComparison.Ordinal) ||
+               normalizedName.Contains("implementation", StringComparison.Ordinal) ||
+               normalizedName.Contains("implement", StringComparison.Ordinal) ||
+               normalizedName.Contains("edit", StringComparison.Ordinal);
+    }
 
     private static bool LooksLikeVerificationSubtask(string normalizedName) =>
         normalizedName.Contains("verify", StringComparison.Ordinal) ||
@@ -273,7 +321,7 @@ internal sealed partial class ReActSubtaskTracker
             _ => "unknown"
         };
 
-    [GeneratedRegex(@"^(?:[-*]\s+|\d+[.)]\s+)(?:\[[ xX]\]\s+)?(?:\*\*)?(?<name>[^:-]{3,80})(?:\*\*)?\s*(?::|-\s+)")]
+    [GeneratedRegex(@"^(?:[-*]\s+|\d+[.)]\s+)(?:\[[ xX]\]\s+)?(?:\*\*)?(?<name>[^*\r\n]{3,120})(?:\*\*)?\s*(?::|-\s+|\s*$)")]
     private static partial Regex SubtaskLineRegex();
 
     private sealed class TrackedSubtask(string name)
