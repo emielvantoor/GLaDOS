@@ -11,6 +11,15 @@ internal class AgentTools(ReActMemory memory, Func<IChatClient> getSideQuestionC
     private const int MaxCommandTimeoutSeconds = 600;
     private const int MaxPatchCharacters = 200_000;
     private const int MaxPurposeInferenceCharacters = 12_000;
+    private const long MaxSearchFileBytes = 1_000_000;
+    private const int MaxSearchFiles = 5000;
+
+    private static readonly HashSet<string> SkippedSearchExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".7z", ".avi", ".bin", ".bmp", ".dll", ".doc", ".docx", ".dylib", ".exe", ".gif", ".ico", ".jar",
+        ".jpeg", ".jpg", ".lock", ".mov", ".mp3", ".mp4", ".obj", ".pdf", ".png", ".pdb", ".so", ".webp",
+        ".zip"
+    };
 
     public int ToolInvocationCount { get; private set; }
 
@@ -112,6 +121,126 @@ internal class AgentTools(ReActMemory memory, Func<IChatClient> getSideQuestionC
         }
 
         return StoreAndReturn($"{nameof(ListFiles)} {resolvedPath}", builder.ToString());
+    }
+
+    [Description("Searches through text/code files for one or more terms. Provide multiple terms separated by '|'.")]
+    public string SearchFiles(
+        [Description("Search term or terms. Multiple terms can be separated with '|', for example 'TODO|class Foo|error'.")] string searchTerms,
+        [Description("Optional directory path. Absolute paths are accepted; relative paths resolve from the current working directory. Leave empty to search the current working directory.")] string? directoryPath = null,
+        [Description("Whether to recurse into subdirectories. Defaults to true.")] bool recursive = true,
+        [Description("Whether matching should be case-sensitive. Defaults to false.")] bool matchCase = false,
+        [Description("Maximum number of matching lines to return. Defaults to 100 and is capped at 500.")] int maxMatches = 100)
+    {
+        CurrentCancellationToken.ThrowIfCancellationRequested();
+        ToolInvocationCount++;
+        string? resolvedPath = ResolveReadableDirectoryPath(directoryPath);
+        string[] terms = ParseSearchTerms(searchTerms);
+        WriteToolCall(nameof(SearchFiles),
+        [
+            ("searchTerms", searchTerms ?? string.Empty),
+            ("directoryPath", directoryPath ?? Environment.CurrentDirectory),
+            ("resolvedPath", resolvedPath ?? "(unresolved)"),
+            ("recursive", recursive.ToString()),
+            ("matchCase", matchCase.ToString()),
+            ("maxMatches", maxMatches.ToString())
+        ]);
+
+        if (terms.Length == 0)
+        {
+            return StoreAndReturn(nameof(SearchFiles), "Error: No search terms were provided. Use '|' to separate multiple terms.");
+        }
+
+        if (resolvedPath is null || !Directory.Exists(resolvedPath))
+        {
+            return StoreAndReturn(nameof(SearchFiles), $"Error: Directory '{directoryPath}' does not exist. Current working directory: {Environment.CurrentDirectory}");
+        }
+
+        maxMatches = Math.Clamp(maxMatches, 1, 500);
+        StringComparison comparison = matchCase ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
+        var builder = new StringBuilder();
+        builder.AppendLine($"Directory: {resolvedPath}");
+        builder.AppendLine($"Mode: {(recursive ? "recursive" : "top-level")}");
+        builder.AppendLine($"Terms: {string.Join(" | ", terms)}");
+
+        int scannedFiles = 0;
+        int skippedFiles = 0;
+        int matchCount = 0;
+        bool truncated = false;
+
+        foreach (FileInfo file in EnumerateSearchFiles(resolvedPath, recursive))
+        {
+            CurrentCancellationToken.ThrowIfCancellationRequested();
+
+            if (!ShouldSearchFile(file))
+            {
+                skippedFiles++;
+                continue;
+            }
+
+            scannedFiles++;
+            if (scannedFiles > MaxSearchFiles)
+            {
+                truncated = true;
+                break;
+            }
+
+            if (!TryReadFileContent(file.FullName, out string content, out _))
+            {
+                skippedFiles++;
+                continue;
+            }
+
+            if (LooksBinary(content))
+            {
+                skippedFiles++;
+                continue;
+            }
+
+            string[] lines = NormalizeLines(content);
+            for (int i = 0; i < lines.Length; i++)
+            {
+                string line = lines[i];
+                string? matchedTerm = terms.FirstOrDefault(term => line.Contains(term, comparison));
+                if (matchedTerm is null)
+                {
+                    continue;
+                }
+
+                if (matchCount == 0)
+                {
+                    builder.AppendLine("Matches:");
+                }
+
+                string relativePath = Path.GetRelativePath(resolvedPath, file.FullName);
+                builder.AppendLine($"{relativePath}:{i + 1}: [{matchedTerm}] {Truncate(line.Trim(), 220)}");
+                matchCount++;
+
+                if (matchCount >= maxMatches)
+                {
+                    truncated = true;
+                    break;
+                }
+            }
+
+            if (truncated)
+            {
+                break;
+            }
+        }
+
+        if (matchCount == 0)
+        {
+            builder.AppendLine("Matches: none");
+        }
+
+        builder.AppendLine($"Scanned files: {Math.Min(scannedFiles, MaxSearchFiles)}");
+        builder.AppendLine($"Skipped files: {skippedFiles}");
+        if (truncated)
+        {
+            builder.AppendLine($"... truncated after {matchCount} match(es) or {MaxSearchFiles} scanned file(s)");
+        }
+
+        return StoreAndReturn($"{nameof(SearchFiles)} {resolvedPath}", builder.ToString());
     }
 
     [Description("Summarizes a text file's visible contents and likely purpose without returning the full file. Use this to choose which files need deeper reading.")]
@@ -682,6 +811,35 @@ internal class AgentTools(ReActMemory memory, Func<IChatClient> getSideQuestionC
          entry.Name.Equals("obj", StringComparison.OrdinalIgnoreCase) ||
          entry.Name.Equals("node_modules", StringComparison.OrdinalIgnoreCase));
 
+    private static IEnumerable<FileInfo> EnumerateSearchFiles(string directoryPath, bool recursive)
+    {
+        var root = new DirectoryInfo(directoryPath);
+        if (!root.Exists)
+        {
+            return [];
+        }
+
+        return recursive
+            ? EnumerateRecursive(root).OfType<FileInfo>()
+            : root.EnumerateFiles().OrderBy(file => file.Name, StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static bool ShouldSearchFile(FileInfo file) =>
+        file.Exists &&
+        file.Length <= MaxSearchFileBytes &&
+        !SkippedSearchExtensions.Contains(file.Extension);
+
+    private static string[] ParseSearchTerms(string? searchTerms) =>
+        (searchTerms ?? string.Empty)
+        .Split('|', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+        .Where(term => term.Length > 0)
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .Take(20)
+        .ToArray();
+
+    private static bool LooksBinary(string content) =>
+        content.IndexOf('\0', StringComparison.Ordinal) >= 0;
+
     private async Task<string> InferFilePurpose(
         string filePath,
         string content,
@@ -879,6 +1037,7 @@ internal class AgentTools(ReActMemory memory, Func<IChatClient> getSideQuestionC
         {
             nameof(ReadFileContent) => "Read file",
             nameof(ListFiles) => "List files",
+            nameof(SearchFiles) => "Search files",
             nameof(SummarizeFilePurpose) => "Summarize file",
             nameof(GetCollectedContext) => "Read context",
             nameof(ApplySearchReplaceAsync) => "WriteFile",

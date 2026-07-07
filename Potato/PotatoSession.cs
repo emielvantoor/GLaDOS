@@ -257,6 +257,7 @@ internal sealed partial class PotatoSession
                 AIFunctionFactory.Create(agentTools.GetCurrentTime),
                 AIFunctionFactory.Create(agentTools.ReadFileContent),
                 AIFunctionFactory.Create(agentTools.ListFiles),
+                AIFunctionFactory.Create(agentTools.SearchFiles),
                 AIFunctionFactory.Create(agentTools.SummarizeFilePurpose),
                 AIFunctionFactory.Create(agentTools.GetCollectedContext),
                 AIFunctionFactory.Create(agentTools.ApplySearchReplaceAsync),
@@ -777,6 +778,22 @@ internal sealed partial class PotatoSession
                     GetIntArgument(toolCall.Arguments, "maxEntries") ??
                     GetIntArgument(toolCall.Arguments, "max_entries") ??
                     200),
+                nameof(AgentTools.SearchFiles) => agentTools.SearchFiles(
+                    GetStringArgument(toolCall.Arguments, "searchTerms") ??
+                    GetStringArgument(toolCall.Arguments, "search_terms") ??
+                    GetStringArgument(toolCall.Arguments, "terms") ??
+                    GetStringArgument(toolCall.Arguments, "query") ??
+                    string.Empty,
+                    GetStringArgument(toolCall.Arguments, "directoryPath") ??
+                    GetStringArgument(toolCall.Arguments, "directory_path") ??
+                    GetStringArgument(toolCall.Arguments, "path"),
+                    GetBoolArgument(toolCall.Arguments, "recursive") ?? true,
+                    GetBoolArgument(toolCall.Arguments, "matchCase") ??
+                    GetBoolArgument(toolCall.Arguments, "match_case") ??
+                    false,
+                    GetIntArgument(toolCall.Arguments, "maxMatches") ??
+                    GetIntArgument(toolCall.Arguments, "max_matches") ??
+                    100),
                 nameof(AgentTools.SummarizeFilePurpose) => await agentTools.SummarizeFilePurpose(
                     GetStringArgument(toolCall.Arguments, "filePath") ??
                     GetStringArgument(toolCall.Arguments, "file_path") ??
@@ -834,6 +851,7 @@ internal sealed partial class PotatoSession
             "CreateFile" or "create_file" or "write_new_file" or "new_file" => nameof(AgentTools.CreateFileAsync),
             "read_file" => nameof(AgentTools.ReadFileContent),
             "list_files" => nameof(AgentTools.ListFiles),
+            "SearchInFiles" or "search_files" or "search_in_files" or "grep" => nameof(AgentTools.SearchFiles),
             _ => normalized
         };
     }
