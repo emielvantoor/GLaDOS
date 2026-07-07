@@ -8,7 +8,8 @@ internal sealed class SlashCommandHandler(
     Action resetConversationState,
     Action<bool> setUseCompiledDefaultPrompts,
     Action<string> setSelectedModel,
-    Action writeConversationTranscript,
+    Action<string> handleTranscriptCommand,
+    Action writeSessions,
     Func<IChatClient> getClient,
     Action<string, IChatClient, IChatClient> switchModel)
 {
@@ -48,7 +49,11 @@ internal sealed class SlashCommandHandler(
                 return true;
 
             case "/transcript":
-                writeConversationTranscript();
+                handleTranscriptCommand(arguments);
+                return true;
+
+            case "/sessions":
+                writeSessions();
                 return true;
 
             case "/abort":

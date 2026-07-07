@@ -335,9 +335,9 @@ internal static class PotatoConsole
         Console.WriteLine("  /cd path        Change directory; Left/Right cycle completions, Enter accepts");
         Console.WriteLine("  /ask question   Ask a side question without changing chat history");
         Console.WriteLine("  /prompts        Show or change prompt source: status, defaults, external");
-        Console.WriteLine("  /transcript     Show the current conversation sent to the model");
+        Console.WriteLine("  /sessions       List tracked sessions");
+        Console.WriteLine("  /transcript     Show or save a tracked session transcript");
         Console.WriteLine("  /abort          Cancel the current task and return to the main prompt");
-        Console.WriteLine("  --verbose       Start Potato with model prompt/response debug output");
         Console.WriteLine("  Ctrl+C          Abort the in-flight task; exits normally at the idle prompt");
         Console.WriteLine("  Up/Down         Cycle through commands entered in this session");
         Console.WriteLine("  exit, quit      Close Potato Code");
@@ -355,17 +355,24 @@ internal static class PotatoConsole
         Console.WriteLine();
     }
 
-    public static void WriteModelExchange(int iteration, string prompt, string response)
-    {
-        WriteBoxHeader($"ReAct conversation {iteration}");
-        WriteLabeledBlock("Sent to model", prompt, ConsoleColor.Cyan, maxLines: 10);
-        WriteLabeledBlock("Model replied", response, ConsoleColor.Yellow, maxLines: null);
-        WriteBoxFooter();
-    }
-
     public static void WriteConversationTranscript(IReadOnlyList<ChatMessage> messages)
     {
         WriteBoxHeader("Current model conversation");
+
+        for (int i = 0; i < messages.Count; i++)
+        {
+            ChatMessage message = messages[i];
+            string role = message.Role.ToString();
+            string text = string.IsNullOrWhiteSpace(message.Text) ? "(empty)" : message.Text;
+            WriteLabeledBlock($"{i + 1}. {role}", text, RoleColor(message.Role), maxLines: null);
+        }
+
+        WriteBoxFooter();
+    }
+
+    public static void WriteConversationTranscript(string title, IReadOnlyList<ChatMessage> messages)
+    {
+        WriteBoxHeader(title);
 
         for (int i = 0; i < messages.Count; i++)
         {
@@ -395,14 +402,6 @@ internal static class PotatoConsole
     public static void WriteStatus(string message)
     {
         Console.ForegroundColor = ConsoleColor.DarkGray;
-        Console.WriteLine(message);
-        Console.ResetColor();
-    }
-
-    public static void WriteModelQuestion(string message)
-    {
-        Console.ForegroundColor = ConsoleColor.DarkGray;
-        Console.WriteLine("Model question:");
         Console.WriteLine(message);
         Console.ResetColor();
     }
