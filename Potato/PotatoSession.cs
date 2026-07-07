@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.AI;
@@ -16,6 +17,7 @@ internal sealed partial class PotatoSession
     private readonly PotatoRuntimeOptions options;
     private readonly PotatoAppSettingsStore appSettingsStore;
     private readonly List<string> inputHistory = [];
+    private readonly List<SessionTranscript> archivedSessions = [];
     private readonly List<ChatMessage> chatHistory =
     [
         new(ChatRole.System, PromptLibrary.SystemPrompt)
@@ -28,6 +30,10 @@ internal sealed partial class PotatoSession
     private string? latestSpecification;
     private string? latestApproach;
     private string? latestUserRequest;
+    private int nextSessionNumber = 1;
+    private int currentSessionNumber;
+    private string? currentSessionSubject;
+    private DateTime currentSessionStartedAt;
     private CancellationTokenSource? currentTaskCancellationSource;
 
     public PotatoSession(
@@ -64,7 +70,8 @@ internal sealed partial class PotatoSession
             ResetConversationState,
             SetUseCompiledDefaultPrompts,
             appSettingsStore.SetSelectedModel,
-            () => PotatoConsole.WriteConversationTranscript(chatHistory),
+            HandleTranscriptCommand,
+            WriteSessions,
             () => currentClient,
             SwitchModel);
 
@@ -136,6 +143,7 @@ internal sealed partial class PotatoSession
         using CancellationTokenSource taskCancellationSource = BeginTaskCancellation();
         CancellationToken cancellationToken = taskCancellationSource.Token;
         string messageForModel = fileMentionExpander.Expand(userInput);
+        EnsureCurrentSession(userInput);
 
         if (currentState == AgentState.Specifying)
         {
@@ -278,10 +286,6 @@ internal sealed partial class PotatoSession
             int toolCallsBefore = agentTools.ToolInvocationCount;
             int memoryItemsBeforeToolCalls = reActMemory.Count;
             PotatoConsole.WriteStatus($"ReAct iteration {iteration}/{MaxReActIterations}...");
-            if (options.Verbose)
-            {
-                PotatoConsole.WriteModelQuestion(GetLatestModelQuestion());
-            }
 
             ChatResponse response;
             using (PotatoConsole.StartProgress($"ReAct iteration {iteration}/{MaxReActIterations}..."))
@@ -299,10 +303,6 @@ internal sealed partial class PotatoSession
 
             chatHistory.Add(new ChatMessage(ChatRole.Assistant, responseText));
             reActMemory.Add("Assistant ReAct response", responseText);
-            if (options.Verbose)
-            {
-                PotatoConsole.WriteModelExchange(iteration, GetLatestModelQuestion(), responseText);
-            }
 
             if (IsFinalResponse(responseText))
             {
@@ -393,11 +393,6 @@ internal sealed partial class PotatoSession
                         Environment.CurrentDirectory,
                         GetLatestModelQuestion())));
                 continue;
-            }
-
-            if (options.Verbose)
-            {
-                PotatoConsole.WriteAgentResponse(responseText);
             }
 
             if (toolCallsThisIteration > MaxToolCallsPerIteration)
@@ -1207,8 +1202,257 @@ internal sealed partial class PotatoSession
         currentClient = selectedClient;
     }
 
+    private void EnsureCurrentSession(string firstUserInput)
+    {
+        if (currentSessionNumber != 0)
+        {
+            return;
+        }
+
+        currentSessionNumber = nextSessionNumber++;
+        currentSessionSubject = BuildSessionSubject(firstUserInput);
+        currentSessionStartedAt = DateTime.Now;
+    }
+
+    private void ArchiveCurrentSession()
+    {
+        if (currentSessionNumber == 0 || chatHistory.Count <= 1)
+        {
+            currentSessionNumber = 0;
+            currentSessionSubject = null;
+            return;
+        }
+
+        archivedSessions.Add(new SessionTranscript(
+            currentSessionNumber,
+            currentSessionSubject ?? $"Session {currentSessionNumber}",
+            currentSessionStartedAt,
+            chatHistory.Select(CloneMessage).ToList()));
+
+        currentSessionNumber = 0;
+        currentSessionSubject = null;
+    }
+
+    private void WriteSessions()
+    {
+        if (currentSessionNumber == 0 && archivedSessions.Count == 0)
+        {
+            PotatoConsole.WriteStatus("No tracked sessions yet.");
+            return;
+        }
+
+        foreach (SessionTranscript session in archivedSessions)
+        {
+            PotatoConsole.WriteStatus($"{session.Number}: {session.Subject} ({session.StartedAt:g}, {session.Messages.Count} messages)");
+        }
+
+        if (currentSessionNumber != 0)
+        {
+            PotatoConsole.WriteStatus($"{currentSessionNumber}: {currentSessionSubject} ({currentSessionStartedAt:g}, {chatHistory.Count} messages, current)");
+        }
+    }
+
+    private void HandleTranscriptCommand(string arguments)
+    {
+        string trimmed = arguments.Trim();
+        if (string.IsNullOrWhiteSpace(trimmed))
+        {
+            ShowTranscript(currentSessionNumber);
+            return;
+        }
+
+        string[] parts = trimmed.Split(' ', 3, StringSplitOptions.RemoveEmptyEntries);
+        string action = parts[0].ToLowerInvariant();
+
+        if (action is "show" or "view")
+        {
+            int sessionNumber = parts.Length >= 2 ? ParseSessionSelector(parts[1]) : currentSessionNumber;
+            ShowTranscript(sessionNumber);
+            return;
+        }
+
+        if (action is "save" or "write" or "export")
+        {
+            int sessionNumber = currentSessionNumber;
+            string? path = null;
+
+            if (parts.Length >= 2)
+            {
+                int parsedSelector = ParseSessionSelector(parts[1]);
+                if (parsedSelector != 0)
+                {
+                    sessionNumber = parsedSelector;
+                    path = parts.Length >= 3 ? parts[2] : null;
+                }
+                else
+                {
+                    path = trimmed[(parts[0].Length + 1)..].Trim();
+                }
+            }
+
+            SaveTranscript(sessionNumber, path);
+            return;
+        }
+
+        if (int.TryParse(parts[0], out int selectedSessionNumber))
+        {
+            ShowTranscript(selectedSessionNumber);
+            return;
+        }
+
+        SaveTranscript(currentSessionNumber, trimmed);
+    }
+
+    private int ParseSessionSelector(string selector)
+    {
+        string trimmed = selector.Trim();
+        if (trimmed.Equals("current", StringComparison.OrdinalIgnoreCase))
+        {
+            return currentSessionNumber;
+        }
+
+        return int.TryParse(trimmed, out int sessionNumber) ? sessionNumber : 0;
+    }
+
+    private void ShowTranscript(int sessionNumber)
+    {
+        if (!TryGetSession(sessionNumber, out SessionTranscript? session))
+        {
+            PotatoConsole.WriteError("No matching session. Type /sessions to list tracked sessions.");
+            return;
+        }
+
+        PotatoConsole.WriteConversationTranscript(
+            $"Session {session.Number}: {session.Subject}",
+            session.Messages);
+    }
+
+    private void SaveTranscript(int sessionNumber, string? path)
+    {
+        if (!TryGetSession(sessionNumber, out SessionTranscript? session))
+        {
+            PotatoConsole.WriteError("No matching session. Type /sessions to list tracked sessions.");
+            return;
+        }
+
+        string resolvedPath = ResolveTranscriptPath(path, session);
+        string? directory = Path.GetDirectoryName(resolvedPath);
+        if (!string.IsNullOrWhiteSpace(directory))
+        {
+            Directory.CreateDirectory(directory);
+        }
+
+        File.WriteAllText(resolvedPath, FormatTranscript(session));
+        PotatoConsole.WriteSuccess($"Transcript saved: {PathResolver.FormatPathForDisplay(resolvedPath)}");
+    }
+
+    private bool TryGetSession(int sessionNumber, out SessionTranscript session)
+    {
+        if (sessionNumber == 0)
+        {
+            session = null!;
+            return false;
+        }
+
+        if (currentSessionNumber == sessionNumber)
+        {
+            session = new SessionTranscript(
+                currentSessionNumber,
+                currentSessionSubject ?? $"Session {currentSessionNumber}",
+                currentSessionStartedAt,
+                chatHistory.Select(CloneMessage).ToList());
+            return true;
+        }
+
+        SessionTranscript? archivedSession = archivedSessions.FirstOrDefault(candidate => candidate.Number == sessionNumber);
+        if (archivedSession is null)
+        {
+            session = null!;
+            return false;
+        }
+
+        session = archivedSession;
+        return true;
+    }
+
+    private static ChatMessage CloneMessage(ChatMessage message) =>
+        new(message.Role, message.Text);
+
+    private static string FormatTranscript(SessionTranscript session)
+    {
+        var builder = new StringBuilder();
+        builder.AppendLine($"Session: {session.Number}");
+        builder.AppendLine($"Subject: {session.Subject}");
+        builder.AppendLine($"Started: {session.StartedAt:O}");
+        builder.AppendLine();
+
+        for (int i = 0; i < session.Messages.Count; i++)
+        {
+            ChatMessage message = session.Messages[i];
+            builder.AppendLine($"## {i + 1}. {message.Role}");
+            builder.AppendLine(string.IsNullOrWhiteSpace(message.Text) ? "(empty)" : message.Text);
+            builder.AppendLine();
+        }
+
+        return builder.ToString();
+    }
+
+    private static string ResolveTranscriptPath(string? path, SessionTranscript session)
+    {
+        string rawPath = string.IsNullOrWhiteSpace(path)
+            ? BuildDefaultTranscriptFileName(session)
+            : path.Trim().Trim('"', '\'');
+
+        if (Uri.TryCreate(rawPath, UriKind.Absolute, out Uri? uri) && uri.IsFile)
+        {
+            rawPath = uri.LocalPath;
+        }
+
+        if (rawPath.StartsWith("~/", StringComparison.Ordinal))
+        {
+            rawPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), rawPath[2..]);
+        }
+
+        string resolvedPath = Path.GetFullPath(Path.IsPathRooted(rawPath)
+            ? rawPath
+            : Path.Combine(Environment.CurrentDirectory, rawPath));
+
+        if (Directory.Exists(resolvedPath))
+        {
+            resolvedPath = Path.Combine(resolvedPath, BuildDefaultTranscriptFileName(session));
+        }
+
+        return resolvedPath;
+    }
+
+    private static string BuildDefaultTranscriptFileName(SessionTranscript session) =>
+        $"potato-session-{session.Number:000}-{Slugify(session.Subject)}.txt";
+
+    private static string BuildSessionSubject(string input)
+    {
+        string text = Regex.Replace(input.Trim(), @"\s+", " ");
+        if (text.Length > 80)
+        {
+            text = text[..80].TrimEnd();
+        }
+
+        return string.IsNullOrWhiteSpace(text) ? "Untitled session" : text;
+    }
+
+    private static string Slugify(string text)
+    {
+        string slug = Regex.Replace(text.ToLowerInvariant(), @"[^a-z0-9]+", "-").Trim('-');
+        if (slug.Length > 48)
+        {
+            slug = slug[..48].Trim('-');
+        }
+
+        return string.IsNullOrWhiteSpace(slug) ? "untitled" : slug;
+    }
+
     private void ResetConversationState()
     {
+        ArchiveCurrentSession();
         currentState = AgentState.Specifying;
         reActMemory.Clear();
         latestSpecification = null;
@@ -1269,4 +1513,10 @@ internal sealed partial class PotatoSession
         cancellationSource.Cancel();
         PotatoConsole.WriteStatus("Abort requested. Cancelling current task...");
     }
+
+    private sealed record SessionTranscript(
+        int Number,
+        string Subject,
+        DateTime StartedAt,
+        IReadOnlyList<ChatMessage> Messages);
 }

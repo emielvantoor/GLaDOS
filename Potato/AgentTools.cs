@@ -861,20 +861,7 @@ internal class AgentTools(ReActMemory memory, Func<IChatClient> getSideQuestionC
         using var _ = PotatoConsole.SuspendProgress();
         toolResultWritten = false;
 
-        if (!options.Verbose)
-        {
-            WriteCompactToolCall(toolName, parameters);
-            return;
-        }
-
-        Console.ForegroundColor = ConsoleColor.DarkGray;
-        Console.WriteLine($"Tool call: {toolName}");
-        foreach ((string name, string value) in parameters)
-        {
-            Console.WriteLine($"  {name}: {value}");
-        }
-
-        Console.ResetColor();
+        WriteCompactToolCall(toolName, parameters);
     }
 
     private static void WriteCompactToolCall(string toolName, IReadOnlyList<(string Name, string Value)> parameters)

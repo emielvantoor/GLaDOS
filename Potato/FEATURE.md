@@ -103,6 +103,12 @@ Slash commands are handled by the CLI before a message is sent to the staged age
 - `/ask question`
   Sends a one-off side question to the selected model without adding the question or answer to the main staged conversation history.
 
+- `/sessions`
+  Lists tracked sessions by number and subject. A new session is created from the first user request in a staged conversation, and completed or aborted sessions stay available until Potato exits.
+
+- `/transcript`
+  Shows the current session transcript. Use `/transcript <path>` to save the current session to a `.txt` file, `/transcript save <number> [path]` to save a tracked session, or `/transcript show <number>` to print a previous session.
+
 - `/abort`
   Cancels the current staged task, clears the in-progress conversation history, and returns to the main prompt while keeping the selected model and working directory.
 
