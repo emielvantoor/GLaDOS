@@ -36,15 +36,17 @@ The CLI uses a staged workflow:
 2. Adjustment
    This phase only runs if the user rejects or changes the specification. If the user approves the specification, this phase is skipped.
 
-3. Approach
-   After approval, the agent explains how the task will be completed. It breaks the approved specification into named subtasks, states what each subtask is responsible for, and describes what will be done to complete each one. It also names the available CLI tool or tools it intends to use and why. If no direct tool fits, it states whether the task can be solved through shell execution and what kind of shell action would be needed. It must not run tools, emit tool-call JSON, or print exact shell commands in this phase.
+3. Execution Steps
+   After approval, the agent explains how the task will be completed. It breaks the approved specification into named steps and substeps, states what each step or substep is responsible for, describes what will be done to complete each one, and includes a concrete `Result:` that must be observed before the next step or substep may begin. It also names the available CLI tool or tools it intends to use and why. If no direct tool fits, it states whether the task can be solved through shell execution and what kind of shell action would be needed. It must not run tools, emit tool-call JSON, or print exact shell commands in this phase.
+
+   Execution steps should be flat when possible. Substeps are allowed when a parent step is only a grouping heading; the executable leaf step or substep must include `Purpose`, `Action`, and `Result`. Each executable `Action` should name exactly one registered tool, or explicitly say `No tool` for a draft/reasoning step that uses prior observations.
 
 4. Execution
-   The CLI executes the approved approach through a bounded ReAct loop. The model uses the approach subtasks as a working map: it chooses the next subtask, inspects files, runs commands, applies patches, observes results, and can revise the breakdown when observations show it is incomplete or incorrect. The loop continues until the model returns a final answer.
+   The CLI executes the approved execution steps through a bounded ReAct loop. The model uses the steps and substeps as a working map: it chooses the next step or substep, inspects files, runs commands, applies patches, observes results, and can revise the breakdown when observations show it is incomplete or incorrect. The loop continues until the model returns a final answer.
 
-For simple read-only or inspection tasks, the CLI may proceed from the approach directly to the command permission prompt. For write, delete, install, risky, or multi-step tasks, the agent should ask the user to type `execute` before continuing. Once execution is approved, the registered tools are allowed to perform the approved work.
+For simple read-only or inspection tasks, the CLI may proceed from the execution steps directly to the command permission prompt. For write, delete, install, risky, or multi-step tasks, the agent should ask the user to type `execute` before continuing. Once execution is approved, the registered tools are allowed to perform the approved work.
 
-The CLI owns the execution decision. If it does not auto-start after the approach, it prints an explicit status asking for `execute` or `yes`.
+The CLI owns the execution decision. If it does not auto-start after the execution steps, it prints an explicit status asking for `execute` or `yes`.
 
 ## Approval Commands
 
@@ -137,7 +139,7 @@ Tool calls are printed with their parameters before execution. For file reads, P
 
 During ReAct execution, Potato stores assistant responses and tool outputs as collected context. List entries include descriptors such as file paths, shell commands, or response previews, so smaller stateless models can choose the right index without relying on hidden memory or oversized prompts.
 
-Potato also tracks the subtasks parsed from the approved approach. The tracker is separate from collected context: ReAct memory stores what was observed, while the subtask tracker stores the current planned work item and injects the live subtask state into continuation prompts. During execution, the console status line includes the current subtask.
+Potato also tracks the steps and substeps parsed from the approved execution steps. The tracker is separate from collected context: ReAct memory stores what was observed, while the subtask tracker stores the current planned work item and injects the live step/substep state into continuation prompts. During execution, the console status line includes the current step or substep. Tool observations are treated as evidence for the current step's `Result:`; the tracker advances only after the model emits `READY_FOR_NEXT_SUBSTEP`.
 
 ## Shell Execution
 
@@ -202,12 +204,12 @@ If either step fails, the tool returns the exit code, stdout, and stderr to the 
 After execution is approved, Potato runs a bounded observe-act loop:
 
 1. Potato sends a compact next-action prompt for the current step, including the original request, current working directory, and latest observation.
-2. Tool calls are executed through the local permissioned tools.
+2. The first tool call in that ReAct iteration is executed through the local permissioned tools only if it matches the current step's approved `Action:`. Additional native tool calls in the same iteration are rejected before they run.
 3. Tool results are treated as observations for the next iteration.
-4. The model continues with the next approved subtask, revising the subtask map when observations require it.
+4. The model emits `READY_FOR_NEXT_SUBSTEP` only after the latest observation satisfies the current step's `Result:`, then continues with the next approved subtask.
 5. The loop continues until the model responds with `FINAL:` or the iteration limit is reached.
 
-The current loop limit is 12 iterations. Each assistant turn should either call the next useful tool or finish with `FINAL:`. Potato accepts `FINAL:` at the start of a response or on its own later line, so models that produce the answer first and append the marker still terminate the loop cleanly.
+The current loop limit is 40 iterations. Each assistant turn should either call the next useful tool, hand off with `READY_FOR_NEXT_SUBSTEP`, or finish with `FINAL:`. Potato accepts `FINAL:` at the start of a response or on its own later line, so models that produce the answer first and append the marker still terminate the loop cleanly.
 
 Some local models emit textual commands instead of native tool calls. When Potato sees a `<tool_call>{...}</tool_call>` block or a fenced shell command during the ReAct loop, it routes that action through the same permissioned local tool path and appends the result as the next observation.
 
@@ -215,7 +217,7 @@ For read-only project or folder inspection tasks, if the model fails to choose t
 
 ## Execution Planning
 
-Older versions of the CLI asked the selected GLaDOS model to produce a single execution plan after the approach phase.
+Older versions of the CLI asked the selected GLaDOS model to produce a single execution plan after the execution steps phase.
 
 The execution planner returns JSON with:
 
@@ -239,7 +241,7 @@ The extra `execute` prompt is reserved for tasks that appear write-oriented, del
 
 ## Current Limitations
 
-- Risk detection is heuristic and based on the approved specification and approach text.
+- Risk detection is heuristic and based on the approved specification and execution steps text.
 - ReAct execution depends on the selected model producing valid tool calls and a final `FINAL:` response.
 - The CLI-local tools are separate from GLaDOS server-side `IAgentTool` registrations.
 - Long-running commands are killed when they exceed the configured timeout.

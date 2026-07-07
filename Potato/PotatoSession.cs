@@ -5,8 +5,8 @@ using Microsoft.Extensions.AI;
 
 internal sealed partial class PotatoSession
 {
-    private const int MaxReActIterations = 12;
-    private const int MaxToolCallsPerIteration = 8;
+    private const int MaxReActIterations = 40;
+    private const int MaxToolCallsPerIteration = 1;
     private const int MaxConsecutiveInvalidReActResponses = 2;
 
     private readonly Uri gladosEndpoint;
@@ -190,7 +190,7 @@ internal sealed partial class PotatoSession
             PotatoConsole.WriteStatus(currentState switch
             {
                 AgentState.Specifying => "Generating specification...",
-                AgentState.Approaching => "Generating approach...",
+                AgentState.Approaching => "Generating execution steps...",
                 _ => "Agent is executing ReAct loop..."
             });
 
@@ -312,10 +312,22 @@ internal sealed partial class PotatoSession
             ChatResponse response;
             using (PotatoConsole.StartProgress($"ReAct iteration {iteration}/{MaxReActIterations} - {currentSubtask}..."))
             {
-                response = await currentClient.GetResponseAsync(
-                    chatHistory,
-                    CreateCurrentReActOptions(toolOptions),
-                    cancellationToken);
+                agentTools.ToolInvocationAllowed = reActSubtaskTracker.CurrentAllowsTool;
+                agentTools.ToolInvocationRejectionReason = reActSubtaskTracker.CurrentToolRejectionReason;
+                agentTools.BeginReActIteration(MaxToolCallsPerIteration);
+                try
+                {
+                    response = await currentClient.GetResponseAsync(
+                        chatHistory,
+                        CreateCurrentReActOptions(toolOptions),
+                        cancellationToken);
+                }
+                finally
+                {
+                    agentTools.EndReActIteration();
+                    agentTools.ToolInvocationAllowed = null;
+                    agentTools.ToolInvocationRejectionReason = null;
+                }
             }
 
             string responseText = response.Text.Trim();
@@ -355,6 +367,38 @@ internal sealed partial class PotatoSession
                 if (await TryExecuteTextualActionAsync(responseText, cancellationToken))
                 {
                     consecutiveInvalidReActResponses = 0;
+                    continue;
+                }
+
+                if (IsReadyForNextSubstepResponse(responseText))
+                {
+                    consecutiveInvalidReActResponses = 0;
+                    chatHistory.Add(new ChatMessage(
+                        ChatRole.User,
+                        "Readiness acknowledged. Continue with the next substep from the approved execution steps. " +
+                        "Keep the entire approved task in scope, use the current step/substep state below, and make exactly one registered tool call unless the entire task is complete.\n\n" +
+                        "Entire approved task: " +
+                        (latestUserRequest ?? string.Empty) +
+                        "\n\nApproved execution steps:\n" +
+                        (latestApproach ?? "(No approved execution steps were captured.)") +
+                        "\n\n" +
+                        reActSubtaskTracker.BuildPromptContext()));
+                    continue;
+                }
+
+                if (IsDraftResultResponse(responseText))
+                {
+                    consecutiveInvalidReActResponses = 0;
+                    chatHistory.Add(new ChatMessage(
+                        ChatRole.User,
+                        "Draft result acknowledged. Continue with the next substep from the approved execution steps. " +
+                        "Keep the entire approved task in scope, use the current step/substep state below, and make exactly one valid response: one registered tool call for the current Action, READY_FOR_NEXT_SUBSTEP, DRAFT_RESULT only for an approved no-tool Action, or FINAL.\n\n" +
+                        "Entire approved task: " +
+                        (latestUserRequest ?? string.Empty) +
+                        "\n\nApproved execution steps:\n" +
+                        (latestApproach ?? "(No approved execution steps were captured.)") +
+                        "\n\n" +
+                        reActSubtaskTracker.BuildPromptContext()));
                     continue;
                 }
 
@@ -442,7 +486,7 @@ internal sealed partial class PotatoSession
                 consecutiveInvalidReActResponses = 0;
                 chatHistory.Add(new ChatMessage(
                     ChatRole.User,
-                    $"You used {toolCallsThisIteration} tools in the previous iteration. Finish with FINAL: if the task is complete, otherwise continue with one targeted next action."));
+                    $"You used {toolCallsThisIteration} tools in the previous iteration, which crossed the current step/substep result gate. Continue from the current planned step/substep only. Do not move to a later step until the current step's stated Result is satisfied and you have emitted READY_FOR_NEXT_SUBSTEP. Finish with FINAL: only if the entire approved task is complete and verified; otherwise continue with one targeted next action."));
                 continue;
             }
 
@@ -462,6 +506,7 @@ internal sealed partial class PotatoSession
                 ChatRole.User,
                     PromptLibrary.NextStepAfterObservationMessage(
                         latestUserRequest ?? string.Empty,
+                        latestApproach ?? string.Empty,
                         Environment.CurrentDirectory,
                         reActSubtaskTracker.BuildPromptContext(),
                         "native tool call",
@@ -477,6 +522,12 @@ internal sealed partial class PotatoSession
 
     private static bool IsFinalResponse(string responseText) =>
         FinalMarkerRegex().IsMatch(responseText);
+
+    private static bool IsReadyForNextSubstepResponse(string responseText) =>
+        responseText.TrimStart().StartsWith("READY_FOR_NEXT_SUBSTEP:", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsDraftResultResponse(string responseText) =>
+        responseText.TrimStart().StartsWith("DRAFT_RESULT:", StringComparison.OrdinalIgnoreCase);
 
     private static bool LooksLikeUnmarkedCompletion(string responseText)
     {
@@ -561,7 +612,15 @@ internal sealed partial class PotatoSession
             string currentSubtask = reActSubtaskTracker.CurrentDisplayName();
             chatHistory.Add(new ChatMessage(
                 ChatRole.User,
-                $"Rejected {toolCall.Name}: the current planned subtask is '{currentSubtask}', which is not an edit/write subtask. Continue the approved approach in order. Finish the current discovery, inspection, preparation, or verification subtask before using ApplySearchReplaceAsync, CreateFileAsync, or ApplyDiffPatchAsync."));
+                $"Rejected {toolCall.Name}: the current planned step or substep is '{currentSubtask}', which is not an edit/write step. Continue the approved execution steps in order. Finish the current discovery, inspection, preparation, or verification step before using ApplySearchReplaceAsync, CreateFileAsync, or ApplyDiffPatchAsync."));
+            return true;
+        }
+
+        if (!reActSubtaskTracker.CurrentAllowsTool(toolCall.Name))
+        {
+            chatHistory.Add(new ChatMessage(
+                ChatRole.User,
+                reActSubtaskTracker.CurrentToolRejectionReason(toolCall.Name)));
             return true;
         }
 
@@ -576,6 +635,7 @@ internal sealed partial class PotatoSession
             ChatRole.User,
             PromptLibrary.NextStepAfterObservationMessage(
                 latestUserRequest ?? string.Empty,
+                latestApproach ?? string.Empty,
                 Environment.CurrentDirectory,
                 reActSubtaskTracker.BuildPromptContext(),
                 toolCall.Name,
@@ -616,6 +676,7 @@ internal sealed partial class PotatoSession
                 ChatRole.User,
                 PromptLibrary.NextStepAfterObservationMessage(
                     latestUserRequest ?? string.Empty,
+                    latestApproach ?? string.Empty,
                     Environment.CurrentDirectory,
                     reActSubtaskTracker.BuildPromptContext(),
                     nameof(AgentTools.ApplySearchReplaceAsync),
@@ -643,6 +704,7 @@ internal sealed partial class PotatoSession
                 ChatRole.User,
                 PromptLibrary.NextStepAfterObservationMessage(
                     latestUserRequest ?? string.Empty,
+                    latestApproach ?? string.Empty,
                     Environment.CurrentDirectory,
                     reActSubtaskTracker.BuildPromptContext(),
                     nameof(AgentTools.CreateFileAsync),
@@ -659,11 +721,11 @@ internal sealed partial class PotatoSession
         chatHistory.Add(new ChatMessage(
             ChatRole.User,
             "The previous response did not choose the first approved project-inspection action. " +
-            "Do not run a generic project inventory unless the approved approach says that is the next step. " +
-            "Use exactly one registered tool call that matches the first concrete step in the approved approach. " +
-            "If the approved approach names a specific file, read or summarize that file first.\n\n" +
-            "Approved approach:\n" +
-            (latestApproach ?? "(No approved approach was captured.)")));
+            "Do not run a generic project inventory unless the approved execution steps say that is the next step. " +
+            "Use exactly one registered tool call that matches the first concrete step in the approved execution steps. " +
+            "If the approved execution steps name a specific file, read or summarize that file first.\n\n" +
+            "Approved execution steps:\n" +
+            (latestApproach ?? "(No approved execution steps were captured.)")));
         return true;
     }
 
@@ -705,12 +767,12 @@ internal sealed partial class PotatoSession
         {
             chatHistory.Add(new ChatMessage(
                 ChatRole.User,
-                "Continue by following the approved approach, not a hardcoded discovery sequence. " +
+                "Continue by following the approved execution steps, not a hardcoded discovery sequence. " +
                 "Use exactly one registered tool call for the next concrete subtask. " +
-                "If the approved approach says to inspect a specific file, use ReadFileContent or SummarizeFilePurpose for that file. " +
+                "If the approved execution steps say to inspect a specific file, use ReadFileContent or SummarizeFilePurpose for that file. " +
                 "If it says to inspect project structure, use the listed discovery tool, preferably ListFiles with recursive=false for a top-level overview.\n\n" +
-                "Approved approach:\n" +
-                (latestApproach ?? "(No approved approach was captured.)")));
+                "Approved execution steps:\n" +
+                (latestApproach ?? "(No approved execution steps were captured.)")));
             return ReActFallbackResult.Prompted;
         }
 
@@ -718,7 +780,7 @@ internal sealed partial class PotatoSession
         {
             chatHistory.Add(new ChatMessage(
                 ChatRole.User,
-                "You have enough tool-backed context for the current subtask. The next response must be exactly one registered textual <tool_call> JSON for the next required action, or FINAL: only if the approved task is complete and verified. Do not include prose, markdown fences, approval questions, manual copy instructions, or tool-unavailable claims."));
+                "You have enough tool-backed context for the current step or substep. The next response must be exactly one registered textual <tool_call> JSON for the next required action, or FINAL: only if the approved task is complete and verified. Do not include prose, markdown fences, approval questions, manual copy instructions, or tool-unavailable claims."));
             return ReActFallbackResult.Prompted;
         }
 
@@ -740,6 +802,7 @@ internal sealed partial class PotatoSession
             ChatRole.User,
             PromptLibrary.NextStepAfterObservationMessage(
                 latestUserRequest ?? string.Empty,
+                latestApproach ?? string.Empty,
                 Environment.CurrentDirectory,
                 reActSubtaskTracker.BuildPromptContext(),
                 observationSource,
@@ -947,6 +1010,10 @@ internal sealed partial class PotatoSession
                     GetStringArgument(toolCall.Arguments, "directoryPath") ??
                     GetStringArgument(toolCall.Arguments, "directory_path") ??
                     GetStringArgument(toolCall.Arguments, "path"),
+                    GetStringArgument(toolCall.Arguments, "filePath") ??
+                    GetStringArgument(toolCall.Arguments, "file_path") ??
+                    GetStringArgument(toolCall.Arguments, "targetFile") ??
+                    GetStringArgument(toolCall.Arguments, "target_file"),
                     GetBoolArgument(toolCall.Arguments, "recursive") ?? true,
                     GetBoolArgument(toolCall.Arguments, "matchCase") ??
                     GetBoolArgument(toolCall.Arguments, "match_case") ??

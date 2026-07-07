@@ -27,13 +27,75 @@ internal class AgentTools(ReActMemory memory, Func<IChatClient> getSideQuestionC
 
     public CancellationToken CurrentCancellationToken { get; set; }
 
+    public Func<string, bool>? ToolInvocationAllowed { get; set; }
+
+    public Func<string, string>? ToolInvocationRejectionReason { get; set; }
+
     private bool toolResultWritten;
+    private readonly object toolInvocationLock = new();
+    private int? maxToolInvocationsThisIteration;
+    private int toolInvocationsThisIteration;
+
+    public void BeginReActIteration(int maxToolInvocations)
+    {
+        lock (toolInvocationLock)
+        {
+            maxToolInvocationsThisIteration = Math.Max(1, maxToolInvocations);
+            toolInvocationsThisIteration = 0;
+        }
+    }
+
+    public void EndReActIteration()
+    {
+        lock (toolInvocationLock)
+        {
+            maxToolInvocationsThisIteration = null;
+            toolInvocationsThisIteration = 0;
+        }
+    }
+
+    private bool TryReserveToolInvocation(string toolName, out string rejectionReason)
+    {
+        CurrentCancellationToken.ThrowIfCancellationRequested();
+        lock (toolInvocationLock)
+        {
+            ToolInvocationCount++;
+            if (maxToolInvocationsThisIteration is not { } maxToolInvocations ||
+                toolInvocationsThisIteration < maxToolInvocations)
+            {
+                toolInvocationsThisIteration++;
+                if (ToolInvocationAllowed is null || ToolInvocationAllowed(toolName))
+                {
+                    rejectionReason = string.Empty;
+                    return true;
+                }
+
+                rejectionReason = ToolInvocationRejectionReason?.Invoke(toolName) ??
+                                  $"Rejected {toolName}: this tool does not match the current planned step/substep.";
+                return false;
+            }
+        }
+
+        rejectionReason =
+            $"Rejected {toolName}: this ReAct iteration already used its single permitted tool call. " +
+            "Wait for the latest observation, satisfy the current step's stated Result, and emit READY_FOR_NEXT_SUBSTEP before moving to a later step.";
+        return false;
+    }
+
+    private string RejectToolInvocation(string toolName, string reason)
+    {
+        WriteCompactToolResult(false, "Tool rejected", toolName);
+        return StoreAndReturn(toolName, reason);
+    }
 
     [Description("Gets the current local system date and time.")]
     public string GetCurrentTime()
     {
-        CurrentCancellationToken.ThrowIfCancellationRequested();
-        ToolInvocationCount++;
+        if (!TryReserveToolInvocation(nameof(GetCurrentTime), out string rejectionReason))
+        {
+            return RejectToolInvocation(nameof(GetCurrentTime), rejectionReason);
+        }
+
         WriteToolCall(nameof(GetCurrentTime), []);
         string result = $"The current local time is: {DateTime.Now:F}";
         memory.Add(nameof(GetCurrentTime), result);
@@ -43,8 +105,11 @@ internal class AgentTools(ReActMemory memory, Func<IChatClient> getSideQuestionC
     [Description("Reads the contents of a specific text file from disk.")]
     public string ReadFileContent([Description("The path to the file. Absolute paths are accepted; relative paths resolve from the current working directory.")] string filePath)
     {
-        CurrentCancellationToken.ThrowIfCancellationRequested();
-        ToolInvocationCount++;
+        if (!TryReserveToolInvocation(nameof(ReadFileContent), out string rejectionReason))
+        {
+            return RejectToolInvocation(nameof(ReadFileContent), rejectionReason);
+        }
+
         string? resolvedPath = ResolveReadableFilePath(filePath);
         WriteToolCall(nameof(ReadFileContent),
         [
@@ -71,8 +136,11 @@ internal class AgentTools(ReActMemory memory, Func<IChatClient> getSideQuestionC
         [Description("Whether to recurse into subdirectories. Defaults to false.")] bool recursive = false,
         [Description("Maximum number of entries to return. Defaults to 200 and is capped at 1000.")] int maxEntries = 200)
     {
-        CurrentCancellationToken.ThrowIfCancellationRequested();
-        ToolInvocationCount++;
+        if (!TryReserveToolInvocation(nameof(ListFiles), out string rejectionReason))
+        {
+            return RejectToolInvocation(nameof(ListFiles), rejectionReason);
+        }
+
         string? resolvedPath = ResolveReadableDirectoryPath(directoryPath);
         WriteToolCall(nameof(ListFiles),
         [
@@ -128,8 +196,11 @@ internal class AgentTools(ReActMemory memory, Func<IChatClient> getSideQuestionC
     public string ListProjectFiles(
         [Description("Optional directory path. Absolute paths are accepted; relative paths resolve from the current working directory. Leave empty to inspect the current working directory.")] string? directoryPath = null)
     {
-        CurrentCancellationToken.ThrowIfCancellationRequested();
-        ToolInvocationCount++;
+        if (!TryReserveToolInvocation(nameof(ListProjectFiles), out string rejectionReason))
+        {
+            return RejectToolInvocation(nameof(ListProjectFiles), rejectionReason);
+        }
+
         string? resolvedPath = ResolveReadableDirectoryPath(directoryPath);
         WriteToolCall(nameof(ListProjectFiles),
         [
@@ -191,18 +262,25 @@ internal class AgentTools(ReActMemory memory, Func<IChatClient> getSideQuestionC
     public string SearchFileContents(
         [Description("Text/code content term or terms to find inside files. Multiple terms can be separated with '|', for example 'TODO|class Foo|error'.")] string searchTerms,
         [Description("Optional directory whose text/code file contents should be searched. Absolute paths are accepted; relative paths resolve from the current working directory. Leave empty to search the current working directory.")] string? directoryPath = null,
+        [Description("Optional single file whose text/code contents should be searched. Absolute paths are accepted; relative paths resolve from the current working directory. When provided, this takes precedence over directoryPath.")] string? filePath = null,
         [Description("Whether to recurse into subdirectories. Defaults to true.")] bool recursive = true,
         [Description("Whether matching should be case-sensitive. Defaults to false.")] bool matchCase = false,
         [Description("Maximum number of matching lines to return. Defaults to 100 and is capped at 500.")] int maxMatches = 100)
     {
-        CurrentCancellationToken.ThrowIfCancellationRequested();
-        ToolInvocationCount++;
-        string? resolvedPath = ResolveReadableDirectoryPath(directoryPath);
+        if (!TryReserveToolInvocation(nameof(SearchFileContents), out string rejectionReason))
+        {
+            return RejectToolInvocation(nameof(SearchFileContents), rejectionReason);
+        }
+
+        string? resolvedFilePath = string.IsNullOrWhiteSpace(filePath) ? null : ResolveReadableFilePath(filePath);
+        string? resolvedPath = resolvedFilePath is null ? ResolveReadableDirectoryPath(directoryPath) : Path.GetDirectoryName(resolvedFilePath);
         string[] terms = ParseSearchTerms(searchTerms);
         WriteToolCall(nameof(SearchFileContents),
         [
             ("searchTerms", searchTerms ?? string.Empty),
             ("directoryPath", directoryPath ?? Environment.CurrentDirectory),
+            ("filePath", filePath ?? string.Empty),
+            ("resolvedFilePath", resolvedFilePath ?? string.Empty),
             ("resolvedPath", resolvedPath ?? "(unresolved)"),
             ("recursive", recursive.ToString()),
             ("matchCase", matchCase.ToString()),
@@ -214,6 +292,11 @@ internal class AgentTools(ReActMemory memory, Func<IChatClient> getSideQuestionC
             return StoreAndReturn(nameof(SearchFileContents), "Error: No search terms were provided. Use '|' to separate multiple terms.");
         }
 
+        if (!string.IsNullOrWhiteSpace(filePath) && (resolvedFilePath is null || !File.Exists(resolvedFilePath)))
+        {
+            return StoreAndReturn(nameof(SearchFileContents), $"Error: File '{filePath}' does not exist. Current working directory: {Environment.CurrentDirectory}");
+        }
+
         if (resolvedPath is null || !Directory.Exists(resolvedPath))
         {
             return StoreAndReturn(nameof(SearchFileContents), $"Error: Directory '{directoryPath}' does not exist. Current working directory: {Environment.CurrentDirectory}");
@@ -221,17 +304,29 @@ internal class AgentTools(ReActMemory memory, Func<IChatClient> getSideQuestionC
 
         maxMatches = Math.Clamp(maxMatches, 1, 500);
         StringComparison comparison = matchCase ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
+        bool singleFileSearch = resolvedFilePath is not null;
         var builder = new StringBuilder();
-        builder.AppendLine($"Directory: {resolvedPath}");
-        builder.AppendLine($"Mode: {(recursive ? "recursive" : "top-level")}");
+        if (singleFileSearch)
+        {
+            builder.AppendLine($"File: {resolvedFilePath}");
+        }
+        else
+        {
+            builder.AppendLine($"Directory: {resolvedPath}");
+            builder.AppendLine($"Mode: {(recursive ? "recursive" : "top-level")}");
+        }
+
         builder.AppendLine($"Terms: {string.Join(" | ", terms)}");
 
         int scannedFiles = 0;
         int skippedFiles = 0;
         int matchCount = 0;
         bool truncated = false;
+        IEnumerable<FileInfo> files = resolvedFilePath is not null
+            ? [new FileInfo(resolvedFilePath)]
+            : EnumerateSearchFiles(resolvedPath, recursive);
 
-        foreach (FileInfo file in EnumerateSearchFiles(resolvedPath, recursive))
+        foreach (FileInfo file in files)
         {
             CurrentCancellationToken.ThrowIfCancellationRequested();
 
@@ -275,7 +370,9 @@ internal class AgentTools(ReActMemory memory, Func<IChatClient> getSideQuestionC
                     builder.AppendLine("Matches:");
                 }
 
-                string relativePath = Path.GetRelativePath(resolvedPath, file.FullName);
+                string relativePath = singleFileSearch
+                    ? Path.GetFileName(file.FullName)
+                    : Path.GetRelativePath(resolvedPath, file.FullName);
                 builder.AppendLine($"{relativePath}:{i + 1}: [{matchedTerm}] {Truncate(line.Trim(), 220)}");
                 matchCount++;
 
@@ -304,7 +401,8 @@ internal class AgentTools(ReActMemory memory, Func<IChatClient> getSideQuestionC
             builder.AppendLine($"... truncated after {matchCount} match(es) or {MaxSearchFiles} scanned file(s)");
         }
 
-        return StoreAndReturn($"{nameof(SearchFileContents)} {resolvedPath} ({string.Join(" | ", terms)})", builder.ToString());
+        string sourcePath = resolvedFilePath ?? resolvedPath;
+        return StoreAndReturn($"{nameof(SearchFileContents)} {sourcePath} ({string.Join(" | ", terms)})", builder.ToString());
     }
 
     [Description("Searches for non-hidden files and directories by name, extension, or relative path. Hidden folders and common build/dependency folders are skipped. Use this when you know part of a file/folder name or an extension; it does not search file contents. Provide multiple terms separated by '|'.")]
@@ -315,8 +413,11 @@ internal class AgentTools(ReActMemory memory, Func<IChatClient> getSideQuestionC
         [Description("Whether matching should be case-sensitive. Defaults to false.")] bool matchCase = false,
         [Description("Maximum number of matching files to return. Defaults to 200 and is capped at 1000.")] int maxMatches = 200)
     {
-        CurrentCancellationToken.ThrowIfCancellationRequested();
-        ToolInvocationCount++;
+        if (!TryReserveToolInvocation(nameof(SearchFiles), out string rejectionReason))
+        {
+            return RejectToolInvocation(nameof(SearchFiles), rejectionReason);
+        }
+
         string? resolvedPath = ResolveReadableDirectoryPath(directoryPath);
         string[] terms = ParseSearchTerms(searchTerms);
         WriteToolCall(nameof(SearchFiles),
@@ -408,8 +509,11 @@ internal class AgentTools(ReActMemory memory, Func<IChatClient> getSideQuestionC
     [Description("Summarizes a text file's visible contents and likely purpose without returning the full file. Use this to choose which files need deeper reading.")]
     public async Task<string> SummarizeFilePurpose([Description("The path to the file. Absolute paths are accepted; relative paths resolve from the current working directory.")] string filePath)
     {
-        CurrentCancellationToken.ThrowIfCancellationRequested();
-        ToolInvocationCount++;
+        if (!TryReserveToolInvocation(nameof(SummarizeFilePurpose), out string rejectionReason))
+        {
+            return RejectToolInvocation(nameof(SummarizeFilePurpose), rejectionReason);
+        }
+
         string? resolvedPath = ResolveReadableFilePath(filePath);
         WriteToolCall(nameof(SummarizeFilePurpose),
         [
@@ -483,8 +587,11 @@ internal class AgentTools(ReActMemory memory, Func<IChatClient> getSideQuestionC
         [Description("Use 'list', 'latest', or a numeric index from the collected context list.")] string index = "list",
         [Description("Whether to return full stored content instead of a summary when available.")] bool full = false)
     {
-        CurrentCancellationToken.ThrowIfCancellationRequested();
-        ToolInvocationCount++;
+        if (!TryReserveToolInvocation(nameof(GetCollectedContext), out string rejectionReason))
+        {
+            return RejectToolInvocation(nameof(GetCollectedContext), rejectionReason);
+        }
+
         WriteToolCall(nameof(GetCollectedContext),
         [
             ("index", index),
@@ -500,8 +607,11 @@ internal class AgentTools(ReActMemory memory, Func<IChatClient> getSideQuestionC
         [Description("Optional working directory for the command. Leave empty to use the current process directory.")] string? workingDirectory = null,
         [Description("Optional timeout in seconds. Defaults to 60 seconds and is capped at 600 seconds.")] int timeoutSeconds = DefaultCommandTimeoutSeconds)
     {
-        CurrentCancellationToken.ThrowIfCancellationRequested();
-        ToolInvocationCount++;
+        if (!TryReserveToolInvocation(nameof(ExecuteShellCommandAsync), out string rejectionReason))
+        {
+            return RejectToolInvocation(nameof(ExecuteShellCommandAsync), rejectionReason);
+        }
+
         WriteToolCall(nameof(ExecuteShellCommandAsync),
         [
             ("command", command),
@@ -620,8 +730,11 @@ internal class AgentTools(ReActMemory memory, Func<IChatClient> getSideQuestionC
         [Description("A unified diff patch. It should use git-style file headers such as diff --git, --- a/path, and +++ b/path.")] string patch,
         [Description("Optional working directory where the patch should be applied. Leave empty to use the current process directory.")] string? workingDirectory = null)
     {
-        CurrentCancellationToken.ThrowIfCancellationRequested();
-        ToolInvocationCount++;
+        if (!TryReserveToolInvocation(nameof(ApplyDiffPatchAsync), out string rejectionReason))
+        {
+            return RejectToolInvocation(nameof(ApplyDiffPatchAsync), rejectionReason);
+        }
+
         WriteToolCall(nameof(ApplyDiffPatchAsync),
         [
             ("workingDirectory", workingDirectory ?? Environment.CurrentDirectory),
@@ -729,8 +842,11 @@ internal class AgentTools(ReActMemory memory, Func<IChatClient> getSideQuestionC
         [Description("The exact existing text to find in the file.")] string search,
         [Description("The replacement text to write in place of the search text.")] string replace)
     {
-        CurrentCancellationToken.ThrowIfCancellationRequested();
-        ToolInvocationCount++;
+        if (!TryReserveToolInvocation(nameof(ApplySearchReplaceAsync), out string rejectionReason))
+        {
+            return RejectToolInvocation(nameof(ApplySearchReplaceAsync), rejectionReason);
+        }
+
         string? resolvedPath = ResolveReadableFilePath(filePath);
         WriteToolCall(nameof(ApplySearchReplaceAsync),
         [
@@ -789,8 +905,11 @@ internal class AgentTools(ReActMemory memory, Func<IChatClient> getSideQuestionC
         [Description("The path for the new file. Absolute paths are accepted; relative paths resolve from the current working directory.")] string filePath,
         [Description("The full text content to write into the new file.")] string content)
     {
-        CurrentCancellationToken.ThrowIfCancellationRequested();
-        ToolInvocationCount++;
+        if (!TryReserveToolInvocation(nameof(CreateFileAsync), out string rejectionReason))
+        {
+            return RejectToolInvocation(nameof(CreateFileAsync), rejectionReason);
+        }
+
         string? resolvedPath = ResolveCreatableFilePath(filePath);
         WriteToolCall(nameof(CreateFileAsync),
         [
@@ -1264,10 +1383,11 @@ internal class AgentTools(ReActMemory memory, Func<IChatClient> getSideQuestionC
 
     private static void WriteCompactToolCall(string toolName, IReadOnlyList<(string Name, string Value)> parameters)
     {
-        string? path = parameters.FirstOrDefault(parameter =>
-            parameter.Name.Equals("resolvedPath", StringComparison.OrdinalIgnoreCase) ||
-            parameter.Name.Equals("filePath", StringComparison.OrdinalIgnoreCase) ||
-            parameter.Name.Equals("directoryPath", StringComparison.OrdinalIgnoreCase)).Value;
+        string? path =
+            GetParameterValue(parameters, "resolvedFilePath") ??
+            GetParameterValue(parameters, "resolvedPath") ??
+            GetParameterValue(parameters, "filePath") ??
+            GetParameterValue(parameters, "directoryPath");
 
         string displayPath = string.IsNullOrWhiteSpace(path) || path == "(unresolved)"
             ? string.Empty
@@ -1303,6 +1423,13 @@ internal class AgentTools(ReActMemory memory, Func<IChatClient> getSideQuestionC
         Console.ForegroundColor = waitsForResult ? ConsoleColor.DarkGray : ConsoleColor.Green;
         Console.WriteLine($"{prefix} {label}{displayPath}{displayQuery}");
         Console.ResetColor();
+    }
+
+    private static string? GetParameterValue(IReadOnlyList<(string Name, string Value)> parameters, string name)
+    {
+        string? value = parameters.FirstOrDefault(parameter =>
+            parameter.Name.Equals(name, StringComparison.OrdinalIgnoreCase)).Value;
+        return string.IsNullOrWhiteSpace(value) ? null : value;
     }
 
     private void WriteCompactToolResult(bool success, string label, string detail)
