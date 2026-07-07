@@ -11,6 +11,7 @@ internal static class PromptLibrary
     private const string WorkingDirectoryPlaceholder = "{{working_directory}}";
     private const string PreviousQuestionPlaceholder = "{{previous_question}}";
     private const string UserAnswerPlaceholder = "{{user_answer}}";
+    private const string SubtaskStatePlaceholder = "{{subtask_state}}";
     private const string ObservationSourcePlaceholder = "{{observation_source}}";
     private const string LatestObservationPlaceholder = "{{latest_observation}}";
     private const string SearchReplaceExamplePlaceholder = "{{search_replace_tool_call_example}}";
@@ -88,6 +89,7 @@ internal static class PromptLibrary
     public static string NextStepAfterObservationMessage(
         string latestUserRequest,
         string workingDirectory,
+        string subtaskState,
         string observationSource,
         string latestObservation)
     {
@@ -103,6 +105,7 @@ internal static class PromptLibrary
             Load("next-step-after-observation.md", DefaultNextStepAfterObservationMessage),
             (LatestUserRequestPlaceholder, OneLine(latestUserRequest)),
             (WorkingDirectoryPlaceholder, workingDirectory),
+            (SubtaskStatePlaceholder, subtaskState),
             (ObservationSourcePlaceholder, observationSource),
             (LatestObservationPlaceholder, Compact(latestObservation, 4_000)),
             ("{{direct_replace_instruction}}", directReplaceInstruction));
@@ -125,7 +128,7 @@ internal static class PromptLibrary
         _ = ContinueReActMessage(requireToolUse: true);
         _ = RepeatCurrentStepMessage("Example request", "Example working directory", "Example previous question");
         _ = UserInterventionResponseMessage("Example user answer");
-        _ = NextStepAfterObservationMessage("Example request", "Example working directory", "Example observation source", "Example observation");
+        _ = NextStepAfterObservationMessage("Example request", "Example working directory", "Example subtask state", "Example observation source", "Example observation");
         _ = Load("first-execution-direct-create-file.md", DefaultFirstExecutionDirectCreateFileMessage);
         _ = Load("first-execution-direct-replace-file.md", DefaultFirstExecutionDirectReplaceFileMessage);
         _ = Load("first-execution-project-change.md", DefaultFirstExecutionProjectChangeMessage);
@@ -343,9 +346,11 @@ internal static class PromptLibrary
         "   When Phase 2 is needed, show the ENTIRE adjusted specification again and ask for approval again.\n" +
         "3. PHASE 3 (Approach): After the specification is approved, describe how the task will be completed. " +
         "   Focus on the concrete completion path, not another summary of the user's request. " +
+        "   Break the approved specification into named subtasks. For each subtask, state what it is responsible for and what will be done to complete it. " +
+        "   Include any important ordering or dependency between subtasks. " +
         "   For feature requests, bug fixes, or any task that changes this project, the approach MUST start with context discovery: list files with ListFiles, summarize likely relevant files with SummarizeFilePurpose, read the exact files that own the behavior, then edit and verify. " +
         "   Do not propose a terminal-only workaround for project behavior unless the user explicitly asked for a temporary terminal command instead of a code change. " +
-        "   State that execution will use the ReAct loop for inspect/edit/verify cycles. " +
+        "   State that execution will use the ReAct loop to select the next subtask, inspect/edit/verify, and revise the subtask breakdown if observations show it is incomplete or incorrect. " +
         "   State which available CLI tool or tools you intend to use and why, but do not invent files, configuration, command history stores, or facts that have not been inspected yet. " +
         "   Available CLI tools:\n" +
         ToolSummaryWithArgumentsPlaceholder + "\n" +
@@ -364,9 +369,11 @@ internal static class PromptLibrary
         "Do not show Phase 2. Do not ask for approval again. " +
         "Show only Phase 3: Approach. Describe how the task will be completed in a few bullet points. " +
         "Focus on the concrete completion path, not another summary of the user's request. " +
+        "Break the approved specification into named subtasks. For each subtask, state what it is responsible for and what will be done to complete it. " +
+        "Include any important ordering or dependency between subtasks. " +
         "For feature requests, bug fixes, or any task that changes this project, the approach MUST start with context discovery: list files with ListFiles, summarize likely relevant files with SummarizeFilePurpose, read the exact files that own the behavior, then edit and verify. " +
         "Do not propose a terminal-only workaround for project behavior unless I explicitly asked for a temporary terminal command instead of a code change. " +
-        "State that execution will use the ReAct loop for inspect/edit/verify cycles. " +
+        "State that execution will use the ReAct loop to select the next subtask, inspect/edit/verify, and revise the subtask breakdown if observations show it is incomplete or incorrect. " +
         "State which available CLI tool or tools you intend to use and why, but do not invent files, configuration, command history stores, or facts that have not been inspected yet. " +
         "Available CLI tools:\n" +
         ToolSummaryPlaceholder + "\n" +
@@ -384,7 +391,8 @@ internal static class PromptLibrary
     private const string DefaultToolInstructions =
         "Execution tool instructions for the ReAct loop:\n" +
         "The following tools are available in this CLI. Do not say a listed tool is unavailable merely because you cannot see it as a native model tool.\n" +
-        "Work in observe-act cycles: inspect the current state, call one targeted tool when needed, use the returned observation, then continue.\n" +
+        "Work in observe-act cycles: choose the next subtask from the approved approach, inspect the current state, call one targeted tool when needed, use the returned observation, then continue.\n" +
+        "Treat the approach's subtask breakdown as a working map, not an unchangeable script. If observations prove a subtask is missing, wrong, blocked, or already complete, adjust your next action accordingly while staying within the approved specification.\n" +
         "When the approved task is complete, answer with FINAL: followed by a concise summary and any verification result.\n" +
         "Do not claim success or describe repository facts unless the latest tool observations prove the work was done.\n" +
         "For folder or project explanation tasks, begin with ListFiles or SummarizeFilePurpose instead of shell commands.\n" +
@@ -439,6 +447,8 @@ internal static class PromptLibrary
         "ReAct step. Use only this context plus the latest observation.\n" +
         "Original request: {{latest_user_request}}\n" +
         "Working directory: {{working_directory}}\n" +
+        "Subtask state:\n" +
+        "{{subtask_state}}\n" +
         "Latest observation source: {{observation_source}}\n" +
         "Latest observation:\n" +
         "{{latest_observation}}\n\n" +

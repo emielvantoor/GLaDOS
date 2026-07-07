@@ -12,6 +12,7 @@ internal sealed partial class PotatoSession
     private readonly GladosChatClientFactory clientFactory;
     private readonly ModelSelector modelSelector;
     private readonly ReActMemory reActMemory = new();
+    private readonly ReActSubtaskTracker reActSubtaskTracker = new();
     private readonly AgentTools agentTools;
     private readonly FileMentionExpander fileMentionExpander = new();
     private readonly PotatoRuntimeOptions options;
@@ -276,6 +277,7 @@ internal sealed partial class PotatoSession
 
     private async Task RunReActLoopAsync(ChatOptions toolOptions, CancellationToken cancellationToken)
     {
+        reActSubtaskTracker.LoadFromApproach(latestApproach);
         int successfulEditsBeforeExecution = agentTools.SuccessfulEditCount;
         bool directCreateFileFallbackAttempted = false;
         bool directReplaceFileFallbackAttempted = false;
@@ -283,12 +285,14 @@ internal sealed partial class PotatoSession
         for (int iteration = 1; iteration <= MaxReActIterations; iteration++)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            reActSubtaskTracker.MarkCurrentInProgress();
+            string currentSubtask = reActSubtaskTracker.CurrentDisplayName();
             int toolCallsBefore = agentTools.ToolInvocationCount;
             int memoryItemsBeforeToolCalls = reActMemory.Count;
-            PotatoConsole.WriteStatus($"ReAct iteration {iteration}/{MaxReActIterations}...");
+            PotatoConsole.WriteStatus($"ReAct iteration {iteration}/{MaxReActIterations} - subtask: {currentSubtask}");
 
             ChatResponse response;
-            using (PotatoConsole.StartProgress($"ReAct iteration {iteration}/{MaxReActIterations}..."))
+            using (PotatoConsole.StartProgress($"ReAct iteration {iteration}/{MaxReActIterations} - {currentSubtask}..."))
             {
                 response = await currentClient.GetResponseAsync(chatHistory, toolOptions, cancellationToken);
             }
@@ -303,6 +307,7 @@ internal sealed partial class PotatoSession
 
             chatHistory.Add(new ChatMessage(ChatRole.Assistant, responseText));
             reActMemory.Add("Assistant ReAct response", responseText);
+            reActSubtaskTracker.UpdateFromAssistantResponse(responseText);
 
             if (IsFinalResponse(responseText))
             {
@@ -314,6 +319,7 @@ internal sealed partial class PotatoSession
                     continue;
                 }
 
+                reActSubtaskTracker.MarkAllDone();
                 PotatoConsole.WriteAgentResponse(RemoveFinalMarker(responseText));
                 return;
             }
@@ -418,13 +424,15 @@ internal sealed partial class PotatoSession
                 return;
             }
 
+            reActSubtaskTracker.UpdateFromObservation("native tool call", latestObservation);
             chatHistory.Add(new ChatMessage(
                 ChatRole.User,
-                PromptLibrary.NextStepAfterObservationMessage(
-                    latestUserRequest ?? string.Empty,
-                    Environment.CurrentDirectory,
-                    "native tool call",
-                    latestObservation)));
+                    PromptLibrary.NextStepAfterObservationMessage(
+                        latestUserRequest ?? string.Empty,
+                        Environment.CurrentDirectory,
+                        reActSubtaskTracker.BuildPromptContext(),
+                        "native tool call",
+                        latestObservation)));
         }
 
         PotatoConsole.WriteError($"Stopped after {MaxReActIterations} ReAct iterations without a FINAL response.");
@@ -540,6 +548,7 @@ internal sealed partial class PotatoSession
 
         PotatoConsole.WriteStatus($"Interpreting textual action as tool call: {toolCall.Name}");
         string result = await ExecuteTextualToolCallAsync(toolCall, cancellationToken);
+        reActSubtaskTracker.UpdateFromObservation(toolCall.Name, result);
         using (PotatoConsole.StartProgress("Summarizing context..."))
         {
             await reActMemory.SummarizeLargeUnsummarizedItemsAsync(currentOpenAiClient, cancellationToken);
@@ -549,6 +558,7 @@ internal sealed partial class PotatoSession
             PromptLibrary.NextStepAfterObservationMessage(
                 latestUserRequest ?? string.Empty,
                 Environment.CurrentDirectory,
+                reActSubtaskTracker.BuildPromptContext(),
                 toolCall.Name,
                 result)));
         return true;
@@ -572,6 +582,7 @@ internal sealed partial class PotatoSession
             PotatoConsole.WriteStatus("Model did not call ApplySearchReplaceAsync for a direct file content replacement; running deterministic replacement fallback...");
             string currentContent = await File.ReadAllTextAsync(resolvedPath, cancellationToken);
             string replaceResult = await agentTools.ApplySearchReplaceAsync(resolvedPath, currentContent, replacementContent);
+            reActSubtaskTracker.UpdateFromObservation(nameof(AgentTools.ApplySearchReplaceAsync), replaceResult);
             using (PotatoConsole.StartProgress("Summarizing context..."))
             {
                 await reActMemory.SummarizeLargeUnsummarizedItemsAsync(currentOpenAiClient, cancellationToken);
@@ -582,6 +593,7 @@ internal sealed partial class PotatoSession
                 PromptLibrary.NextStepAfterObservationMessage(
                     latestUserRequest ?? string.Empty,
                     Environment.CurrentDirectory,
+                    reActSubtaskTracker.BuildPromptContext(),
                     nameof(AgentTools.ApplySearchReplaceAsync),
                     replaceResult)));
             return true;
@@ -592,6 +604,7 @@ internal sealed partial class PotatoSession
         {
             PotatoConsole.WriteStatus("Model did not call CreateFileAsync for a direct file creation request; running deterministic file creation fallback...");
             string createResult = await agentTools.CreateFileAsync(filePath, content);
+            reActSubtaskTracker.UpdateFromObservation(nameof(AgentTools.CreateFileAsync), createResult);
             using (PotatoConsole.StartProgress("Summarizing context..."))
             {
                 await reActMemory.SummarizeLargeUnsummarizedItemsAsync(currentOpenAiClient, cancellationToken);
@@ -602,6 +615,7 @@ internal sealed partial class PotatoSession
                 PromptLibrary.NextStepAfterObservationMessage(
                     latestUserRequest ?? string.Empty,
                     Environment.CurrentDirectory,
+                    reActSubtaskTracker.BuildPromptContext(),
                     nameof(AgentTools.CreateFileAsync),
                     createResult)));
             return true;
@@ -615,6 +629,7 @@ internal sealed partial class PotatoSession
 
         PotatoConsole.WriteStatus("Model did not choose the first project inspection action; running deterministic directory listing fallback...");
         string result = agentTools.ListFiles(Environment.CurrentDirectory);
+        reActSubtaskTracker.UpdateFromObservation(nameof(AgentTools.ListFiles), result);
         using (PotatoConsole.StartProgress("Summarizing context..."))
         {
             await reActMemory.SummarizeLargeUnsummarizedItemsAsync(currentOpenAiClient, cancellationToken);
@@ -625,6 +640,7 @@ internal sealed partial class PotatoSession
             PromptLibrary.NextStepAfterObservationMessage(
                 latestUserRequest ?? string.Empty,
                 Environment.CurrentDirectory,
+                reActSubtaskTracker.BuildPromptContext(),
                 nameof(AgentTools.ListFiles),
                 result)));
         return true;
@@ -1455,6 +1471,7 @@ internal sealed partial class PotatoSession
         ArchiveCurrentSession();
         currentState = AgentState.Specifying;
         reActMemory.Clear();
+        reActSubtaskTracker.Clear();
         latestSpecification = null;
         latestApproach = null;
         latestUserRequest = null;

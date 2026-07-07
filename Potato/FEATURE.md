@@ -37,10 +37,10 @@ The CLI uses a staged workflow:
    This phase only runs if the user rejects or changes the specification. If the user approves the specification, this phase is skipped.
 
 3. Approach
-   After approval, the agent explains how the task will be completed. It names the available CLI tool or tools it intends to use and why. If no direct tool fits, it states whether the task can be solved through shell execution and what kind of shell action would be needed. It must not run tools, emit tool-call JSON, or print exact shell commands in this phase.
+   After approval, the agent explains how the task will be completed. It breaks the approved specification into named subtasks, states what each subtask is responsible for, and describes what will be done to complete each one. It also names the available CLI tool or tools it intends to use and why. If no direct tool fits, it states whether the task can be solved through shell execution and what kind of shell action would be needed. It must not run tools, emit tool-call JSON, or print exact shell commands in this phase.
 
 4. Execution
-   The CLI executes the approved approach through a bounded ReAct loop. The model can inspect files, run commands, apply patches, observe results, and continue until it returns a final answer.
+   The CLI executes the approved approach through a bounded ReAct loop. The model uses the approach subtasks as a working map: it chooses the next subtask, inspects files, runs commands, applies patches, observes results, and can revise the breakdown when observations show it is incomplete or incorrect. The loop continues until the model returns a final answer.
 
 For simple read-only or inspection tasks, the CLI may proceed from the approach directly to the command permission prompt. For write, delete, install, risky, or multi-step tasks, the agent should ask the user to type `execute` before continuing. Once execution is approved, the registered tools are allowed to perform the approved work.
 
@@ -137,6 +137,8 @@ Tool calls are printed with their parameters before execution. For file reads, P
 
 During ReAct execution, Potato stores assistant responses and tool outputs as collected context. List entries include descriptors such as file paths, shell commands, or response previews, so smaller stateless models can choose the right index without relying on hidden memory or oversized prompts.
 
+Potato also tracks the subtasks parsed from the approved approach. The tracker is separate from collected context: ReAct memory stores what was observed, while the subtask tracker stores the current planned work item and injects the live subtask state into continuation prompts. During execution, the console status line includes the current subtask.
+
 ## Shell Execution
 
 Shell execution is permissioned.
@@ -202,7 +204,8 @@ After execution is approved, Potato runs a bounded observe-act loop:
 1. Potato sends a compact next-action prompt for the current step, including the original request, current working directory, and latest observation.
 2. Tool calls are executed through the local permissioned tools.
 3. Tool results are treated as observations for the next iteration.
-4. The loop continues until the model responds with `FINAL:` or the iteration limit is reached.
+4. The model continues with the next approved subtask, revising the subtask map when observations require it.
+5. The loop continues until the model responds with `FINAL:` or the iteration limit is reached.
 
 The current loop limit is 12 iterations. Each assistant turn should either call the next useful tool or finish with `FINAL:`. Potato accepts `FINAL:` at the start of a response or on its own later line, so models that produce the answer first and append the marker still terminate the loop cleanly.
 
