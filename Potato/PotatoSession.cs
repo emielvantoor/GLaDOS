@@ -258,6 +258,7 @@ internal sealed partial class PotatoSession
                 AIFunctionFactory.Create(agentTools.ReadFileContent),
                 AIFunctionFactory.Create(agentTools.ListFiles),
                 AIFunctionFactory.Create(agentTools.SearchFiles),
+                AIFunctionFactory.Create(agentTools.SearchFileContents),
                 AIFunctionFactory.Create(agentTools.SummarizeFilePurpose),
                 AIFunctionFactory.Create(agentTools.GetCollectedContext),
                 AIFunctionFactory.Create(agentTools.ApplySearchReplaceAsync),
@@ -628,8 +629,8 @@ internal sealed partial class PotatoSession
             return false;
         }
 
-        PotatoConsole.WriteStatus("Model did not choose the first project inspection action; running deterministic directory listing fallback...");
-        string result = agentTools.ListFiles(Environment.CurrentDirectory);
+        PotatoConsole.WriteStatus("Model did not choose the first project inspection action; running deterministic recursive directory listing fallback...");
+        string result = agentTools.ListFiles(Environment.CurrentDirectory, recursive: true, maxEntries: 500);
         reActSubtaskTracker.UpdateFromObservation(nameof(AgentTools.ListFiles), result);
         using (PotatoConsole.StartProgress("Summarizing context..."))
         {
@@ -793,6 +794,22 @@ internal sealed partial class PotatoSession
                     false,
                     GetIntArgument(toolCall.Arguments, "maxMatches") ??
                     GetIntArgument(toolCall.Arguments, "max_matches") ??
+                    200),
+                nameof(AgentTools.SearchFileContents) => agentTools.SearchFileContents(
+                    GetStringArgument(toolCall.Arguments, "searchTerms") ??
+                    GetStringArgument(toolCall.Arguments, "search_terms") ??
+                    GetStringArgument(toolCall.Arguments, "terms") ??
+                    GetStringArgument(toolCall.Arguments, "query") ??
+                    string.Empty,
+                    GetStringArgument(toolCall.Arguments, "directoryPath") ??
+                    GetStringArgument(toolCall.Arguments, "directory_path") ??
+                    GetStringArgument(toolCall.Arguments, "path"),
+                    GetBoolArgument(toolCall.Arguments, "recursive") ?? true,
+                    GetBoolArgument(toolCall.Arguments, "matchCase") ??
+                    GetBoolArgument(toolCall.Arguments, "match_case") ??
+                    false,
+                    GetIntArgument(toolCall.Arguments, "maxMatches") ??
+                    GetIntArgument(toolCall.Arguments, "max_matches") ??
                     100),
                 nameof(AgentTools.SummarizeFilePurpose) => await agentTools.SummarizeFilePurpose(
                     GetStringArgument(toolCall.Arguments, "filePath") ??
@@ -851,7 +868,8 @@ internal sealed partial class PotatoSession
             "CreateFile" or "create_file" or "write_new_file" or "new_file" => nameof(AgentTools.CreateFileAsync),
             "read_file" => nameof(AgentTools.ReadFileContent),
             "list_files" => nameof(AgentTools.ListFiles),
-            "SearchInFiles" or "search_files" or "search_in_files" or "grep" => nameof(AgentTools.SearchFiles),
+            "SearchFileContents" or "SearchInFiles" or "search_in_files" or "search_file_contents" or "grep" => nameof(AgentTools.SearchFileContents),
+            "search_files" or "find_files" or "search_file_names" or "find_file_names" => nameof(AgentTools.SearchFiles),
             _ => normalized
         };
     }

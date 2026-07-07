@@ -195,12 +195,13 @@ internal static class PromptLibrary
             nameof(AgentTools.ReadFileContent) => 1,
             nameof(AgentTools.ListFiles) => 2,
             nameof(AgentTools.SearchFiles) => 3,
-            nameof(AgentTools.SummarizeFilePurpose) => 4,
-            nameof(AgentTools.GetCollectedContext) => 5,
-            nameof(AgentTools.ApplySearchReplaceAsync) => 6,
-            nameof(AgentTools.CreateFileAsync) => 7,
-            nameof(AgentTools.ApplyDiffPatchAsync) => 8,
-            nameof(AgentTools.ExecuteShellCommandAsync) => 9,
+            nameof(AgentTools.SearchFileContents) => 4,
+            nameof(AgentTools.SummarizeFilePurpose) => 5,
+            nameof(AgentTools.GetCollectedContext) => 6,
+            nameof(AgentTools.ApplySearchReplaceAsync) => 7,
+            nameof(AgentTools.CreateFileAsync) => 8,
+            nameof(AgentTools.ApplyDiffPatchAsync) => 9,
+            nameof(AgentTools.ExecuteShellCommandAsync) => 10,
             _ => 100
         };
 
@@ -349,13 +350,14 @@ internal static class PromptLibrary
         "   Focus on the concrete completion path, not another summary of the user's request. " +
         "   Break the approved specification into named subtasks. For each subtask, state what it is responsible for and what will be done to complete it. " +
         "   Include any important ordering or dependency between subtasks. " +
-        "   For feature requests, bug fixes, or any task that changes this project, the approach MUST start with context discovery: list files with ListFiles, use SearchFiles when looking for known terms, summarize likely relevant files with SummarizeFilePurpose, read the exact files that own the behavior, then edit and verify. " +
+        "   For feature requests, bug fixes, or any task that changes this project, the approach MUST start with context discovery: list files with ListFiles, use SearchFiles when looking for known file names or extensions, use SearchFileContents when looking for known text, symbols, or code snippets inside files, summarize likely relevant files with SummarizeFilePurpose, read the exact files that own the behavior, then edit and verify. " +
+        "   For README or project documentation generation, the approach MUST inspect the repository recursively with ListFiles, use SearchFiles for likely project files and folders, ignore hidden metadata folders, read or summarize representative source/config/documentation files, and include a short introductory overview in the generated document before structure details. " +
         "   Do not propose a terminal-only workaround for project behavior unless the user explicitly asked for a temporary terminal command instead of a code change. " +
         "   State that execution will use the ReAct loop to select the next subtask, inspect/edit/verify, and revise the subtask breakdown if observations show it is incomplete or incorrect. " +
         "   State which available CLI tool or tools you intend to use and why, but do not invent files, configuration, command history stores, or facts that have not been inspected yet. " +
         "   Available CLI tools:\n" +
         ToolSummaryWithArgumentsPlaceholder + "\n" +
-        "   Prefer ListFiles over ExecuteShellCommandAsync for directory listings. Prefer SearchFiles over shell grep/findstr for text/code searches. Prefer SummarizeFilePurpose before reading large files when orienting yourself. " +
+        "   Prefer ListFiles over ExecuteShellCommandAsync for directory listings. Prefer SearchFiles over shell find commands for file name or extension searches. Prefer SearchFileContents over shell grep/findstr for searching inside text/code files. Prefer SummarizeFilePurpose before reading large files when orienting yourself. " +
         "   If no direct available tool fits the task, say whether the task can be solved through ExecuteShellCommandAsync and what kind of shell action would be needed. " +
         "   If neither a direct tool nor shell execution can solve it, say what is missing. " +
         "   Do not emit tool-call JSON or exact shell commands in this phase. " +
@@ -372,13 +374,14 @@ internal static class PromptLibrary
         "Focus on the concrete completion path, not another summary of the user's request. " +
         "Break the approved specification into named subtasks. For each subtask, state what it is responsible for and what will be done to complete it. " +
         "Include any important ordering or dependency between subtasks. " +
-        "For feature requests, bug fixes, or any task that changes this project, the approach MUST start with context discovery: list files with ListFiles, use SearchFiles when looking for known terms, summarize likely relevant files with SummarizeFilePurpose, read the exact files that own the behavior, then edit and verify. " +
+        "For feature requests, bug fixes, or any task that changes this project, the approach MUST start with context discovery: list files with ListFiles, use SearchFiles when looking for known file names or extensions, use SearchFileContents when looking for known text, symbols, or code snippets inside files, summarize likely relevant files with SummarizeFilePurpose, read the exact files that own the behavior, then edit and verify. " +
+        "For README or project documentation generation, the approach MUST inspect the repository recursively with ListFiles, use SearchFiles for likely project files and folders, ignore hidden metadata folders, read or summarize representative source/config/documentation files, and include a short introductory overview in the generated document before structure details. " +
         "Do not propose a terminal-only workaround for project behavior unless I explicitly asked for a temporary terminal command instead of a code change. " +
         "State that execution will use the ReAct loop to select the next subtask, inspect/edit/verify, and revise the subtask breakdown if observations show it is incomplete or incorrect. " +
         "State which available CLI tool or tools you intend to use and why, but do not invent files, configuration, command history stores, or facts that have not been inspected yet. " +
         "Available CLI tools:\n" +
         ToolSummaryPlaceholder + "\n" +
-        "Prefer ListFiles over ExecuteShellCommandAsync for directory listings. Prefer SearchFiles over shell grep/findstr for text/code searches. Prefer SummarizeFilePurpose before reading large files when orienting yourself. " +
+        "Prefer ListFiles over ExecuteShellCommandAsync for directory listings. Prefer SearchFiles over shell find commands for file name or extension searches. Prefer SearchFileContents over shell grep/findstr for searching inside text/code files. Prefer SummarizeFilePurpose before reading large files when orienting yourself. " +
         "If no direct available tool fits the task, say whether the task can be solved through ExecuteShellCommandAsync and what kind of shell action would be needed. " +
         "If neither a direct tool nor shell execution can solve it, say what is missing. " +
         "Do not emit tool-call JSON or exact shell commands in this phase. " +
@@ -397,7 +400,8 @@ internal static class PromptLibrary
         "When the approved task is complete, answer with FINAL: followed by a concise summary and any verification result.\n" +
         "Do not claim success or describe repository facts unless the latest tool observations prove the work was done.\n" +
         "For folder or project explanation tasks, begin with ListFiles or SummarizeFilePurpose instead of shell commands.\n" +
-        "For project changes, do not edit after only a directory listing. First use ListFiles, use SearchFiles when looking for known terms, summarize likely relevant files with SummarizeFilePurpose, read the exact files that own the requested behavior, then edit only that path.\n" +
+        "For README or project documentation generation, do not write after only a top-level listing. First inspect the repository recursively with ListFiles, use SearchFiles to find relevant source/config/project/documentation files and folders, ignore hidden metadata folders, read or summarize representative files, and include a short introductory overview before listing folders or key files.\n" +
+        "For project changes, do not edit after only a directory listing. First use ListFiles, use SearchFiles when looking for known file names or extensions, use SearchFileContents when looking for known text, symbols, or code snippets inside files, summarize likely relevant files with SummarizeFilePurpose, read the exact files that own the requested behavior, then edit only that path.\n" +
         "If you need information collected in an earlier iteration but it is not in the latest observation, call GetCollectedContext with index='list'. Use the descriptions in that list to choose the needed index.\n" +
         "When execution needs a tool, output ONLY this exact GLaDOS format and no other text:\n" +
         "<tool_call>{\"name\":\"ToolName\",\"arguments\":{}}</tool_call>\n" +
@@ -405,7 +409,8 @@ internal static class PromptLibrary
         "If native tool calling fails or you cannot locate the native tool registry, output the same tool action as textual <tool_call> JSON. The CLI parses textual <tool_call> JSON and routes it to the registered tool. Do not switch to shell for source edits.\n" +
         "Available tools:\n" +
         ToolSummaryWithArgumentsPlaceholder + "\n" +
-        "Use ListFiles for directory listings. Use SearchFiles to find terms across text/code files; separate multiple terms with '|'. Use ReadFileContent for exact file content. Use SummarizeFilePurpose to understand a file before deciding whether to read it fully.\n" +
+        "Use ListFiles for directory listings. Use SearchFiles to search file names, extensions, and relative paths; separate multiple terms with '|'. Use SearchFileContents to search inside text/code file contents; separate multiple terms with '|'. Use ReadFileContent for exact file content. Use SummarizeFilePurpose to understand a file before deciding whether to read it fully.\n" +
+        "ListFiles and SearchFiles skip hidden metadata folders and common build/dependency folders. SearchFiles returns matching files and folders.\n" +
         "Use ExecuteShellCommandAsync only for non-editing commands that the direct tools cannot perform, such as builds, tests, git commands, OS checks, or running the application.\n" +
         "For code edits after reading the relevant file, prefer ApplySearchReplaceAsync with exact SEARCH and REPLACE text copied from the latest file content. For new files, use CreateFileAsync. Use ApplyDiffPatchAsync only when SEARCH/REPLACE or CreateFileAsync is not practical, such as broad multi-location changes. Do not use shell redirection, echo, sed -i, perl -pi, or inline file-writing commands to edit source files.\n" +
         "After applying an edit, run focused verification through ExecuteShellCommandAsync when the approved task warrants it.\n" +
@@ -453,8 +458,9 @@ internal static class PromptLibrary
         "Latest observation source: {{observation_source}}\n" +
         "Latest observation:\n" +
         "{{latest_observation}}\n\n" +
-        "Available next actions are the registered tools: GetCurrentTime, ReadFileContent, ListFiles, SearchFiles, SummarizeFilePurpose, GetCollectedContext, ApplySearchReplaceAsync, CreateFileAsync, ApplyDiffPatchAsync, ExecuteShellCommandAsync.\n" +
-        "Use ListFiles for directory listings and SearchFiles for text/code searches; do not use shell commands for those. Use SummarizeFilePurpose to orient on a likely relevant file before reading or patching it.\n" +
+        "Available next actions are the registered tools: GetCurrentTime, ReadFileContent, ListFiles, SearchFiles, SearchFileContents, SummarizeFilePurpose, GetCollectedContext, ApplySearchReplaceAsync, CreateFileAsync, ApplyDiffPatchAsync, ExecuteShellCommandAsync.\n" +
+        "Use ListFiles for directory listings, SearchFiles for file name/extension searches, and SearchFileContents for searches inside text/code file contents; do not use shell commands for those. Use SummarizeFilePurpose to orient on a likely relevant file before reading or patching it.\n" +
+        "For README or project documentation generation, continue gathering recursive file/folder context until representative project files have been read or summarized; do not finish from a shallow directory listing.\n" +
         "If this is a code change and you have only listed files so far, the next action must summarize or read the likely relevant source file. Do not patch or finish yet.\n" +
         "If a source edit is needed, prefer ApplySearchReplaceAsync with exact SEARCH and REPLACE text after reading the relevant file. If a new file is needed, use CreateFileAsync. Use ApplyDiffPatchAsync only when SEARCH/REPLACE or CreateFileAsync is not practical. Do not use shell redirection or append commands to edit files.\n" +
         "{{direct_replace_instruction}}\n" +
@@ -485,8 +491,8 @@ internal static class PromptLibrary
         "Original request: {{latest_user_request}}";
 
     private const string DefaultFirstExecutionProjectInspectionMessage =
-        "Next action only: list files in the current folder to inspect the project. " +
-        "Use ListFiles. Do not use ExecuteShellCommandAsync for directory listing. " +
+        "Next action only: list files recursively in the current folder to inspect the project. " +
+        "Use ListFiles with recursive=true. Do not use ExecuteShellCommandAsync for directory listing. " +
         "Working directory: {{working_directory}}. " +
         "Original request: {{latest_user_request}}";
 
