@@ -89,6 +89,7 @@ internal static class PromptLibrary
 
     public static string NextStepAfterObservationMessage(
         string latestUserRequest,
+        string latestApproach,
         string workingDirectory,
         string subtaskState,
         string observationSource,
@@ -105,6 +106,7 @@ internal static class PromptLibrary
         return Render(
             Load("next-step-after-observation.md", DefaultNextStepAfterObservationMessage),
             (LatestUserRequestPlaceholder, OneLine(latestUserRequest)),
+            (LatestApproachPlaceholder, Compact(latestApproach, 3_000)),
             (WorkingDirectoryPlaceholder, workingDirectory),
             (SubtaskStatePlaceholder, subtaskState),
             (ObservationSourcePlaceholder, observationSource),
@@ -129,7 +131,7 @@ internal static class PromptLibrary
         _ = ContinueReActMessage(requireToolUse: true);
         _ = RepeatCurrentStepMessage("Example request", "Example working directory", "Example previous question");
         _ = UserInterventionResponseMessage("Example user answer");
-        _ = NextStepAfterObservationMessage("Example request", "Example working directory", "Example subtask state", "Example observation source", "Example observation");
+        _ = NextStepAfterObservationMessage("Example request", "Example approved execution steps", "Example working directory", "Example step/substep state", "Example observation source", "Example observation");
         _ = Load("first-execution-direct-create-file.md", DefaultFirstExecutionDirectCreateFileMessage);
         _ = Load("first-execution-direct-replace-file.md", DefaultFirstExecutionDirectReplaceFileMessage);
         _ = Load("first-execution-project-change.md", DefaultFirstExecutionProjectChangeMessage);
@@ -308,7 +310,7 @@ internal static class PromptLibrary
             (WorkingDirectoryPlaceholder, Environment.CurrentDirectory),
             (LatestUserRequestPlaceholder, OneLine(request)),
             (LatestSpecificationPlaceholder, Compact(latestSpecification ?? "(No approved specification was captured.)", 2_000)),
-            (LatestApproachPlaceholder, Compact(latestApproach ?? "(No approved approach was captured.)", 3_000)));
+            (LatestApproachPlaceholder, Compact(latestApproach ?? "(No approved execution steps were captured.)", 3_000)));
 
     private static bool LooksLikeDirectFileCreationRequest(string normalizedRequest) =>
         (normalizedRequest.Contains("write a file", StringComparison.Ordinal) ||
@@ -366,14 +368,20 @@ internal static class PromptLibrary
         "2. PHASE 2 (Adjustment): Run this phase ONLY if the user asks for changes or rejects the specification. " +
         "   If the user approves the specification, SKIP Phase 2 entirely. " +
         "   When Phase 2 is needed, show the ENTIRE adjusted specification again and ask for approval again.\n" +
-        "3. PHASE 3 (Approach): After the specification is approved, describe how the task will be completed. " +
+        "3. PHASE 3 (Execution Steps): After the specification is approved, describe how the task will be completed. " +
         "   Focus on the concrete completion path, not another summary of the user's request. " +
-        "   Break the approved specification into named subtasks. For each subtask, state what it is responsible for and what will be done to complete it. " +
-        "   Include any important ordering or dependency between subtasks. " +
-        "   For feature requests, bug fixes, or any task that changes this project, the approach MUST start with context discovery: list top-level files with ListFiles using recursive=false, then use SearchFiles when looking for known file names or extensions, SearchFileContents when looking for known text, symbols, or code snippets inside files, targeted non-recursive ListFiles calls for relevant subdirectories, summarize likely relevant files with SummarizeFilePurpose, read the exact files that own the behavior, then edit and verify. " +
-        "   For README or project documentation generation, the approach MUST inspect the top-level repository structure first with ListFiles using recursive=false, then use SearchFiles for likely project files and folders plus targeted non-recursive ListFiles calls for relevant subdirectories, ignore hidden metadata folders, read or summarize representative source/config/documentation files, include a short introductory overview in the generated document before structure details, and ensure the document does not repeat or duplicate the same content across sections. " +
+        "   Prefer a flat list of executable steps. Use substeps only when a parent step is useful as a grouping heading; parent steps are grouping only and must not contain their own Action or Result when substeps are present. " +
+        "   Every executable leaf step or leaf substep must be written as 'Step N: <name>' or 'Substep N.N: <name>' and must include exactly these fields: Purpose, Action, Result. " +
+        "   Each executable Action must name exactly one registered tool to call next, except a pure reasoning/drafting step which must say 'Action: No tool; draft from prior observations.' Do not combine multiple tools in one Action. " +
+        "   The Action must use the named tool with valid argument types: use ListFiles for folders/directories, SearchFiles for file or folder names, SearchFileContents for text inside files, ReadFileContent and SummarizeFilePurpose only for specific files, and edit tools only for files. " +
+        "   Do not write broad Actions like 'for each folder, summarize...' unless that leaf step can be completed through repeated calls to the same named tool; otherwise split it into smaller leaf substeps after the needed folder list is observed. " +
+        "   For each executable leaf step or leaf substep, state what it is responsible for, what will be done to complete it, and a concrete 'Result:' that must be observed before the next step or substep may begin. " +
+        "   The Result must be tool-verifiable: name the file, search result, command result, edit result, or summary evidence that proves the step is complete. Do not define a step or substep without a Result. " +
+        "   Include any important ordering or dependency between steps and substeps, and make clear that later steps cannot run until the current Result is satisfied. " +
+        "   For feature requests, bug fixes, or any task that changes this project, the execution steps MUST start with context discovery: list top-level files with ListFiles using recursive=false, then use SearchFiles when looking for known file names or extensions, SearchFileContents when looking for known text, symbols, or code snippets inside files, targeted non-recursive ListFiles calls for relevant subdirectories, summarize likely relevant files with SummarizeFilePurpose, read the exact files that own the behavior, then edit and verify. " +
+        "   For README or project documentation generation, the execution steps MUST inspect the top-level repository structure first with ListFiles using recursive=false, then use SearchFiles for likely project files and folders plus targeted non-recursive ListFiles calls for relevant subdirectories, ignore hidden metadata folders, read or summarize representative source/config/documentation files, include a short introductory overview in the generated document before structure details, and ensure the document does not repeat or duplicate the same content across sections. " +
         "   Do not propose a terminal-only workaround for project behavior unless the user explicitly asked for a temporary terminal command instead of a code change. " +
-        "   State that execution will use the ReAct loop to select the next subtask, inspect/edit/verify, and revise the subtask breakdown if observations show it is incomplete or incorrect. " +
+        "   State that execution will use the ReAct loop to select the next step or substep, inspect/edit/verify, and revise the step/substep breakdown if observations show it is incomplete or incorrect. " +
         "   State which available CLI tool or tools you intend to use and why, but do not invent files, configuration, command history stores, or facts that have not been inspected yet. " +
         "   Available CLI tools:\n" +
         ToolSummaryWithArgumentsPlaceholder + "\n" +
@@ -385,19 +393,25 @@ internal static class PromptLibrary
         "   For simple read-only or inspection tasks, say that no write/delete/risky actions are planned. " +
         "   For write, delete, install, risky, or multi-step tasks, ask the user to type 'execute' before continuing. " +
         "   Make clear that once execution is approved, the registered tools are allowed to perform the approved work.\n" +
-        "4. PHASE 4 (Execution): Execute the approved approach through a ReAct loop using the CLI tools.";
+        "4. PHASE 4 (Execution): Execute the approved execution steps through a ReAct loop using the CLI tools.";
 
     private const string DefaultApprovalToApproachMessage =
         "I approve the specification exactly as written. Skip the adjustment phase. " +
         "Do not show Phase 2. Do not ask for approval again. " +
-        "Show only Phase 3: Approach. Describe how the task will be completed in a few bullet points. " +
+        "Show only Phase 3: Execution Steps. Describe how the task will be completed in a few bullet points. " +
         "Focus on the concrete completion path, not another summary of the user's request. " +
-        "Break the approved specification into named subtasks. For each subtask, state what it is responsible for and what will be done to complete it. " +
-        "Include any important ordering or dependency between subtasks. " +
-        "For feature requests, bug fixes, or any task that changes this project, the approach MUST start with context discovery: list top-level files with ListFiles using recursive=false, then use SearchFiles when looking for known file names or extensions, SearchFileContents when looking for known text, symbols, or code snippets inside files, targeted non-recursive ListFiles calls for relevant subdirectories, summarize likely relevant files with SummarizeFilePurpose, read the exact files that own the behavior, then edit and verify. " +
-        "For README or project documentation generation, the approach MUST inspect the top-level repository structure first with ListFiles using recursive=false, then use SearchFiles for likely project files and folders plus targeted non-recursive ListFiles calls for relevant subdirectories, ignore hidden metadata folders, read or summarize representative source/config/documentation files, include a short introductory overview in the generated document before structure details, and ensure the document does not repeat or duplicate the same content across sections. " +
+        "Prefer a flat list of executable steps. Use substeps only when a parent step is useful as a grouping heading; parent steps are grouping only and must not contain their own Action or Result when substeps are present. " +
+        "Every executable leaf step or leaf substep must be written as 'Step N: <name>' or 'Substep N.N: <name>' and must include exactly these fields: Purpose, Action, Result. " +
+        "Each executable Action must name exactly one registered tool to call next, except a pure reasoning/drafting step which must say 'Action: No tool; draft from prior observations.' Do not combine multiple tools in one Action. " +
+        "The Action must use the named tool with valid argument types: use ListFiles for folders/directories, SearchFiles for file or folder names, SearchFileContents for text inside files, ReadFileContent and SummarizeFilePurpose only for specific files, and edit tools only for files. " +
+        "Do not write broad Actions like 'for each folder, summarize...' unless that leaf step can be completed through repeated calls to the same named tool; otherwise split it into smaller leaf substeps after the needed folder list is observed. " +
+        "For each executable leaf step or leaf substep, state what it is responsible for, what will be done to complete it, and a concrete 'Result:' that must be observed before the next step or substep may begin. " +
+        "The Result must be tool-verifiable: name the file, search result, command result, edit result, or summary evidence that proves the step is complete. Do not define a step or substep without a Result. " +
+        "Include any important ordering or dependency between steps and substeps, and make clear that later steps cannot run until the current Result is satisfied. " +
+        "For feature requests, bug fixes, or any task that changes this project, the execution steps MUST start with context discovery: list top-level files with ListFiles using recursive=false, then use SearchFiles when looking for known file names or extensions, SearchFileContents when looking for known text, symbols, or code snippets inside files, targeted non-recursive ListFiles calls for relevant subdirectories, summarize likely relevant files with SummarizeFilePurpose, read the exact files that own the behavior, then edit and verify. " +
+        "For README or project documentation generation, the execution steps MUST inspect the top-level repository structure first with ListFiles using recursive=false, then use SearchFiles for likely project files and folders plus targeted non-recursive ListFiles calls for relevant subdirectories, ignore hidden metadata folders, read or summarize representative source/config/documentation files, include a short introductory overview in the generated document before structure details, and ensure the document does not repeat or duplicate the same content across sections. " +
         "Do not propose a terminal-only workaround for project behavior unless I explicitly asked for a temporary terminal command instead of a code change. " +
-        "State that execution will use the ReAct loop to select the next subtask, inspect/edit/verify, and revise the subtask breakdown if observations show it is incomplete or incorrect. " +
+        "State that execution will use the ReAct loop to select the next step or substep, inspect/edit/verify, and revise the step/substep breakdown if observations show it is incomplete or incorrect. " +
         "State which available CLI tool or tools you intend to use and why, but do not invent files, configuration, command history stores, or facts that have not been inspected yet. " +
         "Available CLI tools:\n" +
         ToolSummaryPlaceholder + "\n" +
@@ -415,8 +429,16 @@ internal static class PromptLibrary
     private const string DefaultToolInstructions =
         "Execution tool instructions for the ReAct loop:\n" +
         "The following tools are available in this CLI. Do not say a listed tool is unavailable merely because you cannot see it as a native model tool.\n" +
-        "Work in observe-act cycles: choose the next subtask from the approved approach, inspect the current state, call one targeted tool when needed, use the returned observation, then continue.\n" +
-        "Treat the approach's subtask breakdown as a working map, not an unchangeable script. If observations prove a subtask is missing, wrong, blocked, or already complete, adjust your next action accordingly while staying within the approved specification.\n" +
+        "Work in observe-act cycles: choose the next step or substep from the approved execution steps, inspect the current state, call one targeted tool when needed, use the returned observation, then continue.\n" +
+        "Your entire ReAct response must be exactly one of: one single tool call for the current step/substep's approved Action; READY_FOR_NEXT_SUBSTEP: <current step/substep> -> <next step/substep>; DRAFT_RESULT: <concise draft or reasoning result> only when the approved Action explicitly says no tool; or FINAL: <summary>. Never combine these response types.\n" +
+        "Never include more than one tool call in a response. Never call a tool from a later step/substep in the same response. After a tool call, stop and wait for Potato's next observation.\n" +
+        "Each ReAct iteration may execute only one tool call. If you emit multiple tool calls in one response, Potato will execute only the first and reject the rest. Wait for the observation before choosing the next tool.\n" +
+        "Use only the tool or tools named in the current step/substep's approved Action. If that Action's Result is already satisfied, emit READY_FOR_NEXT_SUBSTEP instead of calling a tool from a later step.\n" +
+        "Mandatory decision order before every tool call: first decide whether the latest observation already satisfies the current step/substep's stated Result. If yes, do not call a tool; respond only READY_FOR_NEXT_SUBSTEP: <current step/substep> -> <next step/substep>. If no, call exactly one tool from the current step/substep's approved Action.\n" +
+        "For every ReAct turn, keep both the entire approved task and the current planned step or substep in scope. Do not work on a later step or substep until the current one's stated Result is satisfied by a tool observation.\n" +
+        "Use the current substep goal, the approved step's stated Result, and completion evidence from the step/substep state to decide the next action; do not write a detailed mini-plan for each substep.\n" +
+        "When the current step or substep's stated Result is satisfied and another one remains, respond exactly READY_FOR_NEXT_SUBSTEP: <current step/substep> -> <next step/substep> before taking actions for the next step or substep.\n" +
+        "Treat the execution steps' breakdown as a working map, not an unchangeable script. If observations prove a step or substep is missing, wrong, blocked, or already complete, adjust your next action accordingly while staying within the approved specification.\n" +
         "When the approved task is complete, answer with FINAL: followed by a concise summary and any verification result.\n" +
         "Do not claim success or describe repository facts unless the latest tool observations prove the work was done.\n" +
         "For folder or project explanation tasks, begin with ListFiles or SummarizeFilePurpose instead of shell commands.\n" +
@@ -426,11 +448,11 @@ internal static class PromptLibrary
         "If ReadFileContent or SummarizeFilePurpose has already been used on a file and that file has not been edited since, retrieve that existing result with GetCollectedContext instead of reading or summarizing the same file again. If ApplySearchReplaceAsync, CreateFileAsync, or ApplyDiffPatchAsync has rewritten or created that file after the collected context was stored, treat the older collected context for that file as stale and read or summarize the file again before relying on its contents.\n" +
         "When execution needs a tool, output ONLY this exact GLaDOS format and no other text:\n" +
         "<tool_call>{\"name\":\"ToolName\",\"arguments\":{}}</tool_call>\n" +
-        "Do not ask the user to type execute during the ReAct loop. Execution has already been approved at the approach level.\n" +
+        "Do not ask the user to type execute during the ReAct loop. Execution has already been approved at the execution-steps level.\n" +
         "If native tool calling fails or you cannot locate the native tool registry, output the same tool action as textual <tool_call> JSON. The CLI parses textual <tool_call> JSON and routes it to the registered tool. Do not switch to shell for source edits.\n" +
         "Available tools:\n" +
         ToolSummaryWithArgumentsPlaceholder + "\n" +
-        "Use ListFiles for directory listings. Prefer recursive=false and call ListFiles again on specific subdirectories instead of asking for a broad recursive listing that may truncate. Use SearchFiles to search file names, extensions, and relative paths; separate multiple terms with '|'. Use SearchFileContents to search inside text/code file contents; separate multiple terms with '|'. Use ReadFileContent for exact file content. Use SummarizeFilePurpose to understand a file before deciding whether to read it fully. Use GetCollectedContext to retrieve prior ReadFileContent or SummarizeFilePurpose results for unchanged files.\n" +
+        "Use ListFiles for directory listings. Prefer recursive=false and call ListFiles again on specific subdirectories instead of asking for a broad recursive listing that may truncate. Use SearchFiles to search file names, extensions, and relative paths; separate multiple terms with '|'. Use SearchFileContents to search inside text/code file contents; pass filePath when searching a known target file, and separate multiple terms with '|'. Search terms must come from the current step/substep only; do not combine terms for later steps or adjacent goals. For duplicate-content detection in a known document, first read or retrieve that document and compare its actual headings/phrases; only use SearchFileContents with exact repeated phrases from the document or explicit user-provided duplicate terms, not generic terms such as description or usage unless the current step specifically asks for those. Use ReadFileContent for exact file content. Use SummarizeFilePurpose to understand a file before deciding whether to read it fully. Use GetCollectedContext to retrieve prior ReadFileContent or SummarizeFilePurpose results for unchanged files.\n" +
         "ListFiles and SearchFiles skip hidden metadata folders and common build/dependency folders. SearchFiles returns matching files and folders.\n" +
         "Use ExecuteShellCommandAsync only for non-editing commands that the direct tools cannot perform, such as builds, tests, git commands, OS checks, or running the application.\n" +
         "For code edits after reading the relevant file, prefer ApplySearchReplaceAsync with exact SEARCH and REPLACE text copied from the latest file content. For new files, use CreateFileAsync. Use ApplyDiffPatchAsync only when SEARCH/REPLACE or CreateFileAsync is not practical, such as broad multi-location changes. Do not use shell redirection, echo, sed -i, perl -pi, or inline file-writing commands to edit source files.\n" +
@@ -472,23 +494,33 @@ internal static class PromptLibrary
 
     private const string DefaultNextStepAfterObservationMessage =
         "ReAct step. Use only this context plus the latest observation.\n" +
-        "Original request: {{latest_user_request}}\n" +
+        "Entire approved task: {{latest_user_request}}\n" +
+        "Approved execution steps:\n" +
+        "{{latest_approach}}\n" +
         "Working directory: {{working_directory}}\n" +
-        "Subtask state:\n" +
+        "Step/substep state:\n" +
         "{{subtask_state}}\n" +
         "Latest observation source: {{observation_source}}\n" +
         "Latest observation:\n" +
         "{{latest_observation}}\n\n" +
         "Available next actions are the registered tools: GetCurrentTime, ReadFileContent, ListFiles, SearchFiles, SearchFileContents, SummarizeFilePurpose, GetCollectedContext, ApplySearchReplaceAsync, CreateFileAsync, ApplyDiffPatchAsync, ExecuteShellCommandAsync.\n" +
-        "Use ListFiles for directory listings, SearchFiles for file name/extension searches, and SearchFileContents for searches inside text/code file contents; do not use shell commands for those. Prefer ListFiles with recursive=false, then call ListFiles again on specific subdirectories when more structure is needed. Use SummarizeFilePurpose to orient on a likely relevant file before reading or patching it. If an unchanged file was already read or summarized earlier, use GetCollectedContext to retrieve that result instead of repeating ReadFileContent or SummarizeFilePurpose.\n" +
+        "Your entire response must be exactly one of: one single tool call for the current step/substep's approved Action; READY_FOR_NEXT_SUBSTEP: <current step/substep> -> <next step/substep>; DRAFT_RESULT: <concise draft or reasoning result> only when the approved Action explicitly says no tool; or FINAL: <summary>. Never combine these response types.\n" +
+        "Never include more than one tool call in a response. Never call a tool from a later step/substep in the same response. After a tool call, stop and wait for Potato's next observation.\n" +
+        "This ReAct iteration may execute only one tool call. If you emit multiple tool calls in one response, Potato will execute only the first and reject the rest. Wait for the observation before choosing another tool.\n" +
+        "Use only the tool or tools named in the current step/substep's approved Action. If that Action's Result is already satisfied, emit READY_FOR_NEXT_SUBSTEP instead of calling a tool from a later step.\n" +
+        "Mandatory decision order before every tool call: first decide whether the latest observation already satisfies the current step/substep's stated Result. If yes, do not call a tool; respond only READY_FOR_NEXT_SUBSTEP: <current step/substep> -> <next step/substep>. If no, call exactly one tool from the current step/substep's approved Action.\n" +
+        "Use the current substep goal, the approved step's stated Result, and completion evidence from the step/substep state. Do not produce a detailed mini-plan; act or hand off.\n" +
+        "Use ListFiles for directory listings, SearchFiles for file name/extension searches, and SearchFileContents for searches inside text/code file contents; pass filePath when searching a known target file. Do not use shell commands for those. Search terms must match the current step/substep goal only; do not include terms for later steps or neighboring goals. For duplicate-content detection in a known document, read or retrieve the document and compare its actual headings/phrases; use SearchFileContents only for exact repeated phrases from that document or explicit user-provided duplicate terms. Prefer ListFiles with recursive=false, then call ListFiles again on specific subdirectories when more structure is needed. Use SummarizeFilePurpose to orient on a likely relevant file before reading or patching it. If an unchanged file was already read or summarized earlier, use GetCollectedContext to retrieve that result instead of repeating ReadFileContent or SummarizeFilePurpose.\n" +
         "For README or project documentation generation, continue gathering targeted file/folder context until representative project files have been read or summarized; do not finish from a shallow directory listing, and do not repeat or duplicate the same content across sections in the generated document.\n" +
         "If this is a code change and you have only listed files so far, the next action must summarize or read the likely relevant source file. Do not patch or finish yet.\n" +
         "If a source edit is needed, prefer ApplySearchReplaceAsync with exact SEARCH and REPLACE text after reading the relevant file. If a new file is needed, use CreateFileAsync. Use ApplyDiffPatchAsync only when SEARCH/REPLACE or CreateFileAsync is not practical. Do not use shell redirection or append commands to edit files. After a file is rewritten or created, older GetCollectedContext entries for that file contain stale pre-edit data; read or summarize the file again before relying on its current contents.\n" +
         "{{direct_replace_instruction}}\n" +
-        "Next action: use exactly one tool call, or respond with FINAL: only if the original request is fully answered and verified.";
+        "Substep handoff rule: before moving from the current planned step/substep to a later step/substep, first respond exactly READY_FOR_NEXT_SUBSTEP: <current step/substep> -> <next step/substep>. Do this only when the latest observation satisfies the current step/substep's stated Result. After that handoff response, continue with one tool call for the next step/substep on the following turn.\n" +
+        "Next action: use exactly one tool call for the current planned step/substep, respond with READY_FOR_NEXT_SUBSTEP: only when the current step/substep is complete and another step/substep remains, or respond with FINAL: only if the entire approved task is fully answered and verified.";
 
     private const string DefaultFirstExecutionDirectCreateFileMessage =
         "Next action only: create the requested new file using CreateFileAsync. " +
+        "Emit exactly one tool call; additional tool calls in this ReAct iteration will be rejected. " +
         "Do not use ExecuteShellCommandAsync, shell redirection, echo, tee, or manual editor instructions. " +
         "CreateFileAsync is registered and available. " +
         "Working directory: {{working_directory}}. " +
@@ -496,6 +528,7 @@ internal static class PromptLibrary
 
     private const string DefaultFirstExecutionDirectReplaceFileMessage =
         "Next action only: read the target file with ReadFileContent. " +
+        "Emit exactly one tool call; additional tool calls in this ReAct iteration will be rejected. " +
         "Do not use ExecuteShellCommandAsync, shell redirection, echo, tee, CreateFileAsync, or manual editor instructions. " +
         "After the read observation, the next step will use ApplySearchReplaceAsync with the exact current file content as SEARCH and the requested new content as REPLACE. " +
         "ReadFileContent and ApplySearchReplaceAsync are registered and available. " +
@@ -503,37 +536,41 @@ internal static class PromptLibrary
         "Original request: {{latest_user_request}}";
 
     private const string DefaultFirstExecutionProjectChangeMessage =
-        "Next action only: execute the first concrete tool step from the approved approach. " +
+        "Next action only: execute the first concrete tool step from the approved execution steps. " +
+        "Emit exactly one tool call; additional tool calls in this ReAct iteration will be rejected. " +
         "Do not invent a different first step because the request looks like a project change. " +
-        "If the approved approach names a specific first file or tool, use that. " +
-        "If the approved approach starts with broad project discovery, prefer ListFiles with recursive=false or ListProjectFiles as stated in the approach. " +
+        "If the approved execution steps name a specific first file or tool, use that. " +
+        "If the approved execution steps start with broad project discovery, prefer ListFiles with recursive=false or ListProjectFiles as stated in the execution steps. " +
         "Do not use ExecuteShellCommandAsync for directory listing or source edits. " +
         "Working directory: {{working_directory}}. " +
         "Original request: {{latest_user_request}}\n\n" +
-        "Approved approach:\n{{latest_approach}}";
+        "Approved execution steps:\n{{latest_approach}}";
 
     private const string DefaultFirstExecutionProjectInspectionMessage =
-        "Next action only: execute the first concrete tool step from the approved approach. " +
-        "Do not replace the approved first step with a generic project listing unless the approach starts with project listing. " +
+        "Next action only: execute the first concrete tool step from the approved execution steps. " +
+        "Emit exactly one tool call; additional tool calls in this ReAct iteration will be rejected. " +
+        "Do not replace the approved first step with a generic project listing unless the execution steps start with project listing. " +
         "If directory listing is the approved first step, use ListFiles with recursive=false. " +
         "Do not use ExecuteShellCommandAsync for directory listing. " +
         "Working directory: {{working_directory}}. " +
         "Original request: {{latest_user_request}}\n\n" +
-        "Approved approach:\n{{latest_approach}}";
+        "Approved execution steps:\n{{latest_approach}}";
 
     private const string DefaultFirstExecutionReadOnlyInspectionMessage =
-        "Next action only: execute the first concrete read-only tool step from the approved approach. " +
-        "If the approved approach names a specific first file or tool, use that. " +
+        "Next action only: execute the first concrete read-only tool step from the approved execution steps. " +
+        "Emit exactly one tool call; additional tool calls in this ReAct iteration will be rejected. " +
+        "If the approved execution steps name a specific first file or tool, use that. " +
         "Working directory: {{working_directory}}. " +
         "Original request: {{latest_user_request}}\n\n" +
-        "Approved approach:\n{{latest_approach}}";
+        "Approved execution steps:\n{{latest_approach}}";
 
     private const string DefaultFirstExecutionGenericMessage =
-        "Next action only. Execute the first concrete step from the approved approach using one tool call. " +
-        "Do not restate the plan and do not substitute a different discovery step unless the approved approach requires it. Use FINAL: only when complete. " +
+        "Next action only. Execute the first concrete step from the approved execution steps using one tool call. " +
+        "Additional tool calls in this ReAct iteration will be rejected. " +
+        "Do not restate the plan and do not substitute a different discovery step unless the approved execution steps require it. Use FINAL: only when complete. " +
         "Working directory: {{working_directory}}. " +
         "Original request: {{latest_user_request}}\n\n" +
-        "Approved approach:\n{{latest_approach}}";
+        "Approved execution steps:\n{{latest_approach}}";
 
     private const string DefaultGreetingSystemPrompt =
         "You are PotatOS, the AI from Portal 2 who has been trapped inside a potato battery. " +

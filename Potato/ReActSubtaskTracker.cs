@@ -17,14 +17,14 @@ internal sealed partial class ReActSubtaskTracker
             return;
         }
 
-        foreach (string name in ExtractSubtaskNames(approach))
+        foreach (TrackedSubtask parsedSubtask in ExtractSubtasks(approach))
         {
-            if (subtasks.Any(subtask => string.Equals(subtask.Name, name, StringComparison.OrdinalIgnoreCase)))
+            if (subtasks.Any(subtask => string.Equals(subtask.Name, parsedSubtask.Name, StringComparison.OrdinalIgnoreCase)))
             {
                 continue;
             }
 
-            subtasks.Add(new TrackedSubtask(name));
+            subtasks.Add(parsedSubtask);
             if (subtasks.Count >= MaxSubtasks)
             {
                 break;
@@ -36,7 +36,7 @@ internal sealed partial class ReActSubtaskTracker
     {
         if (subtasks.Count == 0)
         {
-            return "approved approach";
+            return "approved execution steps";
         }
 
         return (subtasks.FirstOrDefault(subtask => subtask.Status == SubtaskStatus.InProgress) ??
@@ -46,23 +46,59 @@ internal sealed partial class ReActSubtaskTracker
 
     public bool CurrentAllowsEditTools()
     {
-        if (subtasks.Count == 0)
+        return CurrentAllowsTool(nameof(AgentTools.ApplySearchReplaceAsync)) ||
+               CurrentAllowsTool(nameof(AgentTools.CreateFileAsync)) ||
+               CurrentAllowsTool(nameof(AgentTools.ApplyDiffPatchAsync));
+    }
+
+    public bool CurrentAllowsTool(string toolName)
+    {
+        TrackedSubtask? current = CurrentSubtask();
+        if (current is null)
         {
             return true;
         }
 
-        return LooksLikeWriteSubtask(CurrentDisplayName().ToLowerInvariant());
+        if (current.AllowedTools.Count > 0)
+        {
+            return current.AllowedTools.Contains(toolName);
+        }
+
+        if (current.AllowsNoTool)
+        {
+            return false;
+        }
+
+        return !IsEditToolName(toolName) || LooksLikeWriteSubtask(current.Name.ToLowerInvariant());
+    }
+
+    public string CurrentToolRejectionReason(string toolName)
+    {
+        TrackedSubtask? current = CurrentSubtask();
+        if (current is null)
+        {
+            return $"Rejected {toolName}: no current step/substep is active.";
+        }
+
+        string allowedTools = current.AllowsNoTool
+            ? "no tools; this step must return DRAFT_RESULT"
+            : current.AllowedTools.Count == 0
+            ? "no explicit tool list was parsed for this step"
+            : string.Join(", ", current.AllowedTools.OrderBy(tool => tool, StringComparer.OrdinalIgnoreCase));
+
+        return $"Rejected {toolName}: the current planned step/substep is '{current.Name}', and its approved Action allows {allowedTools}. " +
+               "Use the approved tool for the current step, or emit READY_FOR_NEXT_SUBSTEP if the current step's stated Result is already satisfied.";
     }
 
     public string BuildPromptContext()
     {
         if (subtasks.Count == 0)
         {
-            return "No structured subtasks were parsed from the approach. Continue against the approved approach.";
+            return "No structured steps or substeps were parsed from the execution steps. Continue against the approved execution steps.";
         }
 
         var builder = new StringBuilder();
-        builder.AppendLine("Tracked subtasks from the approved approach:");
+        builder.AppendLine("Tracked steps/substeps from the approved execution steps:");
         for (int i = 0; i < subtasks.Count; i++)
         {
             TrackedSubtask subtask = subtasks[i];
@@ -73,17 +109,27 @@ internal sealed partial class ReActSubtaskTracker
             builder.Append(" [");
             builder.Append(FormatStatus(subtask.Status));
             builder.AppendLine("]");
+            if (subtask.AllowedTools.Count > 0)
+            {
+                builder.Append("  Allowed tools from approved Action: ");
+                builder.AppendLine(string.Join(", ", subtask.AllowedTools.OrderBy(tool => tool, StringComparer.OrdinalIgnoreCase)));
+            }
         }
 
-        builder.Append("Current planned subtask: ");
-        builder.Append(CurrentDisplayName());
+        string currentName = CurrentDisplayName();
+        builder.AppendLine("Current planned step/substep: ");
+        builder.AppendLine(currentName);
+        builder.Append("Current substep goal: ");
+        builder.AppendLine(BuildSubstepGoal(currentName));
+        builder.Append("Completion evidence for this substep: ");
+        builder.AppendLine(BuildCompletionEvidence(currentName));
+        builder.AppendLine("Do not write a full mini-plan. Use the goal and evidence to choose one tool call, READY_FOR_NEXT_SUBSTEP, or FINAL.");
         return builder.ToString();
     }
 
     public void MarkCurrentInProgress()
     {
-        TrackedSubtask? current = subtasks.FirstOrDefault(subtask => subtask.Status == SubtaskStatus.InProgress) ??
-                                  subtasks.FirstOrDefault(subtask => subtask.Status == SubtaskStatus.Pending);
+        TrackedSubtask? current = CurrentSubtask();
         if (current is not null)
         {
             current.Status = SubtaskStatus.InProgress;
@@ -98,6 +144,28 @@ internal sealed partial class ReActSubtaskTracker
         }
 
         string normalized = responseText.ToLowerInvariant();
+        if (normalized.TrimStart().StartsWith("ready_for_next_substep:", StringComparison.Ordinal))
+        {
+            TrackedSubtask? current = CurrentSubtask();
+            if (current is not null)
+            {
+                CompleteCurrentAndStartNext(current);
+            }
+
+            return;
+        }
+
+        if (normalized.TrimStart().StartsWith("draft_result:", StringComparison.Ordinal))
+        {
+            TrackedSubtask? current = CurrentSubtask();
+            if (current is not null && current.AllowsNoTool)
+            {
+                CompleteCurrentAndStartNext(current);
+            }
+
+            return;
+        }
+
         foreach (TrackedSubtask subtask in subtasks)
         {
             if (!normalized.Contains(subtask.Name.ToLowerInvariant(), StringComparison.Ordinal))
@@ -136,39 +204,12 @@ internal sealed partial class ReActSubtaskTracker
             return;
         }
 
-        if (LooksLikeContextSubtask(normalizedName) &&
-            (current.ObservationCount >= 2 ||
-             normalizedSource.Contains("listfiles", StringComparison.Ordinal) ||
-             normalizedSource.Contains("listprojectfiles", StringComparison.Ordinal) ||
-             normalizedSource.Contains("readfilecontent", StringComparison.Ordinal) ||
-             normalizedSource.Contains("searchfiles", StringComparison.Ordinal) ||
-             normalizedSource.Contains("searchfilecontents", StringComparison.Ordinal) ||
-             normalizedSource.Contains("summarizefilepurpose", StringComparison.Ordinal) ||
-             normalizedObservation.Contains("source: listfiles", StringComparison.Ordinal) ||
-             normalizedObservation.Contains("source: listprojectfiles", StringComparison.Ordinal) ||
-             normalizedObservation.Contains("source: searchfiles", StringComparison.Ordinal) ||
-             normalizedObservation.Contains("source: searchfilecontents", StringComparison.Ordinal) ||
-             normalizedObservation.Contains("source: summarizefilepurpose", StringComparison.Ordinal) ||
-             normalizedObservation.Contains("file content:", StringComparison.Ordinal)))
-        {
-            CompleteCurrentAndStartNext(current);
-            return;
-        }
-
-        if (LooksLikeEditSubtask(normalizedName) &&
-            (normalizedObservation.Contains("applied successfully", StringComparison.Ordinal) ||
-             normalizedObservation.Contains("created successfully", StringComparison.Ordinal) ||
-             normalizedObservation.Contains("patch applied successfully", StringComparison.Ordinal)))
-        {
-            CompleteCurrentAndStartNext(current);
-            return;
-        }
-
-        if (LooksLikeVerificationSubtask(normalizedName) &&
-            normalizedObservation.Contains("exit code: 0", StringComparison.Ordinal))
-        {
-            CompleteCurrentAndStartNext(current);
-        }
+        // Observations are evidence, not an implicit handoff. The model must compare
+        // the latest observation with the approved step's stated Result and emit
+        // READY_FOR_NEXT_SUBSTEP before the tracker advances.
+        _ = normalizedName;
+        _ = normalizedObservation;
+        _ = normalizedSource;
     }
 
     public void MarkAllDone()
@@ -181,9 +222,22 @@ internal sealed partial class ReActSubtaskTracker
 
     public void Clear() => subtasks.Clear();
 
-    private static IEnumerable<string> ExtractSubtaskNames(string approach)
+    private TrackedSubtask? CurrentSubtask()
+    {
+        if (subtasks.Count == 0)
+        {
+            return null;
+        }
+
+        return subtasks.FirstOrDefault(subtask => subtask.Status == SubtaskStatus.InProgress) ??
+               subtasks.FirstOrDefault(subtask => subtask.Status == SubtaskStatus.Pending) ??
+               subtasks[^1];
+    }
+
+    private static IEnumerable<TrackedSubtask> ExtractSubtasks(string approach)
     {
         bool inCodeFence = false;
+        TrackedSubtask? current = null;
         foreach (string rawLine in approach.Replace("\r\n", "\n").Split('\n'))
         {
             string line = rawLine.Trim();
@@ -198,25 +252,65 @@ internal sealed partial class ReActSubtaskTracker
                 continue;
             }
 
-            Match match = SubtaskLineRegex().Match(line);
-            if (!match.Success)
+            if (IsPlanMetadataBoundary(line))
             {
+                if (current is not null && ShouldTrackSubtask(current))
+                {
+                    yield return current;
+                }
+
+                current = null;
                 continue;
             }
 
-            string name = CleanName(match.Groups["name"].Value);
-            if (IsUsefulSubtaskName(name))
+            Match match = SubtaskLineRegex().Match(line);
+            if (match.Success)
             {
-                yield return name;
+                if (current is not null && ShouldTrackSubtask(current))
+                {
+                    yield return current;
+                }
+
+                string name = CleanName(
+                    match.Groups["named"].Success
+                        ? match.Groups["named"].Value
+                        : match.Groups["numbered"].Value);
+                current = IsUsefulSubtaskName(name)
+                    ? new TrackedSubtask(name)
+                    : null;
+                continue;
+            }
+
+            if (current is not null)
+            {
+                if (LooksLikeNoToolActionLine(line))
+                {
+                    current.AllowsNoTool = true;
+                }
+
+                foreach (string toolName in ExtractToolNames(line))
+                {
+                    current.AllowedTools.Add(toolName);
+                }
             }
         }
+
+        if (current is not null && ShouldTrackSubtask(current))
+        {
+            yield return current;
+        }
     }
+
+    private static bool ShouldTrackSubtask(TrackedSubtask subtask) =>
+        IsUsefulSubtaskName(subtask.Name) &&
+        (subtask.AllowedTools.Count > 0 || subtask.AllowsNoTool);
 
     private static string CleanName(string value)
     {
         string name = value.Trim().Trim('*', '`', '.', ':', '-', ' ');
         name = Regex.Replace(name, @"\s+", " ");
         name = Regex.Replace(name, @"^(?:subtask|step|task)\s+\d+\s*[:.-]\s*", string.Empty, RegexOptions.IgnoreCase);
+        name = Regex.Replace(name, @"^\d+(?:\.\d+)*[.)]\s*", string.Empty, RegexOptions.IgnoreCase);
         return name.Length <= 80 ? name : name[..80].Trim();
     }
 
@@ -231,9 +325,60 @@ internal sealed partial class ReActSubtaskTracker
         return !normalized.Contains("available cli tools", StringComparison.Ordinal) &&
                !normalized.Equals("tools", StringComparison.Ordinal) &&
                !normalized.Equals("react loop", StringComparison.Ordinal) &&
+               !normalized.Equals("responsible for", StringComparison.Ordinal) &&
+               !normalized.Equals("result", StringComparison.Ordinal) &&
+               !normalized.Equals("tool", StringComparison.Ordinal) &&
+               !normalized.Equals("tools used", StringComparison.Ordinal) &&
                !normalized.Contains("type 'execute'", StringComparison.Ordinal) &&
                !normalized.Contains("execution approval", StringComparison.Ordinal);
     }
+
+    private static bool IsPlanMetadataBoundary(string line)
+    {
+        string normalized = line.Trim().Trim('-', '*', ' ', ':').ToLowerInvariant();
+        return normalized.StartsWith("tools used", StringComparison.Ordinal) ||
+               normalized.StartsWith("dependencies", StringComparison.Ordinal) ||
+               normalized.StartsWith("execution approval", StringComparison.Ordinal) ||
+               normalized.StartsWith("execution approval required", StringComparison.Ordinal);
+    }
+
+    private static bool LooksLikeNoToolActionLine(string line) =>
+        line.Contains("no tool", StringComparison.OrdinalIgnoreCase);
+
+    private static IEnumerable<string> ExtractToolNames(string line)
+    {
+        foreach (Match match in ToolNameRegex().Matches(line))
+        {
+            string? toolName = CanonicalToolName(match.Groups["tool"].Value);
+            if (toolName is not null)
+            {
+                yield return toolName;
+            }
+        }
+    }
+
+    private static string? CanonicalToolName(string toolName) =>
+        toolName.ToLowerInvariant() switch
+        {
+            "getcurrenttime" => nameof(AgentTools.GetCurrentTime),
+            "readfilecontent" => nameof(AgentTools.ReadFileContent),
+            "listfiles" => nameof(AgentTools.ListFiles),
+            "listprojectfiles" => nameof(AgentTools.ListProjectFiles),
+            "searchfiles" => nameof(AgentTools.SearchFiles),
+            "searchfilecontents" => nameof(AgentTools.SearchFileContents),
+            "summarizefilepurpose" => nameof(AgentTools.SummarizeFilePurpose),
+            "getcollectedcontext" => nameof(AgentTools.GetCollectedContext),
+            "applysearchreplaceasync" => nameof(AgentTools.ApplySearchReplaceAsync),
+            "createfileasync" => nameof(AgentTools.CreateFileAsync),
+            "applydiffpatchasync" => nameof(AgentTools.ApplyDiffPatchAsync),
+            "executeshellcommandasync" => nameof(AgentTools.ExecuteShellCommandAsync),
+            _ => null
+        };
+
+    private static bool IsEditToolName(string toolName) =>
+        toolName is nameof(AgentTools.ApplySearchReplaceAsync) or
+            nameof(AgentTools.CreateFileAsync) or
+            nameof(AgentTools.ApplyDiffPatchAsync);
 
     private static bool ContainsCompletionLanguage(string normalizedResponse, string subtaskName)
     {
@@ -241,7 +386,60 @@ internal sealed partial class ReActSubtaskTracker
         return normalizedResponse.Contains($"{normalizedName} [done]", StringComparison.Ordinal) ||
                normalizedResponse.Contains($"{normalizedName}: done", StringComparison.Ordinal) ||
                normalizedResponse.Contains($"{normalizedName} complete", StringComparison.Ordinal) ||
-               normalizedResponse.Contains($"completed {normalizedName}", StringComparison.Ordinal);
+               normalizedResponse.Contains($"completed {normalizedName}", StringComparison.Ordinal) ||
+               normalizedResponse.Contains($"ready_for_next_substep: {normalizedName}", StringComparison.Ordinal);
+    }
+
+    private static string BuildSubstepGoal(string subtaskName)
+    {
+        string normalizedName = subtaskName.ToLowerInvariant();
+        if (LooksLikeDuplicateSubtask(normalizedName))
+        {
+            return "identify duplicated content in the target document using actual repeated headings, phrases, or sections.";
+        }
+
+        if (LooksLikeContextSubtask(normalizedName))
+        {
+            return "collect only the context needed for this step/substep without editing files.";
+        }
+
+        if (LooksLikeEditSubtask(normalizedName))
+        {
+            return "apply the approved file change for this step/substep using the current file contents.";
+        }
+
+        if (LooksLikeVerificationSubtask(normalizedName))
+        {
+            return "verify the completed change or answer with focused evidence.";
+        }
+
+        return "complete the named step/substep while staying within the entire approved task.";
+    }
+
+    private static string BuildCompletionEvidence(string subtaskName)
+    {
+        string normalizedName = subtaskName.ToLowerInvariant();
+        if (LooksLikeDuplicateSubtask(normalizedName))
+        {
+            return "the target document has been read or retrieved, and duplicate candidates are identified from actual repeated text or proven absent.";
+        }
+
+        if (LooksLikeContextSubtask(normalizedName))
+        {
+            return "relevant file listings, searches, reads, summaries, or retrieved collected context are available.";
+        }
+
+        if (LooksLikeEditSubtask(normalizedName))
+        {
+            return "the edit tool reports a successful write, create, or patch for the intended file.";
+        }
+
+        if (LooksLikeVerificationSubtask(normalizedName))
+        {
+            return "the verification command/result succeeds or the final read confirms the expected state.";
+        }
+
+        return "the latest observation proves this step/substep's requested work is done.";
     }
 
     private void CompleteCurrentAndStartNext(TrackedSubtask current)
@@ -271,6 +469,12 @@ internal sealed partial class ReActSubtaskTracker
         normalizedName.Contains("read", StringComparison.Ordinal) ||
         normalizedName.Contains("summar", StringComparison.Ordinal) ||
         normalizedName.Contains("understand", StringComparison.Ordinal);
+
+    private static bool LooksLikeDuplicateSubtask(string normalizedName) =>
+        normalizedName.Contains("duplicate", StringComparison.Ordinal) ||
+        normalizedName.Contains("duplicated", StringComparison.Ordinal) ||
+        normalizedName.Contains("redundan", StringComparison.Ordinal) ||
+        normalizedName.Contains("repeat", StringComparison.Ordinal);
 
     private static bool LooksLikeEditSubtask(string normalizedName) =>
         normalizedName.Contains("implement", StringComparison.Ordinal) ||
@@ -321,12 +525,19 @@ internal sealed partial class ReActSubtaskTracker
             _ => "unknown"
         };
 
-    [GeneratedRegex(@"^(?:[-*]\s+|\d+[.)]\s+)(?:\[[ xX]\]\s+)?(?:\*\*)?(?<name>[^*\r\n]{3,120})(?:\*\*)?\s*(?::|-\s+|\s*$)")]
+    [GeneratedRegex(@"^(?:[-*]\s+)?(?:\[[ xX]\]\s+)?(?:\*\*)?(?:(?:step|substep|task)\s+\d+(?:\.\d+)?\s*[:.-]\s*(?<named>[^*\r\n]{3,120})|(?<numbered>\d+(?:\.\d+)*[.)]\s+[^*\r\n]{3,120}))(?:\*\*)?\s*(?::|-\s+|\s*$)", RegexOptions.IgnoreCase)]
     private static partial Regex SubtaskLineRegex();
+
+    [GeneratedRegex(@"`?(?<tool>GetCurrentTime|ReadFileContent|ListFiles|ListProjectFiles|SearchFiles|SearchFileContents|SummarizeFilePurpose|GetCollectedContext|ApplySearchReplaceAsync|CreateFileAsync|ApplyDiffPatchAsync|ExecuteShellCommandAsync)`?", RegexOptions.IgnoreCase)]
+    private static partial Regex ToolNameRegex();
 
     private sealed class TrackedSubtask(string name)
     {
         public string Name { get; } = name;
+
+        public HashSet<string> AllowedTools { get; } = new(StringComparer.Ordinal);
+
+        public bool AllowsNoTool { get; set; }
 
         public SubtaskStatus Status { get; set; } = SubtaskStatus.Pending;
 
