@@ -309,11 +309,6 @@ internal sealed partial class PotatoSession
             int memoryItemsBeforeToolCalls = reActMemory.Count;
             PotatoConsole.WriteStatus($"ReAct iteration {iteration}/{MaxReActIterations} - subtask: {currentSubtask}");
 
-            if (await EnsureProjectInventoryBeforeEditsAsync(cancellationToken))
-            {
-                continue;
-            }
-
             ChatResponse response;
             using (PotatoConsole.StartProgress($"ReAct iteration {iteration}/{MaxReActIterations} - {currentSubtask}..."))
             {
@@ -661,22 +656,14 @@ internal sealed partial class PotatoSession
             return false;
         }
 
-        PotatoConsole.WriteStatus("Model did not choose the first project inspection action; running deterministic project inventory fallback...");
-        string result = agentTools.ListProjectFiles(Environment.CurrentDirectory);
-        reActSubtaskTracker.UpdateFromObservation(nameof(AgentTools.ListProjectFiles), result);
-        using (PotatoConsole.StartProgress("Summarizing context..."))
-        {
-            await reActMemory.SummarizeLargeUnsummarizedItemsAsync(currentOpenAiClient, cancellationToken);
-        }
-
         chatHistory.Add(new ChatMessage(
             ChatRole.User,
-            PromptLibrary.NextStepAfterObservationMessage(
-                    latestUserRequest ?? string.Empty,
-                    Environment.CurrentDirectory,
-                    reActSubtaskTracker.BuildPromptContext(),
-                    nameof(AgentTools.ListProjectFiles),
-                    result)));
+            "The previous response did not choose the first approved project-inspection action. " +
+            "Do not run a generic project inventory unless the approved approach says that is the next step. " +
+            "Use exactly one registered tool call that matches the first concrete step in the approved approach. " +
+            "If the approved approach names a specific file, read or summarize that file first.\n\n" +
+            "Approved approach:\n" +
+            (latestApproach ?? "(No approved approach was captured.)")));
         return true;
     }
 
@@ -714,48 +701,17 @@ internal sealed partial class PotatoSession
             return ReActFallbackResult.ExecutedTool;
         }
 
-        if (!ShouldStartWithProjectInspection(GetExecutionIntentText()))
+        if (ShouldStartWithProjectInspection(GetExecutionIntentText()))
         {
-            return ReActFallbackResult.None;
-        }
-
-        string collectedContextList = reActMemory.Get("list");
-        if (!HasCollectedSource(collectedContextList, nameof(AgentTools.ListProjectFiles)))
-        {
-            PotatoConsole.WriteStatus("Model did not gather project inventory; running deterministic project inventory...");
-            string result = agentTools.ListProjectFiles(Environment.CurrentDirectory);
-            await AddToolObservationAndContinueAsync(nameof(AgentTools.ListProjectFiles), result, cancellationToken);
-            return ReActFallbackResult.ExecutedTool;
-        }
-
-        if (!HasCollectedSource(collectedContextList, nameof(AgentTools.ListFiles)))
-        {
-            PotatoConsole.WriteStatus("Model did not gather project structure; running deterministic top-level project listing...");
-            string result = agentTools.ListFiles(Environment.CurrentDirectory, recursive: false, maxEntries: 500);
-            await AddToolObservationAndContinueAsync(nameof(AgentTools.ListFiles), result, cancellationToken);
-            return ReActFallbackResult.ExecutedTool;
-        }
-
-        if (!HasCollectedSource(collectedContextList, nameof(AgentTools.SearchFiles)))
-        {
-            PotatoConsole.WriteStatus("Model did not search project files; running deterministic project file search...");
-            string result = agentTools.SearchFiles(
-                BuildProjectDiscoverySearchTerms(),
-                Environment.CurrentDirectory,
-                recursive: true,
-                matchCase: false,
-                maxMatches: 300);
-            await AddToolObservationAndContinueAsync(nameof(AgentTools.SearchFiles), result, cancellationToken);
-            return ReActFallbackResult.ExecutedTool;
-        }
-
-        string? summaryTarget = FindNextRepresentativeSummaryTarget(collectedContextList);
-        if (summaryTarget is not null)
-        {
-            PotatoConsole.WriteStatus($"Model did not summarize representative project files; summarizing {summaryTarget}...");
-            string result = await agentTools.SummarizeFilePurpose(summaryTarget);
-            await AddToolObservationAndContinueAsync(nameof(AgentTools.SummarizeFilePurpose), result, cancellationToken);
-            return ReActFallbackResult.ExecutedTool;
+            chatHistory.Add(new ChatMessage(
+                ChatRole.User,
+                "Continue by following the approved approach, not a hardcoded discovery sequence. " +
+                "Use exactly one registered tool call for the next concrete subtask. " +
+                "If the approved approach says to inspect a specific file, use ReadFileContent or SummarizeFilePurpose for that file. " +
+                "If it says to inspect project structure, use the listed discovery tool, preferably ListFiles with recursive=false for a top-level overview.\n\n" +
+                "Approved approach:\n" +
+                (latestApproach ?? "(No approved approach was captured.)")));
+            return ReActFallbackResult.Prompted;
         }
 
         if (consecutiveInvalidReActResponses >= MaxConsecutiveInvalidReActResponses)
@@ -788,20 +744,6 @@ internal sealed partial class PotatoSession
                 reActSubtaskTracker.BuildPromptContext(),
                 observationSource,
                 observation)));
-    }
-
-    private async Task<bool> EnsureProjectInventoryBeforeEditsAsync(CancellationToken cancellationToken)
-    {
-        if (!RequiresProjectInventoryBeforeEdits() ||
-            HasCollectedProjectInventory())
-        {
-            return false;
-        }
-
-        PotatoConsole.WriteStatus("Collecting project inventory before allowing documentation edits...");
-        string result = agentTools.ListProjectFiles(Environment.CurrentDirectory);
-        await AddToolObservationAndContinueAsync(nameof(AgentTools.ListProjectFiles), result, cancellationToken);
-        return true;
     }
 
     private static bool TryParseDirectReplaceFileContentRequest(string? request, out string filePath, out string content)
@@ -905,37 +847,6 @@ internal sealed partial class PotatoSession
         ApprovalPolicy.IsProjectChangeRequest(request) ||
         ApprovalPolicy.IsReadOnlyInspectionRequest(request) && LooksLikeProjectOrFolderRequest(request);
 
-    private bool RequiresProjectInventoryBeforeEdits()
-    {
-        string text = GetExecutionIntentText().ToLowerInvariant();
-        if (!LooksLikeDocumentationInventoryRequest(text))
-        {
-            return false;
-        }
-
-        return text.Contains("all project", StringComparison.Ordinal) ||
-               text.Contains("all folder", StringComparison.Ordinal) ||
-               text.Contains("all director", StringComparison.Ordinal) ||
-               text.Contains("several project", StringComparison.Ordinal) ||
-               text.Contains("missing project", StringComparison.Ordinal) ||
-               text.Contains("missing folder", StringComparison.Ordinal) ||
-               text.Contains("repository structure", StringComparison.Ordinal) ||
-               text.Contains("repo structure", StringComparison.Ordinal);
-    }
-
-    private bool HasCollectedProjectInventory()
-    {
-        string collectedContextList = reActMemory.Get("list");
-        return HasCollectedSource(collectedContextList, nameof(AgentTools.ListProjectFiles));
-    }
-
-    private static bool LooksLikeDocumentationInventoryRequest(string text) =>
-        (text.Contains("readme", StringComparison.Ordinal) ||
-         text.Contains("documentation", StringComparison.Ordinal) ||
-         text.Contains("document", StringComparison.Ordinal) ||
-         text.Contains("description", StringComparison.Ordinal)) &&
-        LooksLikeProjectOrFolderRequest(text);
-
     private string GetExecutionIntentText() =>
         $"{latestUserRequest}\n{latestSpecification}\n{latestApproach}";
 
@@ -972,117 +883,12 @@ internal sealed partial class PotatoSession
                text.Contains("repository", StringComparison.Ordinal);
     }
 
-    private static bool HasCollectedSource(string collectedContextList, string sourceName) =>
-        collectedContextList.Contains($"source: {sourceName} ", StringComparison.OrdinalIgnoreCase) ||
-        collectedContextList.Contains($"source: {sourceName} |", StringComparison.OrdinalIgnoreCase);
-
-    private static string BuildProjectDiscoverySearchTerms() =>
-        string.Join(
-            '|',
-            [
-                ".sln",
-                ".csproj",
-                ".fsproj",
-                ".vbproj",
-                "package.json",
-                "pyproject.toml",
-                "Cargo.toml",
-                "go.mod",
-                "pom.xml",
-                "build.gradle",
-                "README",
-                "FEATURE",
-                "Program.cs",
-                "main.",
-                "src",
-                "app",
-                "test",
-                "docs",
-                "config"
-            ]);
-
-    private static string? FindNextRepresentativeSummaryTarget(string collectedContextList)
-    {
-        foreach (string candidate in EnumerateRepresentativeSummaryCandidates())
-        {
-            if (!File.Exists(Path.Combine(Environment.CurrentDirectory, candidate)) ||
-                HasCollectedFileInspection(collectedContextList, candidate))
-            {
-                continue;
-            }
-
-            return candidate;
-        }
-
-        return null;
-    }
-
-    private static IEnumerable<string> EnumerateRepresentativeSummaryCandidates()
-    {
-        string[] exactNames =
-        [
-            "README.md",
-            "FEATURE.md",
-            "agents.md",
-            "Program.cs",
-            "appsettings.json",
-            "package.json",
-            "pyproject.toml",
-            "Cargo.toml",
-            "go.mod",
-            "pom.xml",
-            "build.gradle"
-        ];
-
-        foreach (string file in Directory.EnumerateFiles(Environment.CurrentDirectory, "*", SearchOption.AllDirectories)
-                     .Where(path => !PathContainsSkippedSegment(path))
-                     .Where(path => exactNames.Contains(Path.GetFileName(path), StringComparer.OrdinalIgnoreCase))
-                     .OrderBy(path => path, StringComparer.OrdinalIgnoreCase))
-        {
-            yield return Path.GetRelativePath(Environment.CurrentDirectory, file);
-        }
-
-        foreach (string projectFile in Directory.EnumerateFiles(Environment.CurrentDirectory, "*.*proj", SearchOption.AllDirectories)
-                     .Where(path => !PathContainsSkippedSegment(path))
-                     .OrderBy(path => path, StringComparer.OrdinalIgnoreCase))
-        {
-            yield return Path.GetRelativePath(Environment.CurrentDirectory, projectFile);
-        }
-
-        foreach (string programFile in Directory.EnumerateFiles(Environment.CurrentDirectory, "Program.cs", SearchOption.AllDirectories)
-                     .Where(path => !PathContainsSkippedSegment(path))
-                     .OrderBy(path => path, StringComparer.OrdinalIgnoreCase))
-        {
-            yield return Path.GetRelativePath(Environment.CurrentDirectory, programFile);
-        }
-    }
-
     private static bool IsPlaceholderPath(string path)
     {
         string normalized = path.Replace('\\', '/');
         return normalized.Contains("path/to/", StringComparison.OrdinalIgnoreCase) ||
                normalized.Contains("/full/path", StringComparison.OrdinalIgnoreCase) ||
                normalized.Contains("actual/path", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static bool PathContainsSkippedSegment(string path)
-    {
-        string relativePath = Path.GetRelativePath(Environment.CurrentDirectory, path);
-        string[] segments = relativePath.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        return segments.Any(segment =>
-            segment.StartsWith(".", StringComparison.Ordinal) ||
-            segment.Equals("bin", StringComparison.OrdinalIgnoreCase) ||
-            segment.Equals("obj", StringComparison.OrdinalIgnoreCase) ||
-            segment.Equals("node_modules", StringComparison.OrdinalIgnoreCase));
-    }
-
-    private static bool HasCollectedFileInspection(string collectedContextList, string relativePath)
-    {
-        string fullPath = Path.GetFullPath(Path.Combine(Environment.CurrentDirectory, relativePath));
-        return collectedContextList.Contains($"source: {nameof(AgentTools.SummarizeFilePurpose)} {fullPath}", StringComparison.OrdinalIgnoreCase) ||
-               collectedContextList.Contains($"source: {nameof(AgentTools.SummarizeFilePurpose)} {relativePath}", StringComparison.OrdinalIgnoreCase) ||
-               collectedContextList.Contains($"source: {nameof(AgentTools.ReadFileContent)} {fullPath}", StringComparison.OrdinalIgnoreCase) ||
-               collectedContextList.Contains($"source: {nameof(AgentTools.ReadFileContent)} {relativePath}", StringComparison.OrdinalIgnoreCase);
     }
 
     private async Task<string> ExecuteTextualToolCallAsync(TextualToolCall toolCall, CancellationToken cancellationToken)

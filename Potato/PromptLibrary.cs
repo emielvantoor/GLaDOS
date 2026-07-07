@@ -7,6 +7,7 @@ internal static class PromptLibrary
     private const string ToolSummaryPlaceholder = "{{tool_summary}}";
     private const string ToolSummaryWithArgumentsPlaceholder = "{{tool_summary_with_arguments}}";
     private const string LatestSpecificationPlaceholder = "{{latest_specification}}";
+    private const string LatestApproachPlaceholder = "{{latest_approach}}";
     private const string LatestUserRequestPlaceholder = "{{latest_user_request}}";
     private const string WorkingDirectoryPlaceholder = "{{working_directory}}";
     private const string PreviousQuestionPlaceholder = "{{previous_question}}";
@@ -238,7 +239,9 @@ internal static class PromptLibrary
             return RenderFirstExecutionMessage(
                 "first-execution-direct-create-file.md",
                 DefaultFirstExecutionDirectCreateFileMessage,
-                request);
+                request,
+                latestSpecification,
+                latestApproach);
         }
 
         if (LooksLikeDirectFileContentReplacementRequest(normalized))
@@ -246,7 +249,9 @@ internal static class PromptLibrary
             return RenderFirstExecutionMessage(
                 "first-execution-direct-replace-file.md",
                 DefaultFirstExecutionDirectReplaceFileMessage,
-                request);
+                request,
+                latestSpecification,
+                latestApproach);
         }
 
         if (ApprovalPolicy.IsProjectChangeRequest(request))
@@ -254,7 +259,9 @@ internal static class PromptLibrary
             return RenderFirstExecutionMessage(
                 "first-execution-project-change.md",
                 DefaultFirstExecutionProjectChangeMessage,
-                request);
+                request,
+                latestSpecification,
+                latestApproach);
         }
 
         if (normalized.Contains("project", StringComparison.Ordinal) ||
@@ -265,7 +272,9 @@ internal static class PromptLibrary
             return RenderFirstExecutionMessage(
                 "first-execution-project-inspection.md",
                 DefaultFirstExecutionProjectInspectionMessage,
-                request);
+                request,
+                latestSpecification,
+                latestApproach);
         }
 
         if (normalized.Contains("explain", StringComparison.Ordinal) ||
@@ -275,20 +284,31 @@ internal static class PromptLibrary
             return RenderFirstExecutionMessage(
                 "first-execution-read-only-inspection.md",
                 DefaultFirstExecutionReadOnlyInspectionMessage,
-                request);
+                request,
+                latestSpecification,
+                latestApproach);
         }
 
         return RenderFirstExecutionMessage(
             "first-execution-generic.md",
             DefaultFirstExecutionGenericMessage,
-            request);
+            request,
+            latestSpecification,
+            latestApproach);
     }
 
-    private static string RenderFirstExecutionMessage(string fileName, string defaultText, string request) =>
+    private static string RenderFirstExecutionMessage(
+        string fileName,
+        string defaultText,
+        string request,
+        string? latestSpecification,
+        string? latestApproach) =>
         Render(
             Load(fileName, defaultText),
             (WorkingDirectoryPlaceholder, Environment.CurrentDirectory),
-            (LatestUserRequestPlaceholder, OneLine(request)));
+            (LatestUserRequestPlaceholder, OneLine(request)),
+            (LatestSpecificationPlaceholder, Compact(latestSpecification ?? "(No approved specification was captured.)", 2_000)),
+            (LatestApproachPlaceholder, Compact(latestApproach ?? "(No approved approach was captured.)", 3_000)));
 
     private static bool LooksLikeDirectFileCreationRequest(string normalizedRequest) =>
         (normalizedRequest.Contains("write a file", StringComparison.Ordinal) ||
@@ -483,31 +503,37 @@ internal static class PromptLibrary
         "Original request: {{latest_user_request}}";
 
     private const string DefaultFirstExecutionProjectChangeMessage =
-        "Next action only: begin with read-only project context discovery before any implementation. " +
-        "Use ListFiles with recursive=false to identify the top-level project structure and likely language/framework. " +
-        "Do not use ExecuteShellCommandAsync for directory listing. " +
-        "Do not run a terminal animation, workaround command, server, installer, or modifying command as the first action. " +
-        "After the listing, use SummarizeFilePurpose or ReadFileContent on relevant source files before choosing any edit. " +
+        "Next action only: execute the first concrete tool step from the approved approach. " +
+        "Do not invent a different first step because the request looks like a project change. " +
+        "If the approved approach names a specific first file or tool, use that. " +
+        "If the approved approach starts with broad project discovery, prefer ListFiles with recursive=false or ListProjectFiles as stated in the approach. " +
+        "Do not use ExecuteShellCommandAsync for directory listing or source edits. " +
         "Working directory: {{working_directory}}. " +
-        "Original request: {{latest_user_request}}";
+        "Original request: {{latest_user_request}}\n\n" +
+        "Approved approach:\n{{latest_approach}}";
 
     private const string DefaultFirstExecutionProjectInspectionMessage =
-        "Next action only: list top-level files in the current folder to inspect the project. " +
-        "Use ListFiles with recursive=false. Do not use ExecuteShellCommandAsync for directory listing. " +
+        "Next action only: execute the first concrete tool step from the approved approach. " +
+        "Do not replace the approved first step with a generic project listing unless the approach starts with project listing. " +
+        "If directory listing is the approved first step, use ListFiles with recursive=false. " +
+        "Do not use ExecuteShellCommandAsync for directory listing. " +
         "Working directory: {{working_directory}}. " +
-        "Original request: {{latest_user_request}}";
+        "Original request: {{latest_user_request}}\n\n" +
+        "Approved approach:\n{{latest_approach}}";
 
     private const string DefaultFirstExecutionReadOnlyInspectionMessage =
-        "Next action only: inspect the relevant files before answering. " +
-        "Use one read-only tool call. " +
+        "Next action only: execute the first concrete read-only tool step from the approved approach. " +
+        "If the approved approach names a specific first file or tool, use that. " +
         "Working directory: {{working_directory}}. " +
-        "Original request: {{latest_user_request}}";
+        "Original request: {{latest_user_request}}\n\n" +
+        "Approved approach:\n{{latest_approach}}";
 
     private const string DefaultFirstExecutionGenericMessage =
         "Next action only. Execute the first concrete step from the approved approach using one tool call. " +
-        "Do not restate the plan. Use FINAL: only when complete. " +
+        "Do not restate the plan and do not substitute a different discovery step unless the approved approach requires it. Use FINAL: only when complete. " +
         "Working directory: {{working_directory}}. " +
-        "Original request: {{latest_user_request}}";
+        "Original request: {{latest_user_request}}\n\n" +
+        "Approved approach:\n{{latest_approach}}";
 
     private const string DefaultGreetingSystemPrompt =
         "You are PotatOS, the AI from Portal 2 who has been trapped inside a potato battery. " +
