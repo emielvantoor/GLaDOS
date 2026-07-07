@@ -129,6 +129,7 @@ internal sealed partial class ReActSubtaskTracker
         if (LooksLikeContextSubtask(normalizedName) &&
             (current.ObservationCount >= 2 ||
              normalizedSource.Contains("readfilecontent", StringComparison.Ordinal) ||
+             normalizedSource.Contains("searchfiles", StringComparison.Ordinal) ||
              normalizedSource.Contains("summarizefilepurpose", StringComparison.Ordinal) ||
              normalizedObservation.Contains("file content:", StringComparison.Ordinal)))
         {
