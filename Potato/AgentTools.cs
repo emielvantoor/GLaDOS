@@ -65,7 +65,7 @@ internal class AgentTools(ReActMemory memory, Func<IChatClient> getSideQuestionC
         return StoreAndReturn($"{nameof(ReadFileContent)} {resolvedPath}", File.ReadAllText(resolvedPath));
     }
 
-    [Description("Lists files and directories without using the shell. Use this for read-only project discovery before choosing files to inspect.")]
+    [Description("Lists non-hidden project files and directories without using the shell. Hidden folders and common build/dependency folders are skipped. Use this for read-only project discovery before choosing files to inspect.")]
     public string ListFiles(
         [Description("Optional directory path. Absolute paths are accepted; relative paths resolve from the current working directory. Leave empty to list the current working directory.")] string? directoryPath = null,
         [Description("Whether to recurse into subdirectories. Defaults to false.")] bool recursive = false,
@@ -123,10 +123,10 @@ internal class AgentTools(ReActMemory memory, Func<IChatClient> getSideQuestionC
         return StoreAndReturn($"{nameof(ListFiles)} {resolvedPath}", builder.ToString());
     }
 
-    [Description("Searches through text/code files for one or more terms. Provide multiple terms separated by '|'.")]
-    public string SearchFiles(
-        [Description("Search term or terms. Multiple terms can be separated with '|', for example 'TODO|class Foo|error'.")] string searchTerms,
-        [Description("Optional directory path. Absolute paths are accepted; relative paths resolve from the current working directory. Leave empty to search the current working directory.")] string? directoryPath = null,
+    [Description("Searches inside text/code file contents for one or more terms. Use this when you know text, symbols, or code snippets to locate; it does not search by file name. Provide multiple terms separated by '|'.")]
+    public string SearchFileContents(
+        [Description("Text/code content term or terms to find inside files. Multiple terms can be separated with '|', for example 'TODO|class Foo|error'.")] string searchTerms,
+        [Description("Optional directory whose text/code file contents should be searched. Absolute paths are accepted; relative paths resolve from the current working directory. Leave empty to search the current working directory.")] string? directoryPath = null,
         [Description("Whether to recurse into subdirectories. Defaults to true.")] bool recursive = true,
         [Description("Whether matching should be case-sensitive. Defaults to false.")] bool matchCase = false,
         [Description("Maximum number of matching lines to return. Defaults to 100 and is capped at 500.")] int maxMatches = 100)
@@ -135,7 +135,7 @@ internal class AgentTools(ReActMemory memory, Func<IChatClient> getSideQuestionC
         ToolInvocationCount++;
         string? resolvedPath = ResolveReadableDirectoryPath(directoryPath);
         string[] terms = ParseSearchTerms(searchTerms);
-        WriteToolCall(nameof(SearchFiles),
+        WriteToolCall(nameof(SearchFileContents),
         [
             ("searchTerms", searchTerms ?? string.Empty),
             ("directoryPath", directoryPath ?? Environment.CurrentDirectory),
@@ -147,12 +147,12 @@ internal class AgentTools(ReActMemory memory, Func<IChatClient> getSideQuestionC
 
         if (terms.Length == 0)
         {
-            return StoreAndReturn(nameof(SearchFiles), "Error: No search terms were provided. Use '|' to separate multiple terms.");
+            return StoreAndReturn(nameof(SearchFileContents), "Error: No search terms were provided. Use '|' to separate multiple terms.");
         }
 
         if (resolvedPath is null || !Directory.Exists(resolvedPath))
         {
-            return StoreAndReturn(nameof(SearchFiles), $"Error: Directory '{directoryPath}' does not exist. Current working directory: {Environment.CurrentDirectory}");
+            return StoreAndReturn(nameof(SearchFileContents), $"Error: Directory '{directoryPath}' does not exist. Current working directory: {Environment.CurrentDirectory}");
         }
 
         maxMatches = Math.Clamp(maxMatches, 1, 500);
@@ -238,6 +238,104 @@ internal class AgentTools(ReActMemory memory, Func<IChatClient> getSideQuestionC
         if (truncated)
         {
             builder.AppendLine($"... truncated after {matchCount} match(es) or {MaxSearchFiles} scanned file(s)");
+        }
+
+        return StoreAndReturn($"{nameof(SearchFileContents)} {resolvedPath}", builder.ToString());
+    }
+
+    [Description("Searches for non-hidden files and directories by name, extension, or relative path. Hidden folders and common build/dependency folders are skipped. Use this when you know part of a file/folder name or an extension; it does not search file contents. Provide multiple terms separated by '|'.")]
+    public string SearchFiles(
+        [Description("File name, extension, or relative path term or terms. Multiple terms can be separated with '|', for example 'AgentTools|.cs|Prompt'.")] string searchTerms,
+        [Description("Optional directory whose files should be searched. Absolute paths are accepted; relative paths resolve from the current working directory. Leave empty to search the current working directory.")] string? directoryPath = null,
+        [Description("Whether to recurse into subdirectories. Defaults to true.")] bool recursive = true,
+        [Description("Whether matching should be case-sensitive. Defaults to false.")] bool matchCase = false,
+        [Description("Maximum number of matching files to return. Defaults to 200 and is capped at 1000.")] int maxMatches = 200)
+    {
+        CurrentCancellationToken.ThrowIfCancellationRequested();
+        ToolInvocationCount++;
+        string? resolvedPath = ResolveReadableDirectoryPath(directoryPath);
+        string[] terms = ParseSearchTerms(searchTerms);
+        WriteToolCall(nameof(SearchFiles),
+        [
+            ("searchTerms", searchTerms ?? string.Empty),
+            ("directoryPath", directoryPath ?? Environment.CurrentDirectory),
+            ("resolvedPath", resolvedPath ?? "(unresolved)"),
+            ("recursive", recursive.ToString()),
+            ("matchCase", matchCase.ToString()),
+            ("maxMatches", maxMatches.ToString())
+        ]);
+
+        if (terms.Length == 0)
+        {
+            return StoreAndReturn(nameof(SearchFiles), "Error: No search terms were provided. Use '|' to separate multiple terms.");
+        }
+
+        if (resolvedPath is null || !Directory.Exists(resolvedPath))
+        {
+            return StoreAndReturn(nameof(SearchFiles), $"Error: Directory '{directoryPath}' does not exist. Current working directory: {Environment.CurrentDirectory}");
+        }
+
+        maxMatches = Math.Clamp(maxMatches, 1, 1000);
+        StringComparison comparison = matchCase ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
+        var builder = new StringBuilder();
+        builder.AppendLine($"Directory: {resolvedPath}");
+        builder.AppendLine($"Mode: {(recursive ? "recursive" : "top-level")}");
+        builder.AppendLine($"Terms: {string.Join(" | ", terms)}");
+
+        int scannedEntries = 0;
+        int matchCount = 0;
+        bool truncated = false;
+
+        foreach (FileSystemInfo entry in EnumerateSearchEntries(resolvedPath, recursive))
+        {
+            CurrentCancellationToken.ThrowIfCancellationRequested();
+
+            scannedEntries++;
+            if (scannedEntries > MaxSearchFiles)
+            {
+                truncated = true;
+                break;
+            }
+
+            string relativePath = Path.GetRelativePath(resolvedPath, entry.FullName);
+            string? matchedTerm = terms.FirstOrDefault(term => FileSystemEntryMatchesTerm(entry, relativePath, term, comparison));
+            if (matchedTerm is null)
+            {
+                continue;
+            }
+
+            if (matchCount == 0)
+            {
+                builder.AppendLine("Matches:");
+            }
+
+            if (entry is DirectoryInfo)
+            {
+                builder.AppendLine($"[dir]  {relativePath}/ [{matchedTerm}]");
+            }
+            else if (entry is FileInfo file)
+            {
+                builder.AppendLine($"[file] {relativePath} [{matchedTerm}] ({file.Length} bytes)");
+            }
+
+            matchCount++;
+
+            if (matchCount >= maxMatches)
+            {
+                truncated = true;
+                break;
+            }
+        }
+
+        if (matchCount == 0)
+        {
+            builder.AppendLine("Matches: none");
+        }
+
+        builder.AppendLine($"Scanned entries: {Math.Min(scannedEntries, MaxSearchFiles)}");
+        if (truncated)
+        {
+            builder.AppendLine($"... truncated after {matchCount} match(es) or {MaxSearchFiles} scanned entries");
         }
 
         return StoreAndReturn($"{nameof(SearchFiles)} {resolvedPath}", builder.ToString());
@@ -777,6 +875,7 @@ internal class AgentTools(ReActMemory memory, Func<IChatClient> getSideQuestionC
         return recursive
             ? EnumerateRecursive(root)
             : root.EnumerateFileSystemInfos()
+                .Where(entry => !ShouldSkipDirectory(entry))
                 .OrderBy(entry => entry is FileInfo)
                 .ThenBy(entry => entry.Name, StringComparer.OrdinalIgnoreCase);
     }
@@ -806,10 +905,32 @@ internal class AgentTools(ReActMemory memory, Func<IChatClient> getSideQuestionC
 
     private static bool ShouldSkipDirectory(FileSystemInfo entry) =>
         entry is DirectoryInfo &&
-        (entry.Name.Equals(".git", StringComparison.OrdinalIgnoreCase) ||
+        (IsHiddenDirectory(entry) ||
+         entry.Name.Equals(".git", StringComparison.OrdinalIgnoreCase) ||
          entry.Name.Equals("bin", StringComparison.OrdinalIgnoreCase) ||
          entry.Name.Equals("obj", StringComparison.OrdinalIgnoreCase) ||
          entry.Name.Equals("node_modules", StringComparison.OrdinalIgnoreCase));
+
+    private static bool IsHiddenDirectory(FileSystemInfo entry) =>
+        entry is DirectoryInfo &&
+        (entry.Name.StartsWith(".", StringComparison.Ordinal) ||
+         entry.Attributes.HasFlag(FileAttributes.Hidden));
+
+    private static IEnumerable<FileSystemInfo> EnumerateSearchEntries(string directoryPath, bool recursive)
+    {
+        var root = new DirectoryInfo(directoryPath);
+        if (!root.Exists)
+        {
+            return [];
+        }
+
+        return recursive
+            ? EnumerateRecursive(root)
+            : root.EnumerateFileSystemInfos()
+                .Where(entry => !ShouldSkipDirectory(entry))
+                .OrderBy(entry => entry is FileInfo)
+                .ThenBy(entry => entry.Name, StringComparer.OrdinalIgnoreCase);
+    }
 
     private static IEnumerable<FileInfo> EnumerateSearchFiles(string directoryPath, bool recursive)
     {
@@ -839,6 +960,21 @@ internal class AgentTools(ReActMemory memory, Func<IChatClient> getSideQuestionC
 
     private static bool LooksBinary(string content) =>
         content.IndexOf('\0', StringComparison.Ordinal) >= 0;
+
+    private static bool FileSystemEntryMatchesTerm(FileSystemInfo entry, string relativePath, string term, StringComparison comparison)
+    {
+        if (entry.Name.Contains(term, comparison) ||
+            relativePath.Contains(term, comparison) ||
+            Path.GetExtension(entry.Name).Contains(term, comparison))
+        {
+            return true;
+        }
+
+        string extensionWithoutDot = Path.GetExtension(entry.Name).TrimStart('.');
+        string normalizedTerm = term.TrimStart('.');
+        return extensionWithoutDot.Length > 0 &&
+               extensionWithoutDot.Equals(normalizedTerm, comparison);
+    }
 
     private async Task<string> InferFilePurpose(
         string filePath,
@@ -1038,6 +1174,7 @@ internal class AgentTools(ReActMemory memory, Func<IChatClient> getSideQuestionC
             nameof(ReadFileContent) => "Read file",
             nameof(ListFiles) => "List files",
             nameof(SearchFiles) => "Search files",
+            nameof(SearchFileContents) => "Search file contents",
             nameof(SummarizeFilePurpose) => "Summarize file",
             nameof(GetCollectedContext) => "Read context",
             nameof(ApplySearchReplaceAsync) => "WriteFile",
