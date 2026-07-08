@@ -195,8 +195,10 @@ public class PlanningService(IEnumerable<IAgentTask> agentTasks)
             ? 100
             : (int)Math.Round(currentFile * 100.0 / totalFiles);
 
-        string source = cached ? "cached" : "indexing";
-        return $"Building ProjectMap {currentFile}/{totalFiles} ({percentage}%, {source}): {relativePath}";
+        int fileNumberWidth = Math.Max(1, totalFiles.ToString().Length);
+        string current = currentFile.ToString().PadLeft(fileNumberWidth);
+        string source = cached ? "cached  " : "indexing";
+        return $"Building ProjectMap {current}/{totalFiles} ({percentage,3}%, {source}): {relativePath}";
     }
 
     private static void AppendProjectMapSummary(StringBuilder builder, string relativePath, string summary)

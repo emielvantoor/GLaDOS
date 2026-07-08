@@ -172,7 +172,7 @@ internal static class PotatoConsole
                     else if (cursorIndex > 0)
                     {
                         cursorIndex--;
-                        MoveCursor(inputLeft, inputTop, cursorIndex);
+                        RedrawInputLine(buffer, cursorIndex, inputLeft, inputTop, placeholder, inlineCompletionIndex, ref renderedLength);
                     }
                     break;
 
@@ -184,18 +184,18 @@ internal static class PotatoConsole
                     else if (cursorIndex < buffer.Count)
                     {
                         cursorIndex++;
-                        MoveCursor(inputLeft, inputTop, cursorIndex);
+                        RedrawInputLine(buffer, cursorIndex, inputLeft, inputTop, placeholder, inlineCompletionIndex, ref renderedLength);
                     }
                     break;
 
                 case ConsoleKey.Home:
                     cursorIndex = 0;
-                    MoveCursor(inputLeft, inputTop, cursorIndex);
+                    RedrawInputLine(buffer, cursorIndex, inputLeft, inputTop, placeholder, inlineCompletionIndex, ref renderedLength);
                     break;
 
                 case ConsoleKey.End:
                     cursorIndex = buffer.Count;
-                    MoveCursor(inputLeft, inputTop, cursorIndex);
+                    RedrawInputLine(buffer, cursorIndex, inputLeft, inputTop, placeholder, inlineCompletionIndex, ref renderedLength);
                     break;
 
                 case ConsoleKey.UpArrow:
@@ -286,7 +286,7 @@ internal static class PotatoConsole
                     if (cursorIndex > 0)
                     {
                         cursorIndex--;
-                        MoveCursor(inputLeft, inputTop, cursorIndex);
+                        RedrawInputLine(buffer, cursorIndex, inputLeft, inputTop, ref renderedLength);
                     }
                     break;
 
@@ -294,18 +294,18 @@ internal static class PotatoConsole
                     if (cursorIndex < buffer.Count)
                     {
                         cursorIndex++;
-                        MoveCursor(inputLeft, inputTop, cursorIndex);
+                        RedrawInputLine(buffer, cursorIndex, inputLeft, inputTop, ref renderedLength);
                     }
                     break;
 
                 case ConsoleKey.Home:
                     cursorIndex = 0;
-                    MoveCursor(inputLeft, inputTop, cursorIndex);
+                    RedrawInputLine(buffer, cursorIndex, inputLeft, inputTop, ref renderedLength);
                     break;
 
                 case ConsoleKey.End:
                     cursorIndex = buffer.Count;
-                    MoveCursor(inputLeft, inputTop, cursorIndex);
+                    RedrawInputLine(buffer, cursorIndex, inputLeft, inputTop, ref renderedLength);
                     break;
 
                 default:
@@ -937,35 +937,51 @@ internal static class PotatoConsole
         ref int renderedLength)
     {
         string text = new(buffer.ToArray());
+        string completion = string.Empty;
+        if (text.Length > 0)
+        {
+            TryGetInlineCompletion(buffer, cursorIndex, inlineCompletionIndex, out completion);
+        }
+
+        int currentLength = text.Length == 0
+            ? placeholder.Length
+            : text.Length + completion.Length;
+        int inputWidth = GetInputWidth(inputLeft);
+        int viewStart = GetInputViewStart(cursorIndex, text.Length, inputWidth);
+        string visibleText = GetVisibleText(text, viewStart, inputWidth);
+        int visibleCursorIndex = cursorIndex - viewStart;
+        string visibleCompletion = string.Empty;
+        if (completion.Length > 0 && viewStart + visibleText.Length >= text.Length)
+        {
+            int completionWidth = Math.Max(0, inputWidth - visibleText.Length);
+            visibleCompletion = completion.Length > completionWidth ? completion[..completionWidth] : completion;
+        }
+
+        currentLength = text.Length == 0
+            ? Math.Min(placeholder.Length, inputWidth)
+            : visibleText.Length + visibleCompletion.Length;
+        ClearRenderedInput(inputLeft, inputTop, Math.Max(renderedLength, currentLength));
         Console.SetCursorPosition(inputLeft, inputTop);
         if (text.Length == 0)
         {
             Console.ForegroundColor = ConsoleColor.DarkGray;
-            Console.Write(placeholder);
+            Console.Write(placeholder.Length > inputWidth ? placeholder[..inputWidth] : placeholder);
             Console.ResetColor();
         }
         else
         {
             Console.ResetColor();
-            Console.Write(text);
-            if (TryGetInlineCompletion(buffer, cursorIndex, inlineCompletionIndex, out string completion))
+            Console.Write(visibleText);
+            if (visibleCompletion.Length > 0)
             {
                 Console.ForegroundColor = ConsoleColor.DarkGray;
-                Console.Write(completion);
+                Console.Write(visibleCompletion);
                 Console.ResetColor();
             }
         }
 
-        int currentLength = text.Length == 0
-            ? placeholder.Length
-            : text.Length + (TryGetInlineCompletion(buffer, cursorIndex, inlineCompletionIndex, out string displayedCompletion) ? displayedCompletion.Length : 0);
-        if (renderedLength > currentLength)
-        {
-            Console.Write(new string(' ', renderedLength - currentLength));
-        }
-
         renderedLength = currentLength;
-        MoveCursor(inputLeft, inputTop, cursorIndex);
+        MoveCursor(inputLeft, inputTop, visibleCursorIndex);
     }
 
     private static int Mod(int value, int divisor)
@@ -982,22 +998,76 @@ internal static class PotatoConsole
         ref int renderedLength)
     {
         string text = new(buffer.ToArray());
+        int inputWidth = GetInputWidth(inputLeft);
+        int viewStart = GetInputViewStart(cursorIndex, text.Length, inputWidth);
+        string visibleText = GetVisibleText(text, viewStart, inputWidth);
+        int visibleCursorIndex = cursorIndex - viewStart;
+        ClearRenderedInput(inputLeft, inputTop, Math.Max(renderedLength, visibleText.Length));
         Console.SetCursorPosition(inputLeft, inputTop);
-        Console.Write(text);
+        Console.Write(visibleText);
 
-        if (renderedLength > text.Length)
-        {
-            Console.Write(new string(' ', renderedLength - text.Length));
-        }
-
-        renderedLength = text.Length;
-        MoveCursor(inputLeft, inputTop, cursorIndex);
+        renderedLength = visibleText.Length;
+        MoveCursor(inputLeft, inputTop, visibleCursorIndex);
     }
 
     private static void MoveCursor(int inputLeft, int inputTop, int cursorIndex)
     {
         int maxLeft = Math.Max(0, Console.BufferWidth - 1);
         Console.SetCursorPosition(Math.Min(inputLeft + cursorIndex, maxLeft), inputTop);
+    }
+
+    private static int GetInputWidth(int inputLeft)
+    {
+        return Math.Max(1, Console.BufferWidth - inputLeft - 1);
+    }
+
+    private static int GetInputViewStart(int cursorIndex, int textLength, int width)
+    {
+        if (textLength <= width)
+        {
+            return 0;
+        }
+
+        if (cursorIndex >= textLength)
+        {
+            return textLength - width;
+        }
+
+        return Math.Clamp(cursorIndex - width + 1, 0, textLength - width);
+    }
+
+    private static string GetVisibleText(string text, int viewStart, int width)
+    {
+        if (text.Length == 0)
+        {
+            return string.Empty;
+        }
+
+        int length = Math.Min(width, text.Length - viewStart);
+        return text.Substring(viewStart, length);
+    }
+
+    private static void ClearRenderedInput(int inputLeft, int inputTop, int length)
+    {
+        if (length <= 0)
+        {
+            return;
+        }
+
+        int width = Math.Max(1, Console.BufferWidth);
+        int remaining = length;
+        int left = inputLeft;
+        int top = inputTop;
+
+        while (remaining > 0 && top < Console.BufferHeight)
+        {
+            int count = Math.Min(remaining, width - left);
+            Console.SetCursorPosition(left, top);
+            Console.Write(new string(' ', count));
+            remaining -= count;
+            left = 0;
+            top++;
+        }
     }
 
     private sealed record PathCompletionCandidate(string? Name, bool IsDirectory);
@@ -1013,8 +1083,8 @@ internal static class PotatoConsole
         private bool disposed;
         private string message;
         private string joke;
-        private int renderedLength;
-        private int renderedLines;
+        private readonly int progressTop;
+        private readonly int reservedLines = 2;
 
         public ProgressSpinner(string message, object syncRoot, Func<string> nextJoke)
         {
@@ -1022,6 +1092,9 @@ internal static class PotatoConsole
             this.syncRoot = syncRoot;
             this.nextJoke = nextJoke;
             joke = nextJoke();
+            Console.WriteLine();
+            Console.WriteLine();
+            progressTop = Math.Max(0, Console.CursorTop - reservedLines);
         }
 
         public void Start()
@@ -1106,14 +1179,9 @@ internal static class PotatoConsole
                         string actionLine = $"{Frames[frameIndex % Frames.Length]} {message}";
                         string jokeLine = $"  {joke}";
                         Console.ForegroundColor = ConsoleColor.DarkGray;
-                        MoveToProgressStart();
-                        Console.Write(actionLine);
-                        ClearLineRemainder(actionLine.Length);
-                        Console.WriteLine();
-                        Console.Write(jokeLine);
-                        ClearLineRemainder(jokeLine.Length);
-                        renderedLength = Math.Max(actionLine.Length, jokeLine.Length);
-                        renderedLines = 2;
+                        WriteProgressLine(0, actionLine);
+                        WriteProgressLine(1, jokeLine);
+                        Console.SetCursorPosition(0, progressTop + reservedLines);
                         Console.ResetColor();
                     }
                 }
@@ -1126,46 +1194,26 @@ internal static class PotatoConsole
 
         private void Clear()
         {
-            if (renderedLines <= 0)
+            for (int i = 0; i < reservedLines; i++)
+            {
+                WriteProgressLine(i, string.Empty);
+            }
+
+            Console.SetCursorPosition(0, progressTop);
+        }
+
+        private void WriteProgressLine(int lineOffset, string value)
+        {
+            int width = Console.WindowWidth > 1 ? Console.WindowWidth - 1 : 1;
+            int top = progressTop + lineOffset;
+            if (top >= Console.BufferHeight)
             {
                 return;
             }
 
-            MoveToProgressStart();
-            for (int i = 0; i < renderedLines; i++)
-            {
-                Console.Write(new string(' ', renderedLength));
-                if (i < renderedLines - 1)
-                {
-                    Console.WriteLine();
-                }
-            }
-
-            MoveToProgressStart();
-            renderedLength = 0;
-            renderedLines = 0;
-        }
-
-        private void MoveToProgressStart()
-        {
-            if (renderedLines <= 1)
-            {
-                Console.Write('\r');
-                return;
-            }
-
-            int targetTop = Math.Max(0, Console.CursorTop - renderedLines + 1);
-            Console.SetCursorPosition(0, targetTop);
-        }
-
-        private static void ClearLineRemainder(int usedLength)
-        {
-            int width = Console.WindowWidth > 0 ? Console.WindowWidth : 80;
-            int remaining = Math.Max(0, width - usedLength - 1);
-            if (remaining > 0)
-            {
-                Console.Write(new string(' ', remaining));
-            }
+            string clipped = value.Length > width ? value[..width] : value;
+            Console.SetCursorPosition(0, top);
+            Console.Write(clipped.PadRight(width));
         }
     }
 
