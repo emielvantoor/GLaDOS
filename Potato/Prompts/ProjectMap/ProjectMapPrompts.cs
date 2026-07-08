@@ -25,6 +25,9 @@ internal static partial class PromptLibrary
 
     public static string BuildProjectMapSystemPrompt =>
         Load(ProjectMapSystem);
+
+    public static string BuildProjectMapCacheKey =>
+        Load(ProjectMapSystem) + "\n---\n" + Load(ProjectMapUser);
     
     public static string BuildProjectMapUserPrompt(string filePath, string fileContent) =>
         Render(ProjectMapUser, new Dictionary<string, string>
