@@ -1,5 +1,7 @@
 using System.Text.RegularExpressions;
 
+namespace Potato;
+
 internal sealed class FileMentionExpander
 {
     private const int MaxAttachedFileCharacters = 120_000;

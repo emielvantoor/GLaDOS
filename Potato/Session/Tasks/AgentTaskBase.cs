@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.AI;
+using Potato.Models;
 using Potato.Session.extensions;
 
 namespace Potato.Session.Tasks;
@@ -8,10 +9,14 @@ namespace Potato.Session.Tasks;
 public abstract class AgentTaskBase
 {
     protected abstract string Name { get; }
+
+    public string ActionName => StringHelper.NormalizeAction(Name);
+
+    public virtual IReadOnlyList<string> PlanningGuidance => [];
     
     public bool CanExecute(string targetAction)
     {
-        return string.Equals(Name, targetAction, StringComparison.InvariantCultureIgnoreCase);
+        return string.Equals(ActionName, StringHelper.NormalizeAction(targetAction), StringComparison.InvariantCultureIgnoreCase);
     }
     
     public static readonly JsonSerializerOptions JsonOptions = new()

@@ -1,6 +1,6 @@
 using System.Text.Json.Serialization;
 
-namespace Potato;
+namespace Potato.Models;
 
 public sealed record SearchReplacePatch
 {

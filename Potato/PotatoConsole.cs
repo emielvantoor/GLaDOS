@@ -1,5 +1,7 @@
 using Microsoft.Extensions.AI;
 
+namespace Potato;
+
 internal static class PotatoConsole
 {
     private const string PromptText = "> ";

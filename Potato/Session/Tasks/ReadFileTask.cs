@@ -1,12 +1,19 @@
 using Microsoft.Extensions.AI;
+using Potato.Models;
 using Potato.Session.extensions;
 using Potato.Session.Models;
+using Potato.Tools;
 
 namespace Potato.Session.Tasks;
 
 public class ReadFileTask(AgentTools agentTools) : AgentTaskBase, IAgentTask
 {
     protected override string Name { get; } = "read";
+
+    public override IReadOnlyList<string> PlanningGuidance =>
+    [
+        "Use read with an exact file path from Workspace context."
+    ];
 
     public Task<string> ExecuteTaskAsync(string goal, AgentTask task, ExecutorContext context,
         IReadOnlyList<TaskObservation> observations,

@@ -3,6 +3,8 @@ using Microsoft.Extensions.AI;
 using OpenAI;
 using OpenAI.Chat;
 
+namespace Potato;
+
 internal sealed class GladosChatClientFactory
 {
     public IChatClient CreateOpenAiClient(Uri gladosEndpoint, string model)

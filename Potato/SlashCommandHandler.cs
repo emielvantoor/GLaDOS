@@ -1,5 +1,7 @@
 using Microsoft.Extensions.AI;
 
+namespace Potato;
+
 internal sealed class SlashCommandHandler(
     Uri gladosEndpoint,
     GladosChatClientFactory clientFactory,
@@ -100,7 +102,7 @@ internal sealed class SlashCommandHandler(
 
     private static void WritePromptModeStatus()
     {
-        string mode = PromptLibrary.UseCompiledDefaultsOnly
+        string mode = Potato.Prompts.PromptLibrary.UseCompiledDefaultsOnly
             ? "compiled defaults; external prompt files are ignored"
             : "external files; missing prompt files are created from compiled defaults";
         PotatoConsole.WriteStatus($"Prompt mode: {mode}.");
@@ -170,7 +172,7 @@ internal sealed class SlashCommandHandler(
         string expandedQuestion = fileMentionExpander.Expand(question);
         var sideQuestionMessages = new List<ChatMessage>
         {
-            new(ChatRole.System, PromptLibrary.SideQuestionSystemPrompt),
+            new(ChatRole.System, Potato.Prompts.PromptLibrary.SideQuestionSystemPrompt),
             new(ChatRole.User, expandedQuestion)
         };
 

@@ -1,12 +1,20 @@
 using Microsoft.Extensions.AI;
+using Potato.Models;
 using Potato.Session.extensions;
 using Potato.Session.Models;
+using Potato.Tools;
 
 namespace Potato.Session.Tasks;
 
 public class RefactorTask(AgentTools agentTools) : AgentTaskBase, IAgentTask
 {
     protected override string Name { get; } = "refactor-prompt";
+
+    public override IReadOnlyList<string> PlanningGuidance =>
+    [
+        "Use refactor-prompt only after reading the file that should be changed.",
+        "For refactor-prompt, put only the concrete edit instructions in Argument."
+    ];
     
     public async Task<string> ExecuteTaskAsync(string goal,
         AgentTask task,
@@ -44,14 +52,14 @@ public class RefactorTask(AgentTools agentTools) : AgentTaskBase, IAgentTask
     {
         var messages = new List<ChatMessage>
         {
-            new(ChatRole.System, "You generate exact SEARCH/REPLACE patches. Return the patch blocks only."),
+            new(ChatRole.System, Prompts.PromptLibrary.RefactorSystemPrompt),
             new(
                 ChatRole.User,
                 $"Goal:\n{goal}\n\n" +
                 "Prior observations:\n" +
                 observations.FormatObservations() +
                 "\n\n" +
-                PromptLibrary.BuildRefactorUserPrompt(filePath, fileContent, task.Argument))
+                Prompts.PromptLibrary.BuildRefactorUserPrompt(filePath, fileContent, task.Argument))
         };
 
         ChatResponse response;

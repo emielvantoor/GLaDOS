@@ -1,5 +1,7 @@
 using Microsoft.Extensions.AI;
 
+namespace Potato;
+
 public sealed class ExecutionMemory
 {
     private const int SummaryThresholdCharacters = 3_000;
@@ -128,7 +130,7 @@ public sealed class ExecutionMemory
         {
             var messages = new List<ChatMessage>
             {
-                new(ChatRole.System, PromptLibrary.SideQuestionSystemPrompt),
+                new(ChatRole.System, Potato.Prompts.PromptLibrary.SideQuestionSystemPrompt),
                 new(
                     ChatRole.User,
                     "Summarize this collected execution context for later retrieval. " +
