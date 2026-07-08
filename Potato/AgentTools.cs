@@ -5,7 +5,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.AI;
 
-internal class AgentTools(ReActMemory memory, Func<IChatClient> getSideQuestionClient, PotatoRuntimeOptions options)
+internal class AgentTools(ExecutionMemory memory, Func<IChatClient> getSideQuestionClient, PotatoRuntimeOptions options)
 {
     private const int DefaultCommandTimeoutSeconds = 60;
     private const int MaxCommandTimeoutSeconds = 600;
@@ -36,7 +36,7 @@ internal class AgentTools(ReActMemory memory, Func<IChatClient> getSideQuestionC
     private int? maxToolInvocationsThisIteration;
     private int toolInvocationsThisIteration;
 
-    public void BeginReActIteration(int maxToolInvocations)
+    public void BeginToolInvocationBatch(int maxToolInvocations)
     {
         lock (toolInvocationLock)
         {
@@ -45,7 +45,7 @@ internal class AgentTools(ReActMemory memory, Func<IChatClient> getSideQuestionC
         }
     }
 
-    public void EndReActIteration()
+    public void EndToolInvocationBatch()
     {
         lock (toolInvocationLock)
         {
@@ -77,8 +77,8 @@ internal class AgentTools(ReActMemory memory, Func<IChatClient> getSideQuestionC
         }
 
         rejectionReason =
-            $"Rejected {toolName}: this ReAct iteration already used its single permitted tool call. " +
-            "Wait for the latest observation, satisfy the current step's stated Result, and emit READY_FOR_NEXT_SUBSTEP before moving to a later step.";
+            $"Rejected {toolName}: this execution step already used its permitted tool call. " +
+            "Wait for the latest observation before choosing another tool.";
         return false;
     }
 
@@ -582,7 +582,7 @@ internal class AgentTools(ReActMemory memory, Func<IChatClient> getSideQuestionC
         return StoreAndReturn($"{nameof(SummarizeFilePurpose)} {resolvedPath}", builder.ToString());
     }
 
-    [Description("Gets collected ReAct context by index. Use index 'list' to list available items with descriptions, 'latest' for the newest item, or a numeric index. Use this to retrieve earlier ReadFileContent or SummarizeFilePurpose results for a file instead of reading or summarizing that same unchanged file again. Set full to true only when exact full content is needed. After a file has been edited, earlier collected context for that file is stale and the file must be read or summarized again.")]
+    [Description("Gets collected execution context by index. Use index 'list' to list available items with descriptions, 'latest' for the newest item, or a numeric index. Use this to retrieve earlier ReadFileContent or SummarizeFilePurpose results for a file instead of reading or summarizing that same unchanged file again. Set full to true only when exact full content is needed. After a file has been edited, earlier collected context for that file is stale and the file must be read or summarized again.")]
     public string GetCollectedContext(
         [Description("Use 'list', 'latest', or a numeric index from the collected context list.")] string index = "list",
         [Description("Whether to return full stored content instead of a summary when available.")] bool full = false)
