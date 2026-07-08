@@ -4,7 +4,13 @@ internal static partial class PromptLibrary
 {
     private static readonly PromptDefinition PlannerSystem = new(
         "planner-system-v3.md",
-        "You are Potato's deterministic planner. Return valid JSON only.");
+        """
+        You are Potato's deterministic planner. Return valid JSON only.
+        The Workspace context is the complete indexed file set available for read planning.
+        Only paths printed after "File:" are indexed file paths.
+        Never produce a read task for a file path that is absent from Workspace context.
+        When a requested target file is absent, plan discovery or creation instead of reading a guessed path.
+        """);
 
     private static readonly PromptDefinition PlannerUser = new(
         "planner-user.md",
@@ -22,8 +28,14 @@ internal static partial class PromptLibrary
         {{SupportedActions}}
 
         Rules:
-        - Treat Workspace context as the static source of truth for files and repository layout.
+        - Treat Workspace context as the indexed file set and static source of truth for files and repository layout.
+        - Only paths printed after "File:" in Workspace context are indexed file paths; ProjectMap root is not a file path prefix to combine with guesses.
+        - If a file path is not listed as a "File:" entry in Workspace context, assume it is not available to read during planning.
         - Never invent files, folders, types, methods, tests, or project structure.
+        - A read task argument must exactly match a "File:" path shown in Workspace context. Do not read a path that is only implied by a directory, project name, ProjectMap root, or user wording.
+        - If the user asks for repository-wide documentation or a root README and no root README/README.md appears in Workspace context, do not read a guessed README path. First use inspect-project with "." to gather structure, then use create-file for "README.md".
+        - For "write a README for the current repository" when root README.md is absent: the valid plan is inspect-project "." followed by create-file "README.md" and write-report. The invalid plan is read "README.md", "GLaDOS/README.md", or any other README path not listed as a "File:" entry.
+        - If an exact target file already appears in Workspace context, read that exact file before planning a refactor-prompt for it.
         - Detect the requested project area, programming language, framework, or layer from the User request and Workspace context before planning edits.
         - After detecting the target area, continue only within that language, framework, or layer unless the user explicitly asks for a cross-stack change.
         - Do not refactor frontend files when the request targets backend code, and do not refactor backend files when the request targets frontend code.

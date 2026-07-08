@@ -13,7 +13,8 @@ public class CreateNewFileTask(AgentTools agentTools): AgentTaskBase, IAgentTask
 
     public override IReadOnlyList<string> PlanningGuidance =>
     [
-        "Use create-file only when the user asks to create a new file."
+        "Use create-file only when the user asks to create a new file or to write documentation for a missing target file.",
+        "For repository-level README requests where README.md is absent from Workspace context, use create-file with Argument \"README.md\" after inspect-project."
     ];
 
     public async Task<string> ExecuteTaskAsync(
