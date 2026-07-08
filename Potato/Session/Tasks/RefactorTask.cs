@@ -51,7 +51,7 @@ public class RefactorTask(AgentTools agentTools) : AgentTaskBase, IAgentTask
                 "Prior observations:\n" +
                 observations.FormatObservations() +
                 "\n\n" +
-                PotatoPrompts.GetRefactorPrompt(filePath, fileContent, task.Argument))
+                PromptLibrary.BuildRefactorUserPrompt(filePath, fileContent, task.Argument))
         };
 
         ChatResponse response;
