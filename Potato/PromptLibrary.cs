@@ -1,4 +1,4 @@
-internal static class PromptLibrary
+internal class PromptLibrary
 {
     private static PromptFileStore promptFileStore = new(Path.Combine(AppContext.BaseDirectory, "prompts"));
     private static bool useCompiledDefaultsOnly;

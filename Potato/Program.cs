@@ -1,4 +1,7 @@
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.DependencyInjection;
+using Potato.Session;
+using Potato.Session.Tasks;
 
 class Program
 {
@@ -9,6 +12,19 @@ class Program
         PotatoAppSettings appSettings = appSettingsStore.Load();
         PotatoRuntimeOptions options = PotatoRuntimeOptions.FromArgs(args, appSettings);
         PromptLibrary.Configure(options.PromptDirectory, options.UseCompiledDefaultPrompts);
+
+        var services = new ServiceCollection();
+
+        services.AddSingleton<ExecutionService>();
+        services.AddSingleton<PlanningService>();
+
+        services.AddSingleton<IAgentTask, CodeReviewTask>();
+        services.AddSingleton<IAgentTask, CreateNewFileTask>();
+        services.AddSingleton<IAgentTask, ReadFileTask>();
+        services.AddSingleton<IAgentTask, WriteReportTask>();
+        services.AddSingleton<IAgentTask, RefactorTask>();
+
+        var provider = services.BuildServiceProvider();
 
         Uri gladosEndpoint = GladosConfiguration.GetEndpoint();
         var clientFactory = new GladosChatClientFactory();
@@ -21,6 +37,7 @@ class Program
 
         PotatoConsole.WriteStartupBanner(gladosEndpoint, model);
 
+
         var session = new PotatoSession(
             gladosEndpoint,
             openAiClient,
@@ -28,7 +45,10 @@ class Program
             clientFactory,
             modelSelector,
             options,
-            appSettingsStore);
+            appSettingsStore,
+            provider.GetRequiredService<PlanningService>(),
+            provider.GetRequiredService<ExecutionService>()
+        );
 
         await session.RunAsync();
     }
