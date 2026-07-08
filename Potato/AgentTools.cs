@@ -1459,12 +1459,19 @@ internal class AgentTools(ExecutionMemory memory, Func<IChatClient> getSideQuest
 
     private static bool IsFailureResult(string result)
     {
-        string trimmed = result.TrimStart();
-        return trimmed.StartsWith("Error:", StringComparison.OrdinalIgnoreCase) ||
-               trimmed.StartsWith("Rejected ", StringComparison.OrdinalIgnoreCase) ||
-               trimmed.Contains(" denied", StringComparison.OrdinalIgnoreCase) ||
-               trimmed.Contains(" failed", StringComparison.OrdinalIgnoreCase) ||
-               trimmed.Contains(" timed out", StringComparison.OrdinalIgnoreCase);
+        string firstLine = FirstLine(result).TrimStart();
+        return firstLine.StartsWith("Error:", StringComparison.OrdinalIgnoreCase) ||
+               firstLine.StartsWith("Rejected ", StringComparison.OrdinalIgnoreCase) ||
+               firstLine.EndsWith(" denied", StringComparison.OrdinalIgnoreCase) ||
+               firstLine.EndsWith(" failed.", StringComparison.OrdinalIgnoreCase) ||
+               firstLine.Contains(" timed out", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string FirstLine(string text)
+    {
+        string normalized = text.Replace("\r\n", "\n", StringComparison.Ordinal).TrimStart();
+        int lineEnd = normalized.IndexOf('\n', StringComparison.Ordinal);
+        return lineEnd < 0 ? normalized : normalized[..lineEnd];
     }
 
     private ToolPermissionChoice RequestPermission(

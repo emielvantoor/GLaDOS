@@ -16,6 +16,7 @@ internal sealed record AgentTask
         return Action.Trim().ToLowerInvariant().Replace("_", "-", StringComparison.Ordinal) switch
         {
             "read" or "patch" => 0.0,
+            "review-code" => 0.2,
             "write-summary" or "write-documentation" => 0.4,
             "explain-to-user" => 0.7,
             _ => 0.0
