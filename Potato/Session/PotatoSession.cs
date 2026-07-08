@@ -165,40 +165,6 @@ internal sealed class PotatoSession
         }
     }
 
-    
-
-   
-
-   
-
-
-  
-
-    // private string InspectProject(string directoryPath)
-    // {
-    //     string root = ResolveExistingDirectory(directoryPath) ?? Environment.CurrentDirectory;
-    //     var builder = new StringBuilder();
-    //     builder.AppendLine($"Project inspection: {root}");
-    //     builder.AppendLine();
-    //     builder.AppendLine("Top-level files and folders:");
-    //     builder.AppendLine(agentTools.ListFiles(root, recursive: false, maxEntries: 300));
-    //     builder.AppendLine();
-    //     builder.AppendLine("Project manifests:");
-    //     builder.AppendLine(agentTools.ListProjectFiles(root));
-    //     builder.AppendLine();
-    //     builder.AppendLine("Likely source, documentation, and test files:");
-    //     builder.AppendLine(agentTools.SearchFiles(
-    //         ".sln|.csproj|.fsproj|.vbproj|package.json|pyproject.toml|Cargo.toml|go.mod|pom.xml|build.gradle|README|.md|.cs|.fs|.ts|.js|test|tests|src|source",
-    //         root,
-    //         recursive: true,
-    //         maxMatches: 300));
-    //
-    //     return builder.ToString();
-    // }
-    //
-    //
-    //
-    //
     // private static string SelectTargetCodeBlock(string fileContent, string patchArgument)
     // {
     //     string[] lines = fileContent.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
