@@ -16,10 +16,4 @@ internal sealed class GladosChatClientFactory
             }).AsIChatClient();
     }
 
-    public IChatClient CreateFunctionClient(IChatClient openAiClient)
-    {
-        return new ChatClientBuilder(openAiClient)
-            .UseFunctionInvocation()
-            .Build();
-    }
 }

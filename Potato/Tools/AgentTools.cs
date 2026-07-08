@@ -4,8 +4,9 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.AI;
+using Potato;
 
-public class AgentTools(ExecutionMemory memory, Func<IChatClient> getSideQuestionClient, PotatoRuntimeOptions options)
+public class AgentTools(ExecutionMemory memory, CurrentChatClientState chatClientState, PotatoRuntimeOptions options)
 {
     private const int DefaultCommandTimeoutSeconds = 60;
     private const int MaxCommandTimeoutSeconds = 600;
@@ -1226,7 +1227,7 @@ public class AgentTools(ExecutionMemory memory, Func<IChatClient> getSideQuestio
                     Truncate(content, MaxPurposeInferenceCharacters))
             };
 
-            ChatResponse response = await getSideQuestionClient().GetResponseAsync(messages, new ChatOptions(), cancellationToken);
+            ChatResponse response = await chatClientState.OpenAiClient.GetResponseAsync(messages, new ChatOptions(), cancellationToken);
             return string.IsNullOrWhiteSpace(response.Text)
                 ? heuristicPurpose
                 : response.Text.Trim();

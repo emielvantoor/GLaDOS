@@ -11,7 +11,7 @@ internal sealed class SlashCommandHandler(
     Action<string> handleTranscriptCommand,
     Action writeSessions,
     Func<IChatClient> getClient,
-    Action<string, IChatClient, IChatClient> switchModel)
+    Action<IChatClient> switchModel)
 {
     public async Task<bool> TryHandleAsync(string input)
     {
@@ -110,9 +110,8 @@ internal sealed class SlashCommandHandler(
     {
         string selectedModel = await modelSelector.PromptForModelAsync(gladosEndpoint);
         IChatClient selectedOpenAiClient = clientFactory.CreateOpenAiClient(gladosEndpoint, selectedModel);
-        IChatClient selectedClient = clientFactory.CreateFunctionClient(selectedOpenAiClient);
 
-        switchModel(selectedModel, selectedOpenAiClient, selectedClient);
+        switchModel(selectedOpenAiClient);
         setSelectedModel(selectedModel);
         PotatoConsole.WriteSuccess($"Selected model: {selectedModel}");
     }
