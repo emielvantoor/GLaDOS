@@ -19,21 +19,15 @@ internal sealed class ExecutionPlanner(IChatClient plannerClient)
 
         var plannerMessages = new List<ChatMessage>
         {
-            new(ChatRole.System,
-                "You decide whether the approved approach requires one shell command. " +
-                "If it does, return ONLY minified JSON with these properties: command, workingDirectory, timeoutSeconds. " +
-                "If it does not require shell execution, return ONLY minified JSON with an empty command: {\"command\":\"\",\"workingDirectory\":null,\"timeoutSeconds\":60}. " +
-                "Do not use Markdown. Do not explain. " +
-                "Use PowerShell syntax on Windows and Bash syntax on Linux/macOS. " +
-                "For inspection/listing tasks, prefer read-only commands. " +
-                "Do not generate destructive commands unless the approved task explicitly requires destructive changes."),
+            new(ChatRole.System, Prompts.PromptLibrary.ExecutionPlanningSystemPrompt),
             new(ChatRole.User,
-                $"Operating system: {operatingSystem}\n" +
-                $"Current directory: {Environment.CurrentDirectory}\n" +
-                $"Home directory: {Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)}\n\n" +
-                $"Original user request:\n{latestUserRequest ?? "(unknown)"}\n\n" +
-                $"Approved specification:\n{latestSpecification ?? "(unknown)"}\n\n" +
-                $"Approved approach:\n{latestApproach ?? "(unknown)"}")
+                Prompts.PromptLibrary.BuildExecutionPlanningUserPrompt(
+                    operatingSystem,
+                    Environment.CurrentDirectory,
+                    Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                    latestUserRequest ?? "(unknown)",
+                    latestSpecification ?? "(unknown)",
+                    latestApproach ?? "(unknown)"))
         };
 
         try

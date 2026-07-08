@@ -10,6 +10,33 @@ internal static partial class PromptLibrary
         "Do not fill space with generic best-practice advice. If no concrete issues are found, say that clearly and mention residual test or verification risk. " +
         "Keep the response concise and actionable.");
 
+    private static readonly PromptDefinition CodeReviewUser = new(
+        "code-review-user.md",
+        """
+        You are the Code Review phase of Potato.
+        Review only the target file and the supplied prior observations.
+        Do not infer behavior from files that were not supplied.
+        Lead with findings ordered by severity.
+        If there are no concrete findings, say that clearly and mention any residual verification risk.
+
+        Goal:
+        {{Goal}}
+
+        Target file:
+        {{FilePath}}
+
+        Instructions:
+        {{Instructions}}
+
+        Prior observations:
+        {{PriorObservations}}
+
+        Full file content:
+        ```
+        {{FileContent}}
+        ```
+        """);
+
     public static string CodeReviewSystemPrompt => Load(CodeReviewSystem);
 
     public static string BuildCodeReviewUserPrompt(
@@ -18,28 +45,12 @@ internal static partial class PromptLibrary
         string fileContent,
         string instructions,
         string priorObservations) =>
-        $$$"""
-           You are the Code Review phase of Potato.
-           Review only the target file and the supplied prior observations.
-           Do not infer behavior from files that were not supplied.
-           Lead with findings ordered by severity.
-           If there are no concrete findings, say that clearly and mention any residual verification risk.
-
-           Goal:
-           {{{goal}}}
-
-           Target file:
-           {{{filePath}}}
-
-           Instructions:
-           {{{instructions}}}
-
-           Prior observations:
-           {{{priorObservations}}}
-
-           Full file content:
-           ```
-           {{{fileContent}}}
-           ```
-           """;
+        Render(CodeReviewUser, new Dictionary<string, string>
+        {
+            ["Goal"] = goal,
+            ["FilePath"] = filePath,
+            ["Instructions"] = instructions,
+            ["PriorObservations"] = priorObservations,
+            ["FileContent"] = fileContent
+        });
 }

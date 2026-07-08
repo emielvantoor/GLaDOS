@@ -408,7 +408,7 @@ internal static class PotatoConsole
         Console.ResetColor();
     }
 
-    public static IDisposable StartProgress(string message)
+    public static IProgressReporter StartProgress(string message)
     {
         if (Console.IsOutputRedirected)
         {
@@ -436,6 +436,11 @@ internal static class PotatoConsole
             ActiveProgress.Pause();
             return new ProgressSuspension(ActiveProgress);
         }
+    }
+
+    internal interface IProgressReporter : IDisposable
+    {
+        void Update(string message);
     }
 
     public static ToolPermissionChoice RequestToolPermission(
@@ -997,16 +1002,16 @@ internal static class PotatoConsole
 
     private sealed record PathCompletionCandidate(string? Name, bool IsDirectory);
 
-    private sealed class ProgressSpinner : IDisposable
+    private sealed class ProgressSpinner : IProgressReporter
     {
         private static readonly char[] Frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-        private readonly string message;
         private readonly object syncRoot;
         private readonly Func<string> nextJoke;
         private readonly CancellationTokenSource cancellation = new();
         private Task? renderTask;
         private bool paused;
         private bool disposed;
+        private string message;
         private string joke;
         private int renderedLength;
         private int renderedLines;
@@ -1022,6 +1027,17 @@ internal static class PotatoConsole
         public void Start()
         {
             renderTask = Task.Run(RenderLoopAsync);
+        }
+
+        public void Update(string message)
+        {
+            lock (syncRoot)
+            {
+                if (!disposed)
+                {
+                    this.message = message;
+                }
+            }
         }
 
         public void Pause()
@@ -1169,8 +1185,12 @@ internal static class PotatoConsole
         }
     }
 
-    private sealed class NoopDisposable : IDisposable
+    private sealed class NoopDisposable : IProgressReporter
     {
+        public void Update(string message)
+        {
+        }
+
         public void Dispose()
         {
         }

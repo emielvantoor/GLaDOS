@@ -41,12 +41,11 @@ public class CreateNewFileTask(AgentTools agentTools): AgentTaskBase, IAgentTask
             new(ChatRole.System, Prompts.PromptLibrary.CreateFileSystemPrompt),
             new(
                 ChatRole.User,
-                "Return a JSON object only.\n\n" +
-                $"Goal:\n{goal}\n\n" +
-                $"Create task:\n{task.Argument}\n\n" +
-                $"Last read file: {context.LastReadFilePath ?? "(none)"}\n\n" +
-                "Prior observations:\n" +
-                observations.FormatObservations())
+                Prompts.PromptLibrary.BuildCreateFileUserPrompt(
+                    goal,
+                    task.Argument,
+                    context.LastReadFilePath ?? "(none)",
+                    observations.FormatObservations()))
         };
 
         ChatResponse response;

@@ -133,11 +133,9 @@ public sealed class ExecutionMemory
                 new(ChatRole.System, Potato.Prompts.PromptLibrary.SideQuestionSystemPrompt),
                 new(
                     ChatRole.User,
-                    "Summarize this collected execution context for later retrieval. " +
-                    "Keep concrete file names, commands, errors, dependencies, and conclusions. " +
-                    "Use concise bullets.\n\n" +
-                    $"Source: {item.Source}\n\n" +
-                    Trim(item.Content, FullContentLimitCharacters))
+                    Potato.Prompts.PromptLibrary.BuildExecutionMemorySummaryUserPrompt(
+                        item.Source,
+                        Trim(item.Content, FullContentLimitCharacters)))
             };
 
             ChatResponse response = await summarizerClient.GetResponseAsync(messages, new ChatOptions(), cancellationToken);

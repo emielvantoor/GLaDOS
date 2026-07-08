@@ -301,7 +301,7 @@ internal sealed class PotatoSession
             var greetingMessages = new List<ChatMessage>
             {
                 new(ChatRole.System, Potato.Prompts.PromptLibrary.GreetingSystemPrompt),
-                new(ChatRole.User, "Greet the user.")
+                new(ChatRole.User, Potato.Prompts.PromptLibrary.GreetingUserPrompt)
             };
 
             ChatResponse greeting;

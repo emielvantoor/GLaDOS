@@ -139,12 +139,16 @@ public class PlanningService(AgentTools agentTools, IEnumerable<IAgentTask> agen
             .OrderBy(file => Path.GetRelativePath(targetDirectory, file), StringComparer.OrdinalIgnoreCase)
             .ToArray();
 
-        using (PotatoConsole.StartProgress($"Indexing {files.Length} project files into ProjectMap..."))
+        using (PotatoConsole.IProgressReporter progress =
+               PotatoConsole.StartProgress($"Indexing {files.Length} project files into ProjectMap..."))
         {
-            foreach (string file in files)
+            for (int index = 0; index < files.Length; index++)
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                string file = files[index];
                 string relativePath = Path.GetRelativePath(targetDirectory, file);
+                progress.Update(BuildProjectMapProgressMessage(index + 1, files.Length, relativePath));
+
                 string content = await File.ReadAllTextAsync(file, cancellationToken);
                 string summary = await SummarizeProjectFileAsync(relativePath, content, chatClient, cancellationToken);
 
@@ -155,6 +159,15 @@ public class PlanningService(AgentTools agentTools, IEnumerable<IAgentTask> agen
         }
 
         return builder.ToString();
+    }
+
+    private static string BuildProjectMapProgressMessage(int currentFile, int totalFiles, string relativePath)
+    {
+        int percentage = totalFiles == 0
+            ? 100
+            : (int)Math.Round(currentFile * 100.0 / totalFiles);
+
+        return $"Indexing ProjectMap {currentFile}/{totalFiles} ({percentage}%): {relativePath}";
     }
 
     private static bool IsProjectMapFile(string filePath)

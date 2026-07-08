@@ -27,13 +27,13 @@ public class WriteReportTask : AgentTaskBase, IAgentTask
             new(ChatRole.System, Prompts.PromptLibrary.UserTextSystemPrompt),
             new(
                 ChatRole.User,
-                "Action: write_report\n" +
-                "Temperature: 0.7\n\n" +
-                $"Goal:\n{goal}\n\n" +
-                $"Task:\n{task.Argument}\n\n" +
-                $"Last read file: {context.LastReadFilePath ?? "(none)"}\n\n" +
-                "Prior observations:\n" +
-                observations.FormatObservations())
+                Prompts.PromptLibrary.BuildUserTextUserPrompt(
+                    task.Action,
+                    "0.7",
+                    goal,
+                    task.Argument,
+                    context.LastReadFilePath ?? "(none)",
+                    observations.FormatObservations()))
         };
 
         ChatResponse response;
