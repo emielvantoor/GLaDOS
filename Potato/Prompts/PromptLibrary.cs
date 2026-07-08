@@ -34,19 +34,42 @@ internal static partial class PromptLibrary
     private static IEnumerable<PromptDefinition> GetPromptDefinitions()
     {
         yield return PlannerSystem;
+        yield return PlannerUser;
         yield return PatchSystem;
         yield return RefactorSystem;
+        yield return RefactorUser;
         yield return CreateFileSystem;
+        yield return CreateFileUser;
         yield return UserTextSystem;
+        yield return UserTextUser;
         yield return CodeReviewSystem;
+        yield return CodeReviewUser;
         yield return GreetingSystem;
         yield return SideQuestionSystem;
+        yield return ProjectMapSystem;
+        yield return ProjectMapUser;
+        yield return ExecutionPlanningSystem;
+        yield return ExecutionPlanningUser;
+        yield return ExecutionMemorySummaryUser;
+        yield return FilePurposeUser;
+        yield return GreetingUser;
     }
 
     private static string Load(PromptDefinition definition) =>
         useCompiledDefaultsOnly
             ? definition.DefaultText
             : promptFileStore.LoadOrCreate(definition.FileName, definition.DefaultText);
+
+    private static string Render(PromptDefinition definition, IReadOnlyDictionary<string, string> values)
+    {
+        string text = Load(definition);
+        foreach ((string key, string value) in values)
+        {
+            text = text.Replace("{{" + key + "}}", value, StringComparison.Ordinal);
+        }
+
+        return text;
+    }
 
     private sealed record PromptDefinition(string FileName, string DefaultText);
 }

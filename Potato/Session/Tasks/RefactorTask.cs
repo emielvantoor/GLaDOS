@@ -55,11 +55,12 @@ public class RefactorTask(AgentTools agentTools) : AgentTaskBase, IAgentTask
             new(ChatRole.System, Prompts.PromptLibrary.RefactorSystemPrompt),
             new(
                 ChatRole.User,
-                $"Goal:\n{goal}\n\n" +
-                "Prior observations:\n" +
-                observations.FormatObservations() +
-                "\n\n" +
-                Prompts.PromptLibrary.BuildRefactorUserPrompt(filePath, fileContent, task.Argument))
+                Prompts.PromptLibrary.BuildRefactorUserPrompt(
+                    goal,
+                    filePath,
+                    fileContent,
+                    task.Argument,
+                    observations.FormatObservations()))
         };
 
         ChatResponse response;

@@ -12,5 +12,11 @@ internal static partial class PromptLibrary
         "Keep it to one or two sentences maximum. " +
         "Do not mention phases, tools, or workflows. Do not ask any questions.");
 
+    private static readonly PromptDefinition GreetingUser = new(
+        "greeting-user.md",
+        "Greet the user.");
+
     public static string GreetingSystemPrompt => Load(GreetingSystem);
+
+    public static string GreetingUserPrompt => Load(GreetingUser);
 }

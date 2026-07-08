@@ -1220,12 +1220,9 @@ public class AgentTools(ExecutionMemory memory, CurrentChatClientState chatClien
                 new(ChatRole.System, Potato.Prompts.PromptLibrary.SideQuestionSystemPrompt),
                 new(
                     ChatRole.User,
-                    "Summarize this file's purpose and likely use case. " +
-                    "Use the file path and visible contents when possible. " +
-                    "Return one concise sentence and do not quote large snippets.\n\n" +
-                    $"File path: {filePath}\n\n" +
-                    "File contents:\n" +
-                    Truncate(content, MaxPurposeInferenceCharacters))
+                    Potato.Prompts.PromptLibrary.BuildFilePurposeUserPrompt(
+                        filePath,
+                        Truncate(content, MaxPurposeInferenceCharacters)))
             };
 
             ChatResponse response = await chatClientState.OpenAiClient.GetResponseAsync(messages, new ChatOptions(), cancellationToken);
