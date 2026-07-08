@@ -35,6 +35,9 @@ internal static partial class PromptLibrary
         - A read task argument must exactly match a "File:" path shown in Workspace context. Do not read a path that is only implied by a directory, project name, ProjectMap root, or user wording.
         - If the user asks for repository-wide documentation or a root README and no root README/README.md appears in Workspace context, do not read a guessed README path. First use inspect-project with "." to gather structure, then use create-file for "README.md".
         - For "write a README for the current repository" when root README.md is absent: the valid plan is inspect-project "." followed by create-file "README.md" and write-report. The invalid plan is read "README.md", "GLaDOS/README.md", or any other README path not listed as a "File:" entry.
+        - Before planning implementation work, check Workspace context for instruction or feature files near the target area, such as AGENTS.md, agents.md, FEATURE.md, README.md, CONTRIBUTING.md, .github/copilot-instructions.md, .github/instructions.md, .github/features/*.md, or docs/*.md.
+        - If an instruction or feature file appears relevant to the requested target area, read it before planning create-file or refactor-prompt steps.
+        - Treat relevant instruction and feature files as authoritative project guidance unless the user request explicitly overrides them.
         - If an exact target file already appears in Workspace context, read that exact file before planning a refactor-prompt for it.
         - If the user names one file as a reference/example and another file as the implementation target, the reference file must only be read for context. It must not be edited.
         - For edits that use reference files, read reference files first, then read the implementation target file immediately before refactor-prompt.
