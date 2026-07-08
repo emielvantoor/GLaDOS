@@ -1,6 +1,8 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
+namespace Potato;
+
 public sealed class PotatoAppSettings
 {
     public bool UseCompiledDefaultPrompts { get; init; }

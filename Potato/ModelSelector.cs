@@ -1,6 +1,8 @@
 using System.Net.Http.Json;
 using System.Text.Json.Serialization;
 
+namespace Potato;
+
 internal sealed class ModelSelector
 {
     public async Task<string> SelectStartupModelAsync(Uri gladosEndpoint, string? selectedModel)

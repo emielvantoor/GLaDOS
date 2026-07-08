@@ -1,8 +1,10 @@
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
-using Potato;
 using Potato.Session;
 using Potato.Session.Tasks;
+using Potato.Tools;
+
+namespace Potato;
 
 class Program
 {
@@ -12,7 +14,7 @@ class Program
         var appSettingsStore = new PotatoAppSettingsStore(PotatoAppSettingsStore.DefaultPath);
         PotatoAppSettings appSettings = appSettingsStore.Load();
         PotatoRuntimeOptions options = PotatoRuntimeOptions.FromArgs(args, appSettings);
-        PromptLibrary.Configure(options.PromptDirectory, options.UseCompiledDefaultPrompts);
+        Potato.Prompts.PromptLibrary.Configure(options.PromptDirectory, options.UseCompiledDefaultPrompts);
 
         var services = new ServiceCollection();
 

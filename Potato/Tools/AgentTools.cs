@@ -4,7 +4,8 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.AI;
-using Potato;
+
+namespace Potato.Tools;
 
 public class AgentTools(ExecutionMemory memory, CurrentChatClientState chatClientState, PotatoRuntimeOptions options)
 {
@@ -1216,7 +1217,7 @@ public class AgentTools(ExecutionMemory memory, CurrentChatClientState chatClien
         {
             var messages = new List<ChatMessage>
             {
-                new(ChatRole.System, PromptLibrary.SideQuestionSystemPrompt),
+                new(ChatRole.System, Potato.Prompts.PromptLibrary.SideQuestionSystemPrompt),
                 new(
                     ChatRole.User,
                     "Summarize this file's purpose and likely use case. " +

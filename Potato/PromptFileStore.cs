@@ -1,3 +1,5 @@
+namespace Potato;
+
 internal sealed class PromptFileStore
 {
     private readonly string promptDirectory;

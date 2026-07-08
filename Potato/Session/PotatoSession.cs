@@ -1,12 +1,13 @@
 using System.Text;
-using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.AI;
-using Potato;
-using Potato.Session;
+using Potato.Models;
 using Potato.Session.extensions;
 using Potato.Session.Models;
 using Potato.Session.Tasks;
+using Potato.Tools;
+
+namespace Potato.Session;
 
 internal sealed class PotatoSession
 {
@@ -299,7 +300,7 @@ internal sealed class PotatoSession
         {
             var greetingMessages = new List<ChatMessage>
             {
-                new(ChatRole.System, PromptLibrary.GreetingSystemPrompt),
+                new(ChatRole.System, Potato.Prompts.PromptLibrary.GreetingSystemPrompt),
                 new(ChatRole.User, "Greet the user.")
             };
 
@@ -585,7 +586,7 @@ internal sealed class PotatoSession
     private void SetUseCompiledDefaultPrompts(bool useCompiledDefaultsOnly)
     {
         appSettingsStore.SetUseCompiledDefaultPrompts(useCompiledDefaultsOnly);
-        PromptLibrary.SetUseCompiledDefaultsOnly(useCompiledDefaultsOnly);
+        Potato.Prompts.PromptLibrary.SetUseCompiledDefaultsOnly(useCompiledDefaultsOnly);
         ResetConversationState();
     }
 

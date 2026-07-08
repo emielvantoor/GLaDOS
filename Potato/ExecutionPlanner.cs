@@ -2,6 +2,8 @@ using System.Runtime.InteropServices;
 using System.Text.Json;
 using Microsoft.Extensions.AI;
 
+namespace Potato;
+
 internal sealed class ExecutionPlanner(IChatClient plannerClient)
 {
     public async Task<ShellCommandPlan?> TryPlanExecutionAsync(

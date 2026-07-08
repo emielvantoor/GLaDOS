@@ -1,4 +1,5 @@
 using Microsoft.Extensions.AI;
+using Potato.Models;
 using Potato.Session.extensions;
 using Potato.Session.Models;
 using Potato.Session.Tasks;
@@ -54,7 +55,8 @@ public class ExecutionService(ExecutionMemory executionMemory, IEnumerable<IAgen
         var agentTask = agentTasks.FirstOrDefault(a => a.CanExecute(action));
         if (agentTask == null)
         {
-            return $"Error: Unsupported planner action '{task.Action}'. Supported actions: read, refactor_prompt, write_report.";
+            string supportedActions = string.Join(", ", agentTasks.Select(task => task.ActionName).OrderBy(name => name, StringComparer.OrdinalIgnoreCase));
+            return $"Error: Unsupported planner action '{task.Action}'. Supported actions: {supportedActions}.";
         }
 
         return await agentTask.ExecuteTaskAsync(goal, task, context, observations, chatClient, cancellationToken);

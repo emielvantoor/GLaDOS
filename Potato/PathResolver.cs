@@ -1,3 +1,5 @@
+namespace Potato;
+
 internal static class PathResolver
 {
     public static string FormatPathForDisplay(string path)

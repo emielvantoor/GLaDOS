@@ -1,3 +1,5 @@
+namespace Potato;
+
 internal static class ApprovalPolicy
 {
     public static bool IsUserApproval(string input)

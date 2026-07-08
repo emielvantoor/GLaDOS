@@ -1,4 +1,5 @@
 using Microsoft.Extensions.AI;
+using Potato.Models;
 using Potato.Session.extensions;
 using Potato.Session.Models;
 
@@ -7,6 +8,11 @@ namespace Potato.Session.Tasks;
 public class WriteReportTask : AgentTaskBase, IAgentTask
 {
     protected override string Name { get; } = "write-report";
+
+    public override IReadOnlyList<string> PlanningGuidance =>
+    [
+        "Use write-report when the user should receive findings or a summary."
+    ];
 
     public async Task<string> ExecuteTaskAsync(
         string goal,
@@ -18,7 +24,7 @@ public class WriteReportTask : AgentTaskBase, IAgentTask
     {
         var messages = new List<ChatMessage>
         {
-            new(ChatRole.System, PromptLibrary.UserTextSystemPrompt),
+            new(ChatRole.System, Prompts.PromptLibrary.UserTextSystemPrompt),
             new(
                 ChatRole.User,
                 "Action: write_report\n" +

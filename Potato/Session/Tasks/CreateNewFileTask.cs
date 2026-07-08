@@ -1,13 +1,20 @@
 using System.Text.Json;
 using Microsoft.Extensions.AI;
+using Potato.Models;
 using Potato.Session.extensions;
 using Potato.Session.Models;
+using Potato.Tools;
 
 namespace Potato.Session.Tasks;
 
 public class CreateNewFileTask(AgentTools agentTools): AgentTaskBase, IAgentTask
 {
     protected override string Name { get; } = "create-file";
+
+    public override IReadOnlyList<string> PlanningGuidance =>
+    [
+        "Use create-file only when the user asks to create a new file."
+    ];
 
     public async Task<string> ExecuteTaskAsync(
         string goal,
@@ -31,7 +38,7 @@ public class CreateNewFileTask(AgentTools agentTools): AgentTaskBase, IAgentTask
     {
         var messages = new List<ChatMessage>
         {
-            new(ChatRole.System, PromptLibrary.CreateFileSystemPrompt),
+            new(ChatRole.System, Prompts.PromptLibrary.CreateFileSystemPrompt),
             new(
                 ChatRole.User,
                 "Return a JSON object only.\n\n" +

@@ -1,3 +1,5 @@
+namespace Potato;
+
 internal static class GladosConfiguration
 {
     private const string DefaultEndpoint = "http://localhost:11434/v1";

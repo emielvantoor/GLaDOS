@@ -1,5 +1,7 @@
 using System.Text.Json.Serialization;
 
+namespace Potato;
+
 internal sealed class ShellCommandPlan
 {
     [JsonPropertyName("command")]
