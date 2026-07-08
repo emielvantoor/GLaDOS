@@ -4,11 +4,10 @@ using Microsoft.Extensions.AI;
 using Potato.Models;
 using Potato.Session.extensions;
 using Potato.Session.Tasks;
-using Potato.Tools;
 
 namespace Potato.Session;
 
-public class PlanningService(AgentTools agentTools, IEnumerable<IAgentTask> agentTasks)
+public class PlanningService(IEnumerable<IAgentTask> agentTasks)
 {
     private static readonly string[] ProjectMapFileNames =
     [
@@ -134,7 +133,7 @@ public class PlanningService(AgentTools agentTools, IEnumerable<IAgentTask> agen
         var builder = new StringBuilder();
         builder.AppendLine($"ProjectMap root: {targetDirectory}");
 
-        string[] files = Directory.GetFiles(targetDirectory, "*", SearchOption.AllDirectories)
+        string[] files = EnumerateProjectMapFiles(targetDirectory)
             .Where(IsProjectMapFile)
             .OrderBy(file => Path.GetRelativePath(targetDirectory, file), StringComparer.OrdinalIgnoreCase)
             .ToArray();
@@ -193,6 +192,49 @@ public class PlanningService(AgentTools agentTools, IEnumerable<IAgentTask> agen
         return ProjectMapExtensions.Any(knownExtension =>
             extension.Equals(knownExtension, StringComparison.OrdinalIgnoreCase));
     }
+
+    private static IEnumerable<string> EnumerateProjectMapFiles(string directoryPath)
+    {
+        var root = new DirectoryInfo(directoryPath);
+        if (!root.Exists)
+        {
+            return [];
+        }
+
+        return EnumerateProjectMapFiles(root);
+    }
+
+    private static IEnumerable<string> EnumerateProjectMapFiles(DirectoryInfo directory)
+    {
+        foreach (FileInfo file in directory.EnumerateFiles())
+        {
+            yield return file.FullName;
+        }
+
+        foreach (DirectoryInfo childDirectory in directory.EnumerateDirectories())
+        {
+            if (ShouldSkipProjectMapDirectory(childDirectory))
+            {
+                continue;
+            }
+
+            foreach (string file in EnumerateProjectMapFiles(childDirectory))
+            {
+                yield return file;
+            }
+        }
+    }
+
+    private static bool ShouldSkipProjectMapDirectory(DirectoryInfo directory) =>
+        directory.Name.StartsWith(".", StringComparison.Ordinal) ||
+        directory.Attributes.HasFlag(FileAttributes.Hidden) ||
+        directory.Name.Equals("bin", StringComparison.OrdinalIgnoreCase) ||
+        directory.Name.Equals("obj", StringComparison.OrdinalIgnoreCase) ||
+        directory.Name.Equals("node_modules", StringComparison.OrdinalIgnoreCase) ||
+        directory.Name.Equals("dist", StringComparison.OrdinalIgnoreCase) ||
+        directory.Name.Equals("build", StringComparison.OrdinalIgnoreCase) ||
+        directory.Name.Equals("coverage", StringComparison.OrdinalIgnoreCase) ||
+        directory.Name.Equals("vendor", StringComparison.OrdinalIgnoreCase);
     
     private static bool IsSkippedProjectMapPath(string filePath)
     {
@@ -208,58 +250,6 @@ public class PlanningService(AgentTools agentTools, IEnumerable<IAgentTask> agen
                normalized.Contains("/vendor/", StringComparison.OrdinalIgnoreCase);
     }
     
-    private async Task<string> SummarizePathAsync(string path)
-    {
-        string? resolvedPath = ResolveLocalPath(path);
-        if (resolvedPath is not null && Directory.Exists(resolvedPath))
-        {
-            return InspectDirectory(resolvedPath);
-        }
-
-        return await agentTools.SummarizeFilePurpose(path);
-    }
-    
-    private string InspectDirectory(string directoryPath)
-    {
-        var builder = new StringBuilder();
-        builder.AppendLine($"Directory inspection: {directoryPath}");
-        builder.AppendLine();
-        builder.AppendLine(agentTools.ListFiles(directoryPath, recursive: false, maxEntries: 300));
-        builder.AppendLine();
-        builder.AppendLine("Project manifests under this directory:");
-        builder.AppendLine(agentTools.ListProjectFiles(directoryPath));
-        return builder.ToString();
-    }
-
-    private static string? ResolveExistingDirectory(string? path)
-    {
-        string? resolvedPath = ResolveLocalPath(path);
-        return resolvedPath is not null && Directory.Exists(resolvedPath) ? resolvedPath : null;
-    }
-
-    private static string? ResolveLocalPath(string? path)
-    {
-        if (string.IsNullOrWhiteSpace(path))
-        {
-            return null;
-        }
-
-        string trimmed = path.Trim();
-        if (Uri.TryCreate(trimmed, UriKind.Absolute, out Uri? uri) && uri.IsFile)
-        {
-            trimmed = uri.LocalPath;
-        }
-
-        if (trimmed.StartsWith("~/", StringComparison.Ordinal))
-        {
-            trimmed = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), trimmed[2..]);
-        }
-
-        return Path.GetFullPath(Path.IsPathRooted(trimmed)
-            ? trimmed
-            : Path.Combine(Environment.CurrentDirectory, trimmed));
-    }
-
     private static void ValidateTasks(IEnumerable<AgentTask> tasks, IReadOnlyCollection<string> supportedActions)
     {
         var supportedActionSet = supportedActions.ToHashSet(StringComparer.OrdinalIgnoreCase);
