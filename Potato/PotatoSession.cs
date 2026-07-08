@@ -229,15 +229,17 @@ internal sealed class PotatoSession
             "read" => ReadFile(task.Argument, context),
             "list" => agentTools.ListFiles(task.Argument, recursive: false),
             "list-recursive" => agentTools.ListFiles(task.Argument, recursive: true),
+            "inspect-project" => InspectProject(task.Argument),
             "search-files" => agentTools.SearchFiles(task.Argument),
             "search" or "search-contents" => agentTools.SearchFileContents(task.Argument),
-            "summarize" => await agentTools.SummarizeFilePurpose(task.Argument),
+            "summarize" => await SummarizePathAsync(task.Argument),
+            "review-code" => await ExecuteCodeReviewTaskAsync(goal, task, context, observations, cancellationToken),
             "patch" => await ExecutePatchTaskAsync(goal, task, context, observations, cancellationToken),
             "create" => await ExecuteCreateTaskAsync(goal, task, context, observations, cancellationToken),
             "write-summary" or "write-documentation" or "explain-to-user" =>
                 await ExecuteTextGenerationTaskAsync(goal, task, context, observations, cancellationToken),
             "shell" or "verify" => await agentTools.ExecuteShellCommandAsync(task.Argument),
-            _ => $"Error: Unsupported planner action '{task.Action}'. Supported actions: read, list, list-recursive, search-files, search, summarize, patch, create, write_summary, write_documentation, explain_to_user, shell, verify."
+            _ => $"Error: Unsupported planner action '{task.Action}'. Supported actions: read, list, list-recursive, inspect_project, search-files, search, summarize, review_code, patch, create, write_summary, write_documentation, explain_to_user, shell, verify."
         };
     }
 
@@ -251,6 +253,80 @@ internal sealed class PotatoSession
         }
 
         return result;
+    }
+
+    private async Task<string> SummarizePathAsync(string path)
+    {
+        string? resolvedPath = ResolveLocalPath(path);
+        if (resolvedPath is not null && Directory.Exists(resolvedPath))
+        {
+            return InspectDirectory(resolvedPath);
+        }
+
+        return await agentTools.SummarizeFilePurpose(path);
+    }
+
+    private string InspectProject(string directoryPath)
+    {
+        string root = ResolveExistingDirectory(directoryPath) ?? Environment.CurrentDirectory;
+        var builder = new StringBuilder();
+        builder.AppendLine($"Project inspection: {root}");
+        builder.AppendLine();
+        builder.AppendLine("Top-level files and folders:");
+        builder.AppendLine(agentTools.ListFiles(root, recursive: false, maxEntries: 300));
+        builder.AppendLine();
+        builder.AppendLine("Project manifests:");
+        builder.AppendLine(agentTools.ListProjectFiles(root));
+        builder.AppendLine();
+        builder.AppendLine("Likely source, documentation, and test files:");
+        builder.AppendLine(agentTools.SearchFiles(
+            ".sln|.csproj|.fsproj|.vbproj|package.json|pyproject.toml|Cargo.toml|go.mod|pom.xml|build.gradle|README|.md|.cs|.fs|.ts|.js|test|tests|src|source",
+            root,
+            recursive: true,
+            maxMatches: 300));
+
+        return builder.ToString();
+    }
+
+    private string InspectDirectory(string directoryPath)
+    {
+        var builder = new StringBuilder();
+        builder.AppendLine($"Directory inspection: {directoryPath}");
+        builder.AppendLine();
+        builder.AppendLine(agentTools.ListFiles(directoryPath, recursive: false, maxEntries: 300));
+        builder.AppendLine();
+        builder.AppendLine("Project manifests under this directory:");
+        builder.AppendLine(agentTools.ListProjectFiles(directoryPath));
+        return builder.ToString();
+    }
+
+    private static string? ResolveExistingDirectory(string? path)
+    {
+        string? resolvedPath = ResolveLocalPath(path);
+        return resolvedPath is not null && Directory.Exists(resolvedPath) ? resolvedPath : null;
+    }
+
+    private static string? ResolveLocalPath(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return null;
+        }
+
+        string trimmed = path.Trim();
+        if (Uri.TryCreate(trimmed, UriKind.Absolute, out Uri? uri) && uri.IsFile)
+        {
+            trimmed = uri.LocalPath;
+        }
+
+        if (trimmed.StartsWith("~/", StringComparison.Ordinal))
+        {
+            trimmed = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), trimmed[2..]);
+        }
+
+        return Path.GetFullPath(Path.IsPathRooted(trimmed)
+            ? trimmed
+            : Path.Combine(Environment.CurrentDirectory, trimmed));
     }
 
     private async Task<string> ExecutePatchTaskAsync(
@@ -282,6 +358,48 @@ internal sealed class PotatoSession
         }
 
         return await agentTools.ApplySearchReplaceAsync(context.LastReadFilePath, patch.Search, patch.Replace);
+    }
+
+    private async Task<string> ExecuteCodeReviewTaskAsync(
+        string goal,
+        AgentTask task,
+        ExecutorContext context,
+        IReadOnlyList<TaskObservation> observations,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(context.LastReadFilePath) ||
+            string.IsNullOrWhiteSpace(context.LastReadFileContent))
+        {
+            return "Error: review_code requires a successful read step first.";
+        }
+
+        var messages = new List<ChatMessage>
+        {
+            new(ChatRole.System, PromptLibrary.CodeReviewSystemPrompt),
+            new(
+                ChatRole.User,
+                $"Goal:\n{goal}\n\n" +
+                $"Review task:\n{task.Argument}\n\n" +
+                $"File path:\n{context.LastReadFilePath}\n\n" +
+                "Prior observations:\n" +
+                FormatObservations(observations) +
+                "\n\nFile contents:\n```csharp\n" +
+                context.LastReadFileContent +
+                "\n```")
+        };
+
+        ChatResponse response;
+        using (PotatoConsole.StartProgress($"Reviewing {PathResolver.FormatPathForDisplay(context.LastReadFilePath)}..."))
+        {
+            response = await currentOpenAiClient.GetResponseAsync(
+                messages,
+                CreateChatOptions(task.GetTargetTemperature()),
+                cancellationToken);
+        }
+
+        return string.IsNullOrWhiteSpace(response.Text)
+            ? "Error: Code review returned an empty response."
+            : response.Text.Trim();
     }
 
     private async Task<string> ExecuteCreateTaskAsync(
@@ -551,12 +669,12 @@ internal sealed class PotatoSession
 
     private static bool IsFailureResult(string result)
     {
-        string trimmed = result.TrimStart();
-        return trimmed.StartsWith("Error:", StringComparison.OrdinalIgnoreCase) ||
-               trimmed.StartsWith("Rejected ", StringComparison.OrdinalIgnoreCase) ||
-               trimmed.Contains(" denied", StringComparison.OrdinalIgnoreCase) ||
-               trimmed.Contains(" failed", StringComparison.OrdinalIgnoreCase) ||
-               trimmed.Contains(" timed out", StringComparison.OrdinalIgnoreCase);
+        string firstLine = FirstLine(result).TrimStart();
+        return firstLine.StartsWith("Error:", StringComparison.OrdinalIgnoreCase) ||
+               firstLine.StartsWith("Rejected ", StringComparison.OrdinalIgnoreCase) ||
+               firstLine.EndsWith(" denied", StringComparison.OrdinalIgnoreCase) ||
+               firstLine.EndsWith(" failed.", StringComparison.OrdinalIgnoreCase) ||
+               firstLine.Contains(" timed out", StringComparison.OrdinalIgnoreCase);
     }
 
     private static string FirstLine(string text) =>
@@ -589,6 +707,13 @@ internal sealed class PotatoSession
 
     private static string BuildSuccessSummary(ExecutionResult result)
     {
+        TaskObservation? userFacingObservation = result.Observations.LastOrDefault(observation =>
+            NormalizeAction(observation.Action) is "review-code" or "write-summary" or "write-documentation" or "explain-to-user");
+        if (userFacingObservation is not null)
+        {
+            return userFacingObservation.Result;
+        }
+
         var builder = new StringBuilder();
         builder.AppendLine("Execution completed.");
         foreach (TaskObservation observation in result.Observations)
