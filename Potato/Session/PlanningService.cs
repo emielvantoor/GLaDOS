@@ -19,6 +19,12 @@ public class PlanningService(IEnumerable<IAgentTask> agentTasks)
     [
         "README",
         "README.md",
+        "AGENTS.md",
+        "agents.md",
+        "FEATURE.md",
+        "CONTRIBUTING.md",
+        "copilot-instructions.md",
+        "instructions.md",
         "package.json",
         "tsconfig.json",
         "vite.config.js",
@@ -115,6 +121,7 @@ public class PlanningService(IEnumerable<IAgentTask> agentTasks)
             throw new InvalidOperationException("Planner returned no tasks.");
         }
 
+        tasks = EnsureInstructionReadsBeforeImplementation(tasks, ExtractIndexedPaths(workspaceContext));
         ValidateTasks(tasks, supportedActions);
         return tasks.OrderBy(task => task.Step).ToList();
     }
@@ -264,16 +271,23 @@ public class PlanningService(IEnumerable<IAgentTask> agentTasks)
         }
     }
 
-    private static bool ShouldSkipProjectMapDirectory(DirectoryInfo directory) =>
-        directory.Name.StartsWith(".", StringComparison.Ordinal) ||
-        directory.Attributes.HasFlag(FileAttributes.Hidden) ||
-        directory.Name.Equals("bin", StringComparison.OrdinalIgnoreCase) ||
-        directory.Name.Equals("obj", StringComparison.OrdinalIgnoreCase) ||
-        directory.Name.Equals("node_modules", StringComparison.OrdinalIgnoreCase) ||
-        directory.Name.Equals("dist", StringComparison.OrdinalIgnoreCase) ||
-        directory.Name.Equals("build", StringComparison.OrdinalIgnoreCase) ||
-        directory.Name.Equals("coverage", StringComparison.OrdinalIgnoreCase) ||
-        directory.Name.Equals("vendor", StringComparison.OrdinalIgnoreCase);
+    private static bool ShouldSkipProjectMapDirectory(DirectoryInfo directory)
+    {
+        if (directory.Name.Equals(".github", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        return directory.Name.StartsWith(".", StringComparison.Ordinal) ||
+               directory.Attributes.HasFlag(FileAttributes.Hidden) ||
+               directory.Name.Equals("bin", StringComparison.OrdinalIgnoreCase) ||
+               directory.Name.Equals("obj", StringComparison.OrdinalIgnoreCase) ||
+               directory.Name.Equals("node_modules", StringComparison.OrdinalIgnoreCase) ||
+               directory.Name.Equals("dist", StringComparison.OrdinalIgnoreCase) ||
+               directory.Name.Equals("build", StringComparison.OrdinalIgnoreCase) ||
+               directory.Name.Equals("coverage", StringComparison.OrdinalIgnoreCase) ||
+               directory.Name.Equals("vendor", StringComparison.OrdinalIgnoreCase);
+    }
     
     private static bool IsSkippedProjectMapPath(string filePath)
     {
@@ -366,6 +380,201 @@ public class PlanningService(IEnumerable<IAgentTask> agentTasks)
 
     private static string ComputeHash(string value) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value)));
+
+    private static List<AgentTask> EnsureInstructionReadsBeforeImplementation(
+        IReadOnlyList<AgentTask> tasks,
+        IReadOnlySet<string> indexedPaths)
+    {
+        int firstImplementationIndex = FindFirstImplementationIndex(tasks);
+        if (firstImplementationIndex < 0)
+        {
+            return tasks.OrderBy(task => task.Step).ToList();
+        }
+
+        string[] instructionReads = FindRelevantInstructionFiles(tasks, indexedPaths)
+            .Where(path => !tasks.Any(task =>
+                StringHelper.NormalizeAction(task.Action) == "read" &&
+                string.Equals(NormalizeProjectPath(task.Argument), path, StringComparison.OrdinalIgnoreCase)))
+            .ToArray();
+        if (instructionReads.Length == 0)
+        {
+            return tasks.OrderBy(task => task.Step).ToList();
+        }
+
+        var result = new List<AgentTask>();
+        foreach (AgentTask task in tasks.OrderBy(task => task.Step))
+        {
+            if (result.Count == firstImplementationIndex)
+            {
+                result.AddRange(instructionReads.Select(path => new AgentTask
+                {
+                    Action = "read",
+                    Argument = path,
+                    Reason = "Read relevant project instruction or feature guidance before implementation."
+                }));
+            }
+
+            result.Add(task);
+        }
+
+        return RenumberTasks(result);
+    }
+
+    private static int FindFirstImplementationIndex(IReadOnlyList<AgentTask> tasks)
+    {
+        AgentTask[] orderedTasks = tasks.OrderBy(task => task.Step).ToArray();
+        for (int index = 0; index < orderedTasks.Length; index++)
+        {
+            string action = StringHelper.NormalizeAction(orderedTasks[index].Action);
+            if (action is "create-file" or "refactor-prompt")
+            {
+                return index;
+            }
+        }
+
+        return -1;
+    }
+
+    private static IReadOnlySet<string> ExtractIndexedPaths(string workspaceContext)
+    {
+        var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (string line in workspaceContext.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n'))
+        {
+            const string prefix = "File: ";
+            if (line.StartsWith(prefix, StringComparison.Ordinal))
+            {
+                paths.Add(NormalizeProjectPath(line[prefix.Length..]));
+            }
+        }
+
+        return paths;
+    }
+
+    private static IEnumerable<string> FindRelevantInstructionFiles(
+        IReadOnlyList<AgentTask> tasks,
+        IReadOnlySet<string> indexedPaths)
+    {
+        var candidates = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (string path in indexedPaths.Where(IsGlobalInstructionPath))
+        {
+            candidates.Add(path);
+        }
+
+        foreach (string targetPath in ExtractImplementationTargetPaths(tasks))
+        {
+            foreach (string directory in EnumerateAncestorDirectories(targetPath))
+            {
+                foreach (string fileName in InstructionFileNames)
+                {
+                    string candidate = string.IsNullOrEmpty(directory) ? fileName : $"{directory}/{fileName}";
+                    if (indexedPaths.Contains(candidate))
+                    {
+                        candidates.Add(candidate);
+                    }
+                }
+            }
+        }
+
+        return candidates;
+    }
+
+    private static IEnumerable<string> ExtractImplementationTargetPaths(IEnumerable<AgentTask> tasks)
+    {
+        foreach (AgentTask task in tasks)
+        {
+            string action = StringHelper.NormalizeAction(task.Action);
+            if (action == "create-file")
+            {
+                string path = NormalizeProjectPath(task.Argument);
+                if (LooksLikeProjectPath(path))
+                {
+                    yield return path;
+                }
+            }
+            else if (action == "refactor-prompt" &&
+                     TryExtractTargetFile(task.Argument, out string? targetFilePath) &&
+                     targetFilePath is not null)
+            {
+                yield return NormalizeProjectPath(targetFilePath);
+            }
+        }
+    }
+
+    private static IEnumerable<string> EnumerateAncestorDirectories(string path)
+    {
+        string? directory = Path.GetDirectoryName(NormalizeProjectPath(path))?.Replace('\\', '/');
+        while (directory is not null)
+        {
+            yield return directory == "." ? string.Empty : directory;
+            if (string.IsNullOrEmpty(directory))
+            {
+                yield break;
+            }
+
+            directory = Path.GetDirectoryName(directory)?.Replace('\\', '/');
+        }
+    }
+
+    private static bool IsGlobalInstructionPath(string path) =>
+        string.Equals(path, "AGENTS.md", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(path, "agents.md", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(path, ".github/copilot-instructions.md", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(path, ".github/instructions.md", StringComparison.OrdinalIgnoreCase) ||
+        path.StartsWith(".github/features/", StringComparison.OrdinalIgnoreCase) && path.EndsWith(".md", StringComparison.OrdinalIgnoreCase);
+
+    private static readonly string[] InstructionFileNames =
+    [
+        "AGENTS.md",
+        "agents.md",
+        "FEATURE.md",
+        "README.md",
+        "CONTRIBUTING.md",
+        "copilot-instructions.md",
+        "instructions.md"
+    ];
+
+    private static bool TryExtractTargetFile(string argument, out string? targetFilePath)
+    {
+        targetFilePath = null;
+        const string targetPrefix = "Target file:";
+        string normalized = argument.Replace("\r\n", "\n", StringComparison.Ordinal);
+        int targetIndex = normalized.IndexOf(targetPrefix, StringComparison.OrdinalIgnoreCase);
+        if (targetIndex < 0)
+        {
+            return false;
+        }
+
+        int pathStart = targetIndex + targetPrefix.Length;
+        int pathEnd = normalized.IndexOf('\n', pathStart);
+        string path = (pathEnd < 0 ? normalized[pathStart..] : normalized[pathStart..pathEnd]).Trim();
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return false;
+        }
+
+        targetFilePath = path;
+        return true;
+    }
+
+    private static bool LooksLikeProjectPath(string value)
+    {
+        string path = NormalizeProjectPath(value);
+        return path.Contains('/', StringComparison.Ordinal) || Path.HasExtension(path);
+    }
+
+    private static string NormalizeProjectPath(string path)
+    {
+        string normalized = path.Trim().Replace('\\', '/');
+        if (Path.IsPathRooted(normalized))
+        {
+            normalized = Path.GetRelativePath(Environment.CurrentDirectory, normalized).Replace('\\', '/');
+        }
+
+        return normalized.TrimStart('/');
+    }
+
+    private static List<AgentTask> RenumberTasks(IEnumerable<AgentTask> tasks) =>
+        tasks.Select((task, index) => task with { Step = index + 1 }).ToList();
     
     private static void ValidateTasks(IEnumerable<AgentTask> tasks, IReadOnlyCollection<string> supportedActions)
     {
