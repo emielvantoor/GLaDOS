@@ -1,5 +1,6 @@
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
+using Potato;
 using Potato.Session;
 using Potato.Session.Tasks;
 
@@ -15,8 +16,12 @@ class Program
 
         var services = new ServiceCollection();
 
+        services.AddSingleton(options);
+        services.AddSingleton<CurrentChatClientState>();
         services.AddSingleton<ExecutionService>();
         services.AddSingleton<PlanningService>();
+        services.AddSingleton<AgentTools>();
+        services.AddSingleton<ExecutionMemory>();
 
         services.AddSingleton<IAgentTask, CodeReviewTask>();
         services.AddSingleton<IAgentTask, CreateNewFileTask>();
@@ -33,7 +38,7 @@ class Program
         appSettingsStore.SetSelectedModel(model);
 
         IChatClient openAiClient = clientFactory.CreateOpenAiClient(gladosEndpoint, model);
-        IChatClient client = clientFactory.CreateFunctionClient(openAiClient);
+        provider.GetRequiredService<CurrentChatClientState>().SetOpenAiClient(openAiClient);
 
         PotatoConsole.WriteStartupBanner(gladosEndpoint, model);
 
@@ -41,11 +46,13 @@ class Program
         var session = new PotatoSession(
             gladosEndpoint,
             openAiClient,
-            client,
             clientFactory,
             modelSelector,
             options,
             appSettingsStore,
+            provider.GetRequiredService<AgentTools>(),
+            provider.GetRequiredService<ExecutionMemory>(),
+            provider.GetRequiredService<CurrentChatClientState>(),
             provider.GetRequiredService<PlanningService>(),
             provider.GetRequiredService<ExecutionService>()
         );

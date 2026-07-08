@@ -13,11 +13,12 @@ internal sealed class PotatoSession
     private readonly Uri gladosEndpoint;
     private readonly GladosChatClientFactory clientFactory;
     private readonly ModelSelector modelSelector;
-    private readonly ExecutionMemory executionMemory = new();
+    private readonly ExecutionMemory executionMemory;
     private readonly AgentTools agentTools;
     private readonly FileMentionExpander fileMentionExpander = new();
     private readonly PotatoRuntimeOptions options;
     private readonly PotatoAppSettingsStore appSettingsStore;
+    private readonly CurrentChatClientState chatClientState;
     private readonly PlanningService _planningService;
     private readonly ExecutionService _executionService;
     private readonly List<string> inputHistory = [];
@@ -26,7 +27,6 @@ internal sealed class PotatoSession
     private readonly object taskCancellationLock = new();
 
     private IChatClient currentOpenAiClient;
-    private IChatClient currentClient;
     private int nextSessionNumber = 1;
     private int currentSessionNumber;
     private string? currentSessionSubject;
@@ -36,11 +36,13 @@ internal sealed class PotatoSession
     public PotatoSession(
         Uri gladosEndpoint,
         IChatClient openAiClient,
-        IChatClient client,
         GladosChatClientFactory clientFactory,
         ModelSelector modelSelector,
         PotatoRuntimeOptions options,
         PotatoAppSettingsStore appSettingsStore,
+        AgentTools agentTools,
+        ExecutionMemory executionMemory,
+        CurrentChatClientState chatClientState,
         PlanningService planningService,
         ExecutionService executionService)
     {
@@ -49,11 +51,12 @@ internal sealed class PotatoSession
         this.modelSelector = modelSelector;
         this.options = options;
         this.appSettingsStore = appSettingsStore;
+        this.agentTools = agentTools;
+        this.executionMemory = executionMemory;
+        this.chatClientState = chatClientState;
         _planningService = planningService;
         _executionService = executionService;
         currentOpenAiClient = openAiClient;
-        currentClient = client;
-        agentTools = new AgentTools(executionMemory, () => currentOpenAiClient, options);
     }
 
     public async Task RunAsync()
@@ -72,7 +75,7 @@ internal sealed class PotatoSession
             appSettingsStore.SetSelectedModel,
             HandleTranscriptCommand,
             WriteSessions,
-            () => currentClient,
+            () => currentOpenAiClient,
             SwitchModel);
 
         try
@@ -315,10 +318,10 @@ internal sealed class PotatoSession
         }
     }
 
-    private void SwitchModel(string selectedModel, IChatClient selectedOpenAiClient, IChatClient selectedClient)
+    private void SwitchModel(IChatClient selectedOpenAiClient)
     {
         currentOpenAiClient = selectedOpenAiClient;
-        currentClient = selectedClient;
+        chatClientState.SetOpenAiClient(selectedOpenAiClient);
     }
 
     private void EnsureCurrentSession(string firstUserInput)

@@ -5,7 +5,7 @@ using Potato.Session.Tasks;
 
 namespace Potato.Session;
 
-public class ExecutionService(ExecutionMemory executionMemory, ICollection<IAgentTask> agentTasks)
+public class ExecutionService(ExecutionMemory executionMemory, IEnumerable<IAgentTask> agentTasks)
 {
     public async Task<ExecutionResult> ExecutePlanAsync(
         string goal,
