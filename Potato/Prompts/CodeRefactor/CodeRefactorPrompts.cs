@@ -18,6 +18,8 @@ internal static partial class PromptLibrary
         The REPLACE block must contain the complete replacement text.
         Only edit the Target file content provided below.
         Files in Prior observations are reference context only; do not patch them and do not import from them unless the instructions explicitly require that dependency.
+        Do not introduce references to new classes, methods, namespaces, or files unless Prior observations show they already exist or were created earlier in this execution.
+        If the requested edit requires missing supporting files or classes, return empty SEARCH and REPLACE blocks instead of producing uncompilable code.
         If no safe exact patch can be made, return empty SEARCH and REPLACE blocks.
 
         Goal:
