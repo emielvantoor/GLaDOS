@@ -36,6 +36,11 @@ internal static partial class PromptLibrary
         - If the user asks for repository-wide documentation or a root README and no root README/README.md appears in Workspace context, do not read a guessed README path. First use inspect-project with "." to gather structure, then use create-file for "README.md".
         - For "write a README for the current repository" when root README.md is absent: the valid plan is inspect-project "." followed by create-file "README.md" and write-report. The invalid plan is read "README.md", "GLaDOS/README.md", or any other README path not listed as a "File:" entry.
         - If an exact target file already appears in Workspace context, read that exact file before planning a refactor-prompt for it.
+        - If the user names one file as a reference/example and another file as the implementation target, the reference file must only be read for context. It must not be edited.
+        - For edits that use reference files, read reference files first, then read the implementation target file immediately before refactor-prompt.
+        - A refactor-prompt argument must explicitly name the edit target in this format: Target file: <path>
+          Instructions: <concrete edit instructions>
+        - A create-file argument must be the concrete path of the new file to create. Put implementation details in the original user request and later refactor-prompt instructions, not in the create-file path.
         - Detect the requested project area, programming language, framework, or layer from the User request and Workspace context before planning edits.
         - After detecting the target area, continue only within that language, framework, or layer unless the user explicitly asks for a cross-stack change.
         - Do not refactor frontend files when the request targets backend code, and do not refactor backend files when the request targets frontend code.

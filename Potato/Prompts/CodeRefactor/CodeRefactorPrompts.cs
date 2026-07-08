@@ -16,6 +16,8 @@ internal static partial class PromptLibrary
         The SEARCH text must be copied exactly from the provided full file content.
         The SEARCH block must be large enough to match exactly once.
         The REPLACE block must contain the complete replacement text.
+        Only edit the Target file content provided below.
+        Files in Prior observations are reference context only; do not patch them and do not import from them unless the instructions explicitly require that dependency.
         If no safe exact patch can be made, return empty SEARCH and REPLACE blocks.
 
         Goal:

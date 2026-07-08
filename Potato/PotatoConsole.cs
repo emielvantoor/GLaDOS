@@ -344,7 +344,8 @@ internal static class PotatoConsole
         Console.WriteLine("  Up/Down         Cycle through commands entered in this session");
         Console.WriteLine("  exit, quit      Close Potato Code");
         Console.WriteLine("  y, yes, ok      Approve the current specification");
-        Console.WriteLine("  execute         Approve risky or multi-step execution");
+        Console.WriteLine("  execute         Approve a reviewed plan for execution");
+        Console.WriteLine("  abort           Cancel a reviewed plan before execution");
         Console.ResetColor();
     }
 

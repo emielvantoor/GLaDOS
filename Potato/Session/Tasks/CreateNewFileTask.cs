@@ -14,6 +14,7 @@ public class CreateNewFileTask(AgentTools agentTools): AgentTaskBase, IAgentTask
     public override IReadOnlyList<string> PlanningGuidance =>
     [
         "Use create-file only when the user asks to create a new file or to write documentation for a missing target file.",
+        "For create-file, the Argument must be the concrete file path to create, not a description of the implementation.",
         "For repository-level README requests where README.md is absent from Workspace context, use create-file with Argument \"README.md\" after inspect-project."
     ];
 
@@ -26,7 +27,20 @@ public class CreateNewFileTask(AgentTools agentTools): AgentTaskBase, IAgentTask
         CancellationToken cancellationToken)
     {
         CreatedFile createdFile = await GenerateNewFileAsync(goal, task, context, observations, chatClient, cancellationToken);
+        if (LooksLikeFilePath(task.Argument))
+        {
+            createdFile = createdFile with { FilePath = task.Argument };
+        }
+
         return await agentTools.CreateFileAsync(createdFile.FilePath, createdFile.Content);
+    }
+
+    private static bool LooksLikeFilePath(string value)
+    {
+        string trimmed = value.Trim();
+        return trimmed.Contains('/', StringComparison.Ordinal) ||
+               trimmed.Contains('\\', StringComparison.Ordinal) ||
+               Path.HasExtension(trimmed);
     }
 
     private async Task<CreatedFile> GenerateNewFileAsync(
