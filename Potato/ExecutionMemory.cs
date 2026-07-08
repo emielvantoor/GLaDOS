@@ -1,6 +1,6 @@
 using Microsoft.Extensions.AI;
 
-internal sealed class ExecutionMemory
+public sealed class ExecutionMemory
 {
     private const int SummaryThresholdCharacters = 3_000;
     private const int FullContentLimitCharacters = 12_000;

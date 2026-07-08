@@ -1,14 +1,14 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
-internal sealed class PotatoAppSettings
+public sealed class PotatoAppSettings
 {
     public bool UseCompiledDefaultPrompts { get; init; }
 
     public string? SelectedModel { get; init; }
 }
 
-internal sealed class PotatoAppSettingsStore
+public sealed class PotatoAppSettingsStore
 {
     private const string UseCompiledDefaultPromptsProperty = "UseCompiledDefaultPrompts";
     private const string SelectedModelProperty = "SelectedModel";

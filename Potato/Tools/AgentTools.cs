@@ -5,7 +5,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.AI;
 
-internal class AgentTools(ExecutionMemory memory, Func<IChatClient> getSideQuestionClient, PotatoRuntimeOptions options)
+public class AgentTools(ExecutionMemory memory, Func<IChatClient> getSideQuestionClient, PotatoRuntimeOptions options)
 {
     private const int DefaultCommandTimeoutSeconds = 60;
     private const int MaxCommandTimeoutSeconds = 600;

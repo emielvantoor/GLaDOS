@@ -1,4 +1,4 @@
-internal sealed class PotatoRuntimeOptions
+public sealed class PotatoRuntimeOptions
 {
     public string PromptDirectory { get; init; } = Path.Combine(AppContext.BaseDirectory, "prompts");
 
