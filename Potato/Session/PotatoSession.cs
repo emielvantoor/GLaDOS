@@ -136,9 +136,15 @@ internal sealed class PotatoSession
 
         try
         {
-            List<AgentTask> plan = await _planningService.PlanAsync(expandedGoal, currentOpenAiClient, cancellationToken);
-            chatHistory.Add(new ChatMessage(ChatRole.Assistant, FormatTaskList(plan)));
-            PotatoConsole.WriteAgentResponse(FormatTaskList(plan));
+            List<AgentTask>? plan = await ReviewPlanAsync(expandedGoal, currentOpenAiClient, cancellationToken);
+            if (plan is null)
+            {
+                string abortedMessage = "Plan was aborted. No execution was started.";
+                chatHistory.Add(new ChatMessage(ChatRole.Assistant, abortedMessage));
+                PotatoConsole.WriteStatus(abortedMessage);
+                ResetConversationState();
+                return;
+            }
 
             ExecutionResult result = await _executionService.ExecutePlanAsync(expandedGoal, plan, currentOpenAiClient, cancellationToken);
             string finalMessage = result.Success
@@ -164,6 +170,65 @@ internal sealed class PotatoSession
             EndTaskCancellation(taskCancellationSource);
         }
     }
+
+    private async Task<List<AgentTask>?> ReviewPlanAsync(
+        string expandedGoal,
+        IChatClient chatClient,
+        CancellationToken cancellationToken)
+    {
+        string planningGoal = expandedGoal;
+
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            List<AgentTask> plan = await _planningService.PlanAsync(planningGoal, chatClient, cancellationToken);
+            string formattedPlan = FormatTaskList(plan);
+            chatHistory.Add(new ChatMessage(ChatRole.Assistant, formattedPlan));
+            PotatoConsole.WriteAgentResponse(formattedPlan);
+            PotatoConsole.WriteStatus("Review plan: type execute/yes to run, type changes to re-plan, or abort to cancel.");
+
+            string? reviewInput = PotatoConsole.ReadPromptInput(inputHistory, "execute, changes, or abort");
+            if (string.IsNullOrWhiteSpace(reviewInput))
+            {
+                continue;
+            }
+
+            AddInputHistory(reviewInput);
+            string trimmed = reviewInput.Trim();
+            if (IsAbortInput(trimmed))
+            {
+                return null;
+            }
+
+            if (ApprovalPolicy.IsUserExecutionApproval(trimmed))
+            {
+                return plan;
+            }
+
+            planningGoal = BuildReplanGoal(expandedGoal, formattedPlan, trimmed);
+            chatHistory.Add(new ChatMessage(ChatRole.User, $"Plan correction: {trimmed}"));
+        }
+    }
+
+    private static bool IsAbortInput(string input)
+    {
+        string normalized = input.Trim().Trim('.', '!', '?').ToLowerInvariant();
+        return normalized is "abort" or "cancel" or "stop" or "no" or "n";
+    }
+
+    private static string BuildReplanGoal(string originalGoal, string previousPlan, string correction) =>
+        $"""
+        Original request:
+        {originalGoal}
+
+        Previous plan that the user rejected:
+        {previousPlan}
+
+        User correction for the next plan:
+        {correction}
+
+        Create a new deterministic plan that follows the original request and the user correction. Do not repeat rejected target files or steps unless the correction explicitly asks for them.
+        """;
 
     // private static string SelectTargetCodeBlock(string fileContent, string patchArgument)
     // {
