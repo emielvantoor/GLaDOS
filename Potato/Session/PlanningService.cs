@@ -10,11 +10,11 @@ public class PlanningService(AgentTools agentTools)
 {
     public async Task<List<AgentTask>> PlanAsync(string goal, IChatClient chatClient, CancellationToken cancellationToken)
     {
-        string ProjectMap = await BuildProjectMapAsync(Environment.CurrentDirectory, chatClient, cancellationToken);
+        string workspaceContext = await BuildProjectMapAsync(Environment.CurrentDirectory, chatClient, cancellationToken);
         var messages = new List<ChatMessage>
         {
             new(ChatRole.System, "You are Potato's deterministic planner. Return valid JSON only."),
-            new(ChatRole.User, PotatoPrompts.GetPlannerPrompt(goal, ProjectMap))
+            new(ChatRole.User, PromptLibrary.BuildPlannerUserPrompt(goal, workspaceContext))
         };
 
         ChatResponse response;
@@ -182,7 +182,7 @@ public class PlanningService(AgentTools agentTools)
         var messages = new List<ChatMessage>
         {
             new(ChatRole.System, "You summarize C# files for a repository map. Return concise bullets only."),
-            new(ChatRole.User, PotatoPrompts.GetProjectMapPrompt(filePath, fileContent))
+            new(ChatRole.User, PromptLibrary.BuildProjectMapUserPrompt(filePath, fileContent))
         };
 
         ChatResponse response = await chatClient.GetResponseAsync(
