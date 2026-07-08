@@ -44,6 +44,9 @@ internal static partial class PromptLibrary
         - A refactor-prompt argument must explicitly name the edit target in this format: Target file: <path>
           Instructions: <concrete edit instructions>
         - A create-file argument must be the concrete path of the new file to create. Put implementation details in the original user request and later refactor-prompt instructions, not in the create-file path.
+        - Do not implement a multi-component feature only by refactoring an entry point such as Program.cs unless the instruction file explicitly requests a single-file implementation.
+        - When the requested feature or instruction file calls for components such as parsers, executors, generators, services, clients, options, handlers, or validators, plan separate create-file steps for missing component files before wiring them from the entry point.
+        - A refactor-prompt must not introduce references to classes, methods, namespaces, or files that are neither present in Workspace context nor created by earlier create-file steps in the same plan.
         - Detect the requested project area, programming language, framework, or layer from the User request and Workspace context before planning edits.
         - After detecting the target area, continue only within that language, framework, or layer unless the user explicitly asks for a cross-stack change.
         - Do not refactor frontend files when the request targets backend code, and do not refactor backend files when the request targets frontend code.
