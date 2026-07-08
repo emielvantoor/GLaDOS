@@ -1,11 +1,11 @@
 using Microsoft.Extensions.AI;
 
-internal sealed class ReActMemory
+internal sealed class ExecutionMemory
 {
     private const int SummaryThresholdCharacters = 3_000;
     private const int FullContentLimitCharacters = 12_000;
 
-    private readonly List<ReActMemoryItem> items = [];
+    private readonly List<ExecutionMemoryItem> items = [];
 
     public int Count => items.Count;
 
@@ -16,7 +16,7 @@ internal sealed class ReActMemory
             content = "(empty)";
         }
 
-        var item = new ReActMemoryItem(
+        var item = new ExecutionMemoryItem(
             items.Count,
             source,
             BuildDescriptor(source, content),
@@ -44,35 +44,17 @@ internal sealed class ReActMemory
             return "Error: index must be 'list', 'latest', or a numeric collected context index.";
         }
 
-        ReActMemoryItem? item = items.FirstOrDefault(candidate => candidate.Index == itemIndex);
+        ExecutionMemoryItem? item = items.FirstOrDefault(candidate => candidate.Index == itemIndex);
         return item is null
             ? $"Error: No collected context item exists at index {itemIndex}."
             : FormatItem(item, full);
-    }
-
-    public string GetRange(int startInclusive, int endExclusive, bool full = false)
-    {
-        if (startInclusive < 0 ||
-            endExclusive < startInclusive ||
-            startInclusive >= items.Count)
-        {
-            return "No collected context is available for this range.";
-        }
-
-        int boundedEnd = Math.Min(endExclusive, items.Count);
-        return string.Join(
-            $"{Environment.NewLine}{Environment.NewLine}",
-            items
-                .Skip(startInclusive)
-                .Take(boundedEnd - startInclusive)
-                .Select(item => FormatItem(item, full)));
     }
 
     public async Task SummarizeLargeUnsummarizedItemsAsync(
         IChatClient summarizerClient,
         CancellationToken cancellationToken = default)
     {
-        foreach (ReActMemoryItem item in items.Where(item =>
+        foreach (ExecutionMemoryItem item in items.Where(item =>
                      item.Summary is null &&
                      item.Content.Length > SummaryThresholdCharacters))
         {
@@ -100,7 +82,7 @@ internal sealed class ReActMemory
             }));
     }
 
-    private static string FormatItem(ReActMemoryItem item, bool full)
+    private static string FormatItem(ExecutionMemoryItem item, bool full)
     {
         string content = full
             ? Trim(item.Content, FullContentLimitCharacters)
@@ -124,11 +106,6 @@ internal sealed class ReActMemory
             return $"shell result: {trimmedSource["ExecuteShellCommandAsync ".Length..]}";
         }
 
-        if (trimmedSource.Equals("Assistant ReAct response", StringComparison.Ordinal))
-        {
-            return $"assistant response: {Trim(meaningfulLine, 100)}";
-        }
-
         if (trimmedSource.Equals("GetCurrentTime", StringComparison.Ordinal))
         {
             return "current time result";
@@ -144,7 +121,7 @@ internal sealed class ReActMemory
 
     private static async Task<string> SummarizeAsync(
         IChatClient summarizerClient,
-        ReActMemoryItem item,
+        ExecutionMemoryItem item,
         CancellationToken cancellationToken)
     {
         try
@@ -154,7 +131,7 @@ internal sealed class ReActMemory
                 new(ChatRole.System, PromptLibrary.SideQuestionSystemPrompt),
                 new(
                     ChatRole.User,
-                    "Summarize this collected ReAct context for later retrieval. " +
+                    "Summarize this collected execution context for later retrieval. " +
                     "Keep concrete file names, commands, errors, dependencies, and conclusions. " +
                     "Use concise bullets.\n\n" +
                     $"Source: {item.Source}\n\n" +
@@ -206,7 +183,7 @@ internal sealed class ReActMemory
             : normalized[..maxCharacters] + "\n...(truncated)";
     }
 
-    private sealed class ReActMemoryItem(
+    private sealed class ExecutionMemoryItem(
         int index,
         string source,
         string descriptor,

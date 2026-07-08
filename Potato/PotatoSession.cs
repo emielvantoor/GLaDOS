@@ -1,37 +1,32 @@
 using System.Text;
-using System.Text.Json.Nodes;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.AI;
 
-internal sealed partial class PotatoSession
+internal sealed class PotatoSession
 {
-    private const int MaxReActIterations = 40;
-    private const int MaxToolCallsPerIteration = 1;
-    private const int MaxConsecutiveInvalidReActResponses = 2;
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        PropertyNameCaseInsensitive = true,
+        ReadCommentHandling = JsonCommentHandling.Skip,
+        AllowTrailingCommas = true
+    };
 
     private readonly Uri gladosEndpoint;
     private readonly GladosChatClientFactory clientFactory;
     private readonly ModelSelector modelSelector;
-    private readonly ReActMemory reActMemory = new();
-    private readonly ReActSubtaskTracker reActSubtaskTracker = new();
+    private readonly ExecutionMemory executionMemory = new();
     private readonly AgentTools agentTools;
     private readonly FileMentionExpander fileMentionExpander = new();
     private readonly PotatoRuntimeOptions options;
     private readonly PotatoAppSettingsStore appSettingsStore;
     private readonly List<string> inputHistory = [];
     private readonly List<SessionTranscript> archivedSessions = [];
-    private readonly List<ChatMessage> chatHistory =
-    [
-        new(ChatRole.System, PromptLibrary.SystemPrompt)
-    ];
-
+    private readonly List<ChatMessage> chatHistory = [];
     private readonly object taskCancellationLock = new();
-    private AgentState currentState = AgentState.Specifying;
+
     private IChatClient currentOpenAiClient;
     private IChatClient currentClient;
-    private string? latestSpecification;
-    private string? latestApproach;
-    private string? latestUserRequest;
     private int nextSessionNumber = 1;
     private int currentSessionNumber;
     private string? currentSessionSubject;
@@ -54,12 +49,11 @@ internal sealed partial class PotatoSession
         this.appSettingsStore = appSettingsStore;
         currentOpenAiClient = openAiClient;
         currentClient = client;
-        agentTools = new AgentTools(reActMemory, () => currentOpenAiClient, options);
+        agentTools = new AgentTools(executionMemory, () => currentOpenAiClient, options);
     }
 
     public async Task RunAsync()
     {
-        ChatOptions toolOptions = CreateToolOptions();
         await WriteUntrackedGreetingAsync();
         ConsoleCancelEventHandler cancelHandler = HandleConsoleCancelKeyPress;
         Console.CancelKeyPress += cancelHandler;
@@ -81,7 +75,7 @@ internal sealed partial class PotatoSession
         {
             while (true)
             {
-                string? userInput = PotatoConsole.ReadPromptInput(inputHistory, GetPromptPlaceholder());
+                string? userInput = PotatoConsole.ReadPromptInput(inputHistory, "Type a goal or @path/to/file");
 
                 if (string.IsNullOrWhiteSpace(userInput))
                 {
@@ -104,11 +98,10 @@ internal sealed partial class PotatoSession
 
                 if (await slashCommandHandler.TryHandleAsync(userInput))
                 {
-                    toolOptions = CreateToolOptions();
                     continue;
                 }
 
-                await HandleUserInputAsync(userInput, toolOptions);
+                await HandleUserGoalAsync(userInput);
             }
         }
         finally
@@ -125,114 +118,28 @@ internal sealed partial class PotatoSession
         }
     }
 
-    private string GetPromptPlaceholder()
-    {
-        if (currentState == AgentState.Specifying && latestSpecification is not null)
-        {
-            return "yes/ok to approve, or type requested changes";
-        }
-
-        if (currentState == AgentState.Approaching && latestApproach is not null)
-        {
-            return "execute/yes to start, or type requested changes";
-        }
-
-        return "Type your message or @path/to/file";
-    }
-
-    private async Task HandleUserInputAsync(string userInput, ChatOptions toolOptions)
+    private async Task HandleUserGoalAsync(string userInput)
     {
         using CancellationTokenSource taskCancellationSource = BeginTaskCancellation();
         CancellationToken cancellationToken = taskCancellationSource.Token;
-        string messageForModel = fileMentionExpander.Expand(userInput);
+        string expandedGoal = fileMentionExpander.Expand(userInput);
         EnsureCurrentSession(userInput);
-
-        if (currentState == AgentState.Specifying)
-        {
-            if (latestSpecification is not null && ApprovalPolicy.IsUserApproval(userInput))
-            {
-                currentState = AgentState.Approaching;
-                chatHistory.Add(new ChatMessage(ChatRole.User, PromptLibrary.ApprovalToApproachMessage(latestSpecification)));
-            }
-            else
-            {
-                latestUserRequest = messageForModel;
-                chatHistory.Add(new ChatMessage(ChatRole.System, PromptLibrary.SpecificationGuardMessage));
-                chatHistory.Add(new ChatMessage(ChatRole.User, messageForModel));
-            }
-        }
-        else if (currentState == AgentState.Approaching)
-        {
-            if (latestApproach is not null && ApprovalPolicy.IsUserExecutionApproval(userInput))
-            {
-                currentState = AgentState.Confirmed;
-
-                chatHistory.Add(new ChatMessage(ChatRole.System, PromptLibrary.BuildToolInstructions()));
-                chatHistory.Add(new ChatMessage(
-                    ChatRole.User,
-                    PromptLibrary.ExecuteApprovedApproachMessage(
-                        latestUserRequest,
-                        latestSpecification,
-                        latestApproach)));
-            }
-            else
-            {
-                chatHistory.Add(new ChatMessage(ChatRole.User, messageForModel));
-            }
-        }
-        else
-        {
-            chatHistory.Add(new ChatMessage(ChatRole.User, messageForModel));
-        }
+        chatHistory.Add(new ChatMessage(ChatRole.User, expandedGoal));
 
         try
         {
-            PotatoConsole.WriteStatus(currentState switch
-            {
-                AgentState.Specifying => "Generating specification...",
-                AgentState.Approaching => "Generating execution steps...",
-                _ => "Agent is executing ReAct loop..."
-            });
+            List<AgentTask> tasks = await PlanAsync(expandedGoal, cancellationToken);
+            chatHistory.Add(new ChatMessage(ChatRole.Assistant, FormatTaskList(tasks)));
+            PotatoConsole.WriteAgentResponse(FormatTaskList(tasks));
 
-            ChatOptions currentOptions = CreateCurrentOptions(toolOptions, includeTools: currentState == AgentState.Confirmed);
+            ExecutionResult result = await ExecutePlanAsync(expandedGoal, tasks, cancellationToken);
+            string finalMessage = result.Success
+                ? BuildSuccessSummary(result)
+                : BuildFailureSummary(result);
 
-            if (currentState == AgentState.Confirmed)
-            {
-                await RunReActLoopAsync(currentOptions, cancellationToken);
-                ResetConversationState();
-                return;
-            }
-
-            ChatResponse response;
-            using (PotatoConsole.StartProgress("Waiting for response..."))
-            {
-                response = await currentClient.GetResponseAsync(chatHistory, currentOptions, cancellationToken);
-            }
-
-            chatHistory.Add(new ChatMessage(ChatRole.Assistant, response.Text));
-            StoreLatestResponse(response.Text);
-            PotatoConsole.WriteAgentResponse(response.Text);
-
-            if (currentState == AgentState.Approaching &&
-                ApprovalPolicy.ShouldAutoExecuteAfterApproach(latestUserRequest, latestSpecification, latestApproach))
-            {
-                currentState = AgentState.Confirmed;
-                chatHistory.Add(new ChatMessage(ChatRole.System, PromptLibrary.BuildToolInstructions()));
-                chatHistory.Add(new ChatMessage(
-                    ChatRole.User,
-                    PromptLibrary.ExecuteApprovedApproachMessage(
-                        latestUserRequest,
-                        latestSpecification,
-                        latestApproach)));
-
-                PotatoConsole.WriteStatus("Proceeding to ReAct execution...");
-                await RunReActLoopAsync(CreateCurrentOptions(toolOptions, includeTools: true), cancellationToken);
-                ResetConversationState();
-            }
-            else if (currentState == AgentState.Approaching)
-            {
-                PotatoConsole.WriteStatus("Waiting for execution approval. Type 'execute' or 'yes' to start.");
-            }
+            chatHistory.Add(new ChatMessage(ChatRole.Assistant, finalMessage));
+            PotatoConsole.WriteAgentResponse(finalMessage);
+            ResetConversationState();
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -242,6 +149,7 @@ internal sealed partial class PotatoSession
         catch (Exception ex)
         {
             PotatoConsole.WriteError($"Error: {ex.Message}");
+            ResetConversationState();
         }
         finally
         {
@@ -249,1265 +157,459 @@ internal sealed partial class PotatoSession
         }
     }
 
-    private ChatOptions CreateToolOptions(bool includeEditTools = true)
+    private async Task<List<AgentTask>> PlanAsync(string goal, CancellationToken cancellationToken)
     {
-        List<AITool> tools =
-        [
-            AIFunctionFactory.Create(agentTools.GetCurrentTime),
-            AIFunctionFactory.Create(agentTools.ReadFileContent),
-            AIFunctionFactory.Create(agentTools.ListFiles),
-            AIFunctionFactory.Create(agentTools.ListProjectFiles),
-            AIFunctionFactory.Create(agentTools.SearchFiles),
-            AIFunctionFactory.Create(agentTools.SearchFileContents),
-            AIFunctionFactory.Create(agentTools.SummarizeFilePurpose),
-            AIFunctionFactory.Create(agentTools.GetCollectedContext),
-            AIFunctionFactory.Create(agentTools.ExecuteShellCommandAsync)
-        ];
-
-        if (includeEditTools)
+        var messages = new List<ChatMessage>
         {
-            tools.Add(AIFunctionFactory.Create(agentTools.ApplySearchReplaceAsync));
-            tools.Add(AIFunctionFactory.Create(agentTools.CreateFileAsync));
-            tools.Add(AIFunctionFactory.Create(agentTools.ApplyDiffPatchAsync));
+            new(ChatRole.System, PromptLibrary.PlannerSystemPrompt),
+            new(ChatRole.User, $"Working directory: {Environment.CurrentDirectory}\n\nUser goal:\n{goal}")
+        };
+
+        ChatResponse response;
+        using (PotatoConsole.StartProgress("Planning deterministic task list..."))
+        {
+            response = await currentOpenAiClient.GetResponseAsync(messages, CreateChatOptions(0.0), cancellationToken);
         }
 
-        return new ChatOptions
+        string json = ExtractJsonArray(response.Text);
+        List<AgentTask>? tasks = JsonSerializer.Deserialize<List<AgentTask>>(json, JsonOptions);
+        if (tasks is null || tasks.Count == 0)
         {
-            Tools = tools
-        };
+            throw new InvalidOperationException("Planner returned no tasks.");
+        }
+
+        ValidateTasks(tasks);
+        return tasks.OrderBy(task => task.Step).ToList();
     }
 
-    private static ChatOptions CreateCurrentOptions(ChatOptions toolOptions, bool includeTools)
+    private async Task<ExecutionResult> ExecutePlanAsync(
+        string goal,
+        IReadOnlyList<AgentTask> tasks,
+        CancellationToken cancellationToken)
     {
-        return new ChatOptions
-        {
-            Tools = includeTools ? toolOptions.Tools : null
-        };
-    }
+        var observations = new List<TaskObservation>();
+        var context = new ExecutorContext();
+        executionMemory.Clear();
 
-    private ChatOptions CreateCurrentReActOptions(ChatOptions toolOptions)
-    {
-        return reActSubtaskTracker.CurrentAllowsEditTools()
-            ? toolOptions
-            : CreateToolOptions(includeEditTools: false);
-    }
-
-    private async Task RunReActLoopAsync(ChatOptions toolOptions, CancellationToken cancellationToken)
-    {
-        reActSubtaskTracker.LoadFromApproach(latestApproach);
-        int successfulEditsBeforeExecution = agentTools.SuccessfulEditCount;
-        bool directCreateFileFallbackAttempted = false;
-        bool directReplaceFileFallbackAttempted = false;
-        int consecutiveInvalidReActResponses = 0;
-
-        for (int iteration = 1; iteration <= MaxReActIterations; iteration++)
+        foreach (AgentTask task in tasks)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            reActSubtaskTracker.MarkCurrentInProgress();
-            string currentSubtask = reActSubtaskTracker.CurrentDisplayName();
-            int toolCallsBefore = agentTools.ToolInvocationCount;
-            int memoryItemsBeforeToolCalls = reActMemory.Count;
-            PotatoConsole.WriteStatus($"ReAct iteration {iteration}/{MaxReActIterations} - subtask: {currentSubtask}");
+            PotatoConsole.WriteStatus($"Executing step {task.Step}: {task.Action} {task.Argument}");
 
-            ChatResponse response;
-            using (PotatoConsole.StartProgress($"ReAct iteration {iteration}/{MaxReActIterations} - {currentSubtask}..."))
+            try
             {
-                agentTools.ToolInvocationAllowed = reActSubtaskTracker.CurrentAllowsTool;
-                agentTools.ToolInvocationRejectionReason = reActSubtaskTracker.CurrentToolRejectionReason;
-                agentTools.BeginReActIteration(MaxToolCallsPerIteration);
-                try
+                string result = await ExecuteTaskAsync(goal, task, context, observations, cancellationToken);
+                observations.Add(new TaskObservation(task.Step, task.Action, task.Argument, result));
+
+                if (IsFailureResult(result))
                 {
-                    response = await currentClient.GetResponseAsync(
-                        chatHistory,
-                        CreateCurrentReActOptions(toolOptions),
-                        cancellationToken);
-                }
-                finally
-                {
-                    agentTools.EndReActIteration();
-                    agentTools.ToolInvocationAllowed = null;
-                    agentTools.ToolInvocationRejectionReason = null;
+                    return ExecutionResult.Failed(observations, $"Step {task.Step} failed: {FirstLine(result)}");
                 }
             }
-
-            string responseText = response.Text.Trim();
-            int memoryItemsAfterToolCalls = reActMemory.Count;
-
-            if (string.IsNullOrWhiteSpace(responseText))
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                responseText = "No assistant response was returned.";
+                observations.Add(new TaskObservation(task.Step, task.Action, task.Argument, $"Error: {ex.Message}"));
+                return ExecutionResult.Failed(observations, $"Step {task.Step} threw an exception: {ex.Message}");
             }
-
-            chatHistory.Add(new ChatMessage(ChatRole.Assistant, responseText));
-            reActMemory.Add("Assistant ReAct response", responseText);
-            reActSubtaskTracker.UpdateFromAssistantResponse(responseText);
-
-            if (IsFinalResponse(responseText))
-            {
-                if (RequiresSuccessfulEditBeforeFinal(successfulEditsBeforeExecution))
-                {
-                    chatHistory.Add(new ChatMessage(
-                        ChatRole.User,
-                        "You returned FINAL for a project change, but no edit tool has successfully changed a file in this execution. Read the relevant file if needed, then prefer ApplySearchReplaceAsync with exact SEARCH and REPLACE text. Use CreateFileAsync for new files, or ApplyDiffPatchAsync if neither direct edit tool is practical. Do not claim the file was modified until the latest observation confirms a successful edit."));
-                    continue;
-                }
-
-                reActSubtaskTracker.MarkAllDone();
-                PotatoConsole.WriteAgentResponse(RemoveFinalMarker(responseText));
-                return;
-            }
-
-            int toolCallsThisIteration = agentTools.ToolInvocationCount - toolCallsBefore;
-            using (PotatoConsole.StartProgress("Summarizing context..."))
-            {
-                await reActMemory.SummarizeLargeUnsummarizedItemsAsync(currentOpenAiClient, cancellationToken);
-            }
-            if (toolCallsThisIteration <= 0)
-            {
-                if (await TryExecuteTextualActionAsync(responseText, cancellationToken))
-                {
-                    consecutiveInvalidReActResponses = 0;
-                    continue;
-                }
-
-                if (IsReadyForNextSubstepResponse(responseText))
-                {
-                    consecutiveInvalidReActResponses = 0;
-                    chatHistory.Add(new ChatMessage(
-                        ChatRole.User,
-                        "Readiness acknowledged. Continue with the next substep from the approved execution steps. " +
-                        "Keep the entire approved task in scope, use the current step/substep state below, and make exactly one registered tool call unless the entire task is complete.\n\n" +
-                        "Entire approved task: " +
-                        (latestUserRequest ?? string.Empty) +
-                        "\n\nApproved execution steps:\n" +
-                        (latestApproach ?? "(No approved execution steps were captured.)") +
-                        "\n\n" +
-                        reActSubtaskTracker.BuildPromptContext()));
-                    continue;
-                }
-
-                if (IsDraftResultResponse(responseText))
-                {
-                    consecutiveInvalidReActResponses = 0;
-                    chatHistory.Add(new ChatMessage(
-                        ChatRole.User,
-                        "Draft result acknowledged. Continue with the next substep from the approved execution steps. " +
-                        "Keep the entire approved task in scope, use the current step/substep state below, and make exactly one valid response: one registered tool call for the current Action, READY_FOR_NEXT_SUBSTEP, DRAFT_RESULT only for an approved no-tool Action, or FINAL.\n\n" +
-                        "Entire approved task: " +
-                        (latestUserRequest ?? string.Empty) +
-                        "\n\nApproved execution steps:\n" +
-                        (latestApproach ?? "(No approved execution steps were captured.)") +
-                        "\n\n" +
-                        reActSubtaskTracker.BuildPromptContext()));
-                    continue;
-                }
-
-                if (await TryExecuteDeterministicFallbackAsync(
-                        iteration,
-                        directCreateFileFallbackAttempted,
-                        directReplaceFileFallbackAttempted,
-                        cancellationToken))
-                {
-                    consecutiveInvalidReActResponses = 0;
-                    if (TryParseDirectCreateFileRequest(latestUserRequest, out _, out _))
-                    {
-                        directCreateFileFallbackAttempted = true;
-                    }
-
-                    if (TryParseDirectReplaceFileContentRequest(latestUserRequest, out _, out _))
-                    {
-                        directReplaceFileFallbackAttempted = true;
-                    }
-
-                    continue;
-                }
-
-                consecutiveInvalidReActResponses++;
-                ReActFallbackResult recoveryResult =
-                    await TryExecuteGenericReActFallbackAsync(responseText, consecutiveInvalidReActResponses, cancellationToken);
-                if (recoveryResult != ReActFallbackResult.None)
-                {
-                    if (recoveryResult == ReActFallbackResult.ExecutedTool)
-                    {
-                        consecutiveInvalidReActResponses = 0;
-                    }
-
-                    continue;
-                }
-
-                if (LooksLikeUnavailableToolClaim(responseText) || LooksLikeShellEditFallbackClaim(responseText))
-                {
-                    if (consecutiveInvalidReActResponses >= MaxConsecutiveInvalidReActResponses)
-                    {
-                        chatHistory.Add(new ChatMessage(
-                            ChatRole.User,
-                            "The previous response repeated a false tool-unavailable or manual-edit claim. Continue with exactly one registered textual <tool_call> JSON. Do not include prose. The tool list in the system message is authoritative."));
-                    }
-                    else
-                    {
-                        chatHistory.Add(new ChatMessage(
-                            ChatRole.User,
-                            "Correction: ApplySearchReplaceAsync, CreateFileAsync, and ApplyDiffPatchAsync are available in the CLI. Lack of native model tool visibility is not proof that a CLI tool is unavailable; use textual <tool_call> JSON instead. If you still believe a listed tool is unavailable, name the exact tool and the concrete observation proving it, then continue with one registered textual tool call. Do not use ExecuteShellCommandAsync or manual editor instructions for source edits. The next response must be exactly one registered tool call, preferably ApplySearchReplaceAsync with exact SEARCH and REPLACE text copied from the latest file content, or CreateFileAsync for a new file. " +
-                            PromptLibrary.SearchReplaceToolCallExample));
-                    }
-
-                    continue;
-                }
-
-                if (TryReadUserIntervention(responseText, cancellationToken, out string userAnswer))
-                {
-                    chatHistory.Add(new ChatMessage(
-                        ChatRole.User,
-                        PromptLibrary.UserInterventionResponseMessage(userAnswer)));
-                    continue;
-                }
-
-                PotatoConsole.WriteStatus("Model did not call a tool or return FINAL; continuing execution loop...");
-
-                if (LooksLikeUnmarkedCompletion(responseText))
-                {
-                    chatHistory.Add(new ChatMessage(
-                        ChatRole.User,
-                        "You claimed the task is complete without using the required FINAL: marker and without a tool-backed observation. If the task is actually complete, respond exactly with FINAL: followed by the summary. Otherwise use one available tool for the next action."));
-                    continue;
-                }
-
-                chatHistory.Add(new ChatMessage(
-                    ChatRole.User,
-                    PromptLibrary.RepeatCurrentStepMessage(
-                        latestUserRequest ?? string.Empty,
-                        Environment.CurrentDirectory,
-                        GetLatestModelQuestion())));
-                continue;
-            }
-
-            if (toolCallsThisIteration > MaxToolCallsPerIteration)
-            {
-                consecutiveInvalidReActResponses = 0;
-                chatHistory.Add(new ChatMessage(
-                    ChatRole.User,
-                    $"You used {toolCallsThisIteration} tools in the previous iteration, which crossed the current step/substep result gate. Continue from the current planned step/substep only. Do not move to a later step until the current step's stated Result is satisfied and you have emitted READY_FOR_NEXT_SUBSTEP. Finish with FINAL: only if the entire approved task is complete and verified; otherwise continue with one targeted next action."));
-                continue;
-            }
-
-            string latestObservation = reActMemory.GetRange(memoryItemsBeforeToolCalls, memoryItemsAfterToolCalls, full: true);
-            if (LooksLikeUnavailableToolClaim(responseText))
-            {
-                latestObservation +=
-                    Environment.NewLine +
-                    Environment.NewLine +
-                    "Correction: The assistant text incorrectly claimed one or more tools are unavailable. Native tool calls just executed successfully in this environment. Lack of native model tool visibility is not proof that a CLI tool is unavailable; use textual <tool_call> JSON instead. If you still believe a listed tool is unavailable, name the exact tool and the concrete observation proving it, then continue with one registered textual tool call. For source edits prefer ApplySearchReplaceAsync with exact SEARCH and REPLACE text; for new files use CreateFileAsync. " +
-                    PromptLibrary.SearchReplaceToolCallExample;
-            }
-
-            consecutiveInvalidReActResponses = 0;
-            reActSubtaskTracker.UpdateFromObservation("native tool call", latestObservation);
-            chatHistory.Add(new ChatMessage(
-                ChatRole.User,
-                    PromptLibrary.NextStepAfterObservationMessage(
-                        latestUserRequest ?? string.Empty,
-                        latestApproach ?? string.Empty,
-                        Environment.CurrentDirectory,
-                        reActSubtaskTracker.BuildPromptContext(),
-                        "native tool call",
-                        latestObservation)));
         }
 
-        PotatoConsole.WriteError($"Stopped after {MaxReActIterations} ReAct iterations without a FINAL response.");
+        return ExecutionResult.Succeeded(observations);
     }
 
-    private bool RequiresSuccessfulEditBeforeFinal(int successfulEditsBeforeExecution) =>
-        ApprovalPolicy.IsProjectChangeRequest(latestUserRequest) &&
-        agentTools.SuccessfulEditCount <= successfulEditsBeforeExecution;
-
-    private static bool IsFinalResponse(string responseText) =>
-        FinalMarkerRegex().IsMatch(responseText);
-
-    private static bool IsReadyForNextSubstepResponse(string responseText) =>
-        responseText.TrimStart().StartsWith("READY_FOR_NEXT_SUBSTEP:", StringComparison.OrdinalIgnoreCase);
-
-    private static bool IsDraftResultResponse(string responseText) =>
-        responseText.TrimStart().StartsWith("DRAFT_RESULT:", StringComparison.OrdinalIgnoreCase);
-
-    private static bool LooksLikeUnmarkedCompletion(string responseText)
-    {
-        string normalized = responseText.ToLowerInvariant();
-        return normalized.Contains("completed", StringComparison.Ordinal) ||
-               normalized.Contains("has been implemented", StringComparison.Ordinal) ||
-               normalized.Contains("has been completed", StringComparison.Ordinal) ||
-               normalized.Contains("implementation has been tested", StringComparison.Ordinal) ||
-               normalized.Contains("task is complete", StringComparison.Ordinal);
-    }
-
-    private static bool LooksLikeUserInterventionRequest(string responseText)
-    {
-        string normalized = responseText.Trim().ToLowerInvariant();
-        if (!normalized.Contains("?", StringComparison.Ordinal))
-        {
-            return false;
-        }
-
-        return normalized.EndsWith("?", StringComparison.Ordinal) ||
-               normalized.Contains("is this approved?", StringComparison.Ordinal) ||
-               normalized.Contains("do you approve", StringComparison.Ordinal) ||
-               normalized.Contains("should i", StringComparison.Ordinal) ||
-               normalized.Contains("do you want", StringComparison.Ordinal) ||
-               normalized.Contains("please confirm", StringComparison.Ordinal) ||
-               normalized.Contains("need your", StringComparison.Ordinal) ||
-               normalized.Contains("which ", StringComparison.Ordinal) ||
-               normalized.Contains("what ", StringComparison.Ordinal);
-    }
-
-    private bool TryReadUserIntervention(
-        string modelQuestion,
-        CancellationToken cancellationToken,
-        out string userAnswer)
-    {
-        userAnswer = string.Empty;
-        if (!LooksLikeUserInterventionRequest(modelQuestion))
-        {
-            return false;
-        }
-
-        PotatoConsole.WriteStatus("Model requested user input during ReAct execution.");
-        PotatoConsole.WriteAgentResponse(modelQuestion);
-        userAnswer = PotatoConsole.ReadInterventionInput(cancellationToken);
-        AddInputHistory(userAnswer);
-        return true;
-    }
-
-    private static string RemoveFinalMarker(string responseText)
-    {
-        Match match = FinalMarkerRegex().Match(responseText);
-        if (!match.Success)
-        {
-            return responseText.Trim();
-        }
-
-        if (match.Index == 0)
-        {
-            return FinalMarkerRegex().Replace(responseText, string.Empty, count: 1).TrimStart();
-        }
-
-        return responseText[..match.Index].TrimEnd();
-    }
-
-    [GeneratedRegex(@"\A\s*(?:#{1,6}\s*)?(?:\*\*)?\s*FINAL\s*:?\s*(?:\*\*)?", RegexOptions.IgnoreCase)]
-    private static partial Regex FinalMarkerRegex();
-
-    private async Task<bool> TryExecuteTextualActionAsync(string responseText, CancellationToken cancellationToken)
-    {
-        TextualToolCall? toolCall = TryParseToolCall(responseText) ??
-                                    TryParseSearchReplaceBlock(responseText) ??
-                                    TryParseDiffPatchBlock(responseText) ??
-                                    TryParseShellFence(responseText);
-        if (toolCall is null)
-        {
-            return false;
-        }
-
-        if (IsEditToolCall(toolCall.Name) &&
-            !reActSubtaskTracker.CurrentAllowsEditTools())
-        {
-            string currentSubtask = reActSubtaskTracker.CurrentDisplayName();
-            chatHistory.Add(new ChatMessage(
-                ChatRole.User,
-                $"Rejected {toolCall.Name}: the current planned step or substep is '{currentSubtask}', which is not an edit/write step. Continue the approved execution steps in order. Finish the current discovery, inspection, preparation, or verification step before using ApplySearchReplaceAsync, CreateFileAsync, or ApplyDiffPatchAsync."));
-            return true;
-        }
-
-        if (!reActSubtaskTracker.CurrentAllowsTool(toolCall.Name))
-        {
-            chatHistory.Add(new ChatMessage(
-                ChatRole.User,
-                reActSubtaskTracker.CurrentToolRejectionReason(toolCall.Name)));
-            return true;
-        }
-
-        PotatoConsole.WriteStatus($"Interpreting textual action as tool call: {toolCall.Name}");
-        string result = await ExecuteTextualToolCallAsync(toolCall, cancellationToken);
-        reActSubtaskTracker.UpdateFromObservation(toolCall.Name, result);
-        using (PotatoConsole.StartProgress("Summarizing context..."))
-        {
-            await reActMemory.SummarizeLargeUnsummarizedItemsAsync(currentOpenAiClient, cancellationToken);
-        }
-        chatHistory.Add(new ChatMessage(
-            ChatRole.User,
-            PromptLibrary.NextStepAfterObservationMessage(
-                latestUserRequest ?? string.Empty,
-                latestApproach ?? string.Empty,
-                Environment.CurrentDirectory,
-                reActSubtaskTracker.BuildPromptContext(),
-                toolCall.Name,
-                result)));
-        return true;
-    }
-
-    private async Task<bool> TryExecuteDeterministicFallbackAsync(
-        int iteration,
-        bool directCreateFileFallbackAttempted,
-        bool directReplaceFileFallbackAttempted,
+    private async Task<string> ExecuteTaskAsync(
+        string goal,
+        AgentTask task,
+        ExecutorContext context,
+        IReadOnlyList<TaskObservation> observations,
         CancellationToken cancellationToken)
     {
-        if (!directReplaceFileFallbackAttempted &&
-            TryParseDirectReplaceFileContentRequest(latestUserRequest, out string replaceFilePath, out string replacementContent))
+        string action = NormalizeAction(task.Action);
+        return action switch
         {
-            if (!reActSubtaskTracker.CurrentAllowsEditTools())
-            {
-                return false;
-            }
-
-            string resolvedPath = ResolveUserFilePath(replaceFilePath);
-            if (!File.Exists(resolvedPath))
-            {
-                return false;
-            }
-
-            PotatoConsole.WriteStatus("Model did not call ApplySearchReplaceAsync for a direct file content replacement; running deterministic replacement fallback...");
-            string currentContent = await File.ReadAllTextAsync(resolvedPath, cancellationToken);
-            string replaceResult = await agentTools.ApplySearchReplaceAsync(resolvedPath, currentContent, replacementContent);
-            reActSubtaskTracker.UpdateFromObservation(nameof(AgentTools.ApplySearchReplaceAsync), replaceResult);
-            using (PotatoConsole.StartProgress("Summarizing context..."))
-            {
-                await reActMemory.SummarizeLargeUnsummarizedItemsAsync(currentOpenAiClient, cancellationToken);
-            }
-
-            chatHistory.Add(new ChatMessage(
-                ChatRole.User,
-                PromptLibrary.NextStepAfterObservationMessage(
-                    latestUserRequest ?? string.Empty,
-                    latestApproach ?? string.Empty,
-                    Environment.CurrentDirectory,
-                    reActSubtaskTracker.BuildPromptContext(),
-                    nameof(AgentTools.ApplySearchReplaceAsync),
-                    replaceResult)));
-            return true;
-        }
-
-        if (!directCreateFileFallbackAttempted &&
-            TryParseDirectCreateFileRequest(latestUserRequest, out string filePath, out string content))
-        {
-            if (!reActSubtaskTracker.CurrentAllowsEditTools())
-            {
-                return false;
-            }
-
-            PotatoConsole.WriteStatus("Model did not call CreateFileAsync for a direct file creation request; running deterministic file creation fallback...");
-            string createResult = await agentTools.CreateFileAsync(filePath, content);
-            reActSubtaskTracker.UpdateFromObservation(nameof(AgentTools.CreateFileAsync), createResult);
-            using (PotatoConsole.StartProgress("Summarizing context..."))
-            {
-                await reActMemory.SummarizeLargeUnsummarizedItemsAsync(currentOpenAiClient, cancellationToken);
-            }
-
-            chatHistory.Add(new ChatMessage(
-                ChatRole.User,
-                PromptLibrary.NextStepAfterObservationMessage(
-                    latestUserRequest ?? string.Empty,
-                    latestApproach ?? string.Empty,
-                    Environment.CurrentDirectory,
-                    reActSubtaskTracker.BuildPromptContext(),
-                    nameof(AgentTools.CreateFileAsync),
-                    createResult)));
-            return true;
-        }
-
-        if (iteration != 1 ||
-            !ShouldStartWithProjectInspection(latestUserRequest))
-        {
-            return false;
-        }
-
-        chatHistory.Add(new ChatMessage(
-            ChatRole.User,
-            "The previous response did not choose the first approved project-inspection action. " +
-            "Do not run a generic project inventory unless the approved execution steps say that is the next step. " +
-            "Use exactly one registered tool call that matches the first concrete step in the approved execution steps. " +
-            "If the approved execution steps name a specific file, read or summarize that file first.\n\n" +
-            "Approved execution steps:\n" +
-            (latestApproach ?? "(No approved execution steps were captured.)")));
-        return true;
-    }
-
-    private async Task<ReActFallbackResult> TryExecuteGenericReActFallbackAsync(
-        string responseText,
-        int consecutiveInvalidReActResponses,
-        CancellationToken cancellationToken)
-    {
-        if (TryFindRequestedOutputFilePath(out string outputFilePath) &&
-            TryExtractProposedFileContent(responseText, out string proposedContent))
-        {
-            if (!reActSubtaskTracker.CurrentAllowsEditTools())
-            {
-                return ReActFallbackResult.None;
-            }
-
-            string resolvedPath = ResolveUserFilePath(outputFilePath);
-            string result;
-            string observationSource;
-            if (File.Exists(resolvedPath))
-            {
-                PotatoConsole.WriteStatus($"Model returned requested file content as prose; applying it through ApplySearchReplaceAsync for {PathResolver.FormatPathForDisplay(resolvedPath)}...");
-                string currentContent = await File.ReadAllTextAsync(resolvedPath, cancellationToken);
-                result = await agentTools.ApplySearchReplaceAsync(resolvedPath, currentContent, proposedContent);
-                observationSource = nameof(AgentTools.ApplySearchReplaceAsync);
-            }
-            else
-            {
-                PotatoConsole.WriteStatus($"Model returned requested file content as prose; creating {PathResolver.FormatPathForDisplay(resolvedPath)} through CreateFileAsync...");
-                result = await agentTools.CreateFileAsync(resolvedPath, proposedContent);
-                observationSource = nameof(AgentTools.CreateFileAsync);
-            }
-
-            await AddToolObservationAndContinueAsync(observationSource, result, cancellationToken);
-            return ReActFallbackResult.ExecutedTool;
-        }
-
-        if (ShouldStartWithProjectInspection(GetExecutionIntentText()))
-        {
-            chatHistory.Add(new ChatMessage(
-                ChatRole.User,
-                "Continue by following the approved execution steps, not a hardcoded discovery sequence. " +
-                "Use exactly one registered tool call for the next concrete subtask. " +
-                "If the approved execution steps say to inspect a specific file, use ReadFileContent or SummarizeFilePurpose for that file. " +
-                "If it says to inspect project structure, use the listed discovery tool, preferably ListFiles with recursive=false for a top-level overview.\n\n" +
-                "Approved execution steps:\n" +
-                (latestApproach ?? "(No approved execution steps were captured.)")));
-            return ReActFallbackResult.Prompted;
-        }
-
-        if (consecutiveInvalidReActResponses >= MaxConsecutiveInvalidReActResponses)
-        {
-            chatHistory.Add(new ChatMessage(
-                ChatRole.User,
-                "You have enough tool-backed context for the current step or substep. The next response must be exactly one registered textual <tool_call> JSON for the next required action, or FINAL: only if the approved task is complete and verified. Do not include prose, markdown fences, approval questions, manual copy instructions, or tool-unavailable claims."));
-            return ReActFallbackResult.Prompted;
-        }
-
-        return ReActFallbackResult.None;
-    }
-
-    private async Task AddToolObservationAndContinueAsync(
-        string observationSource,
-        string observation,
-        CancellationToken cancellationToken)
-    {
-        reActSubtaskTracker.UpdateFromObservation(observationSource, observation);
-        using (PotatoConsole.StartProgress("Summarizing context..."))
-        {
-            await reActMemory.SummarizeLargeUnsummarizedItemsAsync(currentOpenAiClient, cancellationToken);
-        }
-
-        chatHistory.Add(new ChatMessage(
-            ChatRole.User,
-            PromptLibrary.NextStepAfterObservationMessage(
-                latestUserRequest ?? string.Empty,
-                latestApproach ?? string.Empty,
-                Environment.CurrentDirectory,
-                reActSubtaskTracker.BuildPromptContext(),
-                observationSource,
-                observation)));
-    }
-
-    private static bool TryParseDirectReplaceFileContentRequest(string? request, out string filePath, out string content)
-    {
-        filePath = string.Empty;
-        content = string.Empty;
-
-        if (string.IsNullOrWhiteSpace(request))
-        {
-            return false;
-        }
-
-        Match match = Regex.Match(
-            request.Trim(),
-            @"\b(?:change|replace|set|update)\s+(?:the\s+)?content\s+of\s+(?:the\s+)?file\s+[`""']?(?<path>[^\s`""']+)[`""']?\s+to\s+[`""']?(?<content>.+?)[`""']?\s*$",
-            RegexOptions.IgnoreCase);
-
-        if (!match.Success)
-        {
-            match = Regex.Match(
-                request.Trim(),
-                @"\b(?:change|replace|set|update)\s+(?:the\s+)?file\s+[`""']?(?<path>[^\s`""']+\.[A-Za-z0-9]+)[`""']?\s+(?:content\s+)?to\s+[`""']?(?<content>.+?)[`""']?\s*$",
-                RegexOptions.IgnoreCase);
-        }
-
-        if (!match.Success)
-        {
-            return false;
-        }
-
-        filePath = match.Groups["path"].Value.Trim();
-        content = TrimMatchingQuotes(match.Groups["content"].Value.Trim());
-        return !string.IsNullOrWhiteSpace(filePath);
-    }
-
-    private static string ResolveUserFilePath(string filePath)
-    {
-        string trimmed = filePath.Trim();
-        if (Uri.TryCreate(trimmed, UriKind.Absolute, out Uri? uri) && uri.IsFile)
-        {
-            trimmed = uri.LocalPath;
-        }
-
-        if (trimmed.StartsWith("~/", StringComparison.Ordinal))
-        {
-            trimmed = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), trimmed[2..]);
-        }
-
-        return Path.GetFullPath(Path.IsPathRooted(trimmed)
-            ? trimmed
-            : Path.Combine(Environment.CurrentDirectory, trimmed));
-    }
-
-    private static bool TryParseDirectCreateFileRequest(string? request, out string filePath, out string content)
-    {
-        filePath = string.Empty;
-        content = string.Empty;
-
-        if (string.IsNullOrWhiteSpace(request))
-        {
-            return false;
-        }
-
-        Match match = Regex.Match(
-            request.Trim(),
-            @"\b(?:write|create|make)\s+(?:a\s+)?file\s+(?:(?:named|called)\s+)?[`""']?(?<path>[^\s`""']+)[`""']?\s+(?:with|containing)\s+(?:the\s+)?content\s+[`""']?(?<content>.+?)[`""']?\s*$",
-            RegexOptions.IgnoreCase);
-
-        if (!match.Success)
-        {
-            match = Regex.Match(
-                request.Trim(),
-                @"\b(?:write|create|make)\s+[`""']?(?<path>[^\s`""']+\.[A-Za-z0-9]+)[`""']?\s+(?:with|containing)\s+(?:the\s+)?content\s+[`""']?(?<content>.+?)[`""']?\s*$",
-                RegexOptions.IgnoreCase);
-        }
-
-        if (!match.Success)
-        {
-            return false;
-        }
-
-        filePath = match.Groups["path"].Value.Trim();
-        content = TrimMatchingQuotes(match.Groups["content"].Value.Trim());
-        return !string.IsNullOrWhiteSpace(filePath);
-    }
-
-    private static string TrimMatchingQuotes(string value)
-    {
-        if (value.Length >= 2 &&
-            ((value[0] == '"' && value[^1] == '"') ||
-             (value[0] == '\'' && value[^1] == '\'') ||
-             (value[0] == '`' && value[^1] == '`')))
-        {
-            return value[1..^1];
-        }
-
-        return value;
-    }
-
-    private static bool ShouldStartWithProjectInspection(string? request) =>
-        ApprovalPolicy.IsProjectChangeRequest(request) ||
-        ApprovalPolicy.IsReadOnlyInspectionRequest(request) && LooksLikeProjectOrFolderRequest(request);
-
-    private string GetExecutionIntentText() =>
-        $"{latestUserRequest}\n{latestSpecification}\n{latestApproach}";
-
-    private bool TryFindRequestedOutputFilePath(out string filePath)
-    {
-        filePath = string.Empty;
-        string text = GetExecutionIntentText();
-        Match match = Regex.Match(
-            text,
-            @"\b(?:create|write|generate|make|add)\s+(?:a\s+|an\s+|the\s+)?(?:new\s+)?(?:file\s+)?(?:named\s+|called\s+)?[`""']?(?<path>[\w./\\-]+\.[A-Za-z0-9][A-Za-z0-9._-]*)[`""']?",
-            RegexOptions.IgnoreCase);
-        if (!match.Success)
-        {
-            return false;
-        }
-
-        string candidate = match.Groups["path"].Value.Trim();
-        if (string.IsNullOrWhiteSpace(candidate) ||
-            IsPlaceholderPath(candidate))
-        {
-            return false;
-        }
-
-        filePath = candidate;
-        return true;
-    }
-
-    private static bool LooksLikeProjectOrFolderRequest(string? request)
-    {
-        string text = request?.ToLowerInvariant() ?? string.Empty;
-        return text.Contains("project", StringComparison.Ordinal) ||
-               text.Contains("folder", StringComparison.Ordinal) ||
-               text.Contains("repo", StringComparison.Ordinal) ||
-               text.Contains("repository", StringComparison.Ordinal);
-    }
-
-    private static bool IsPlaceholderPath(string path)
-    {
-        string normalized = path.Replace('\\', '/');
-        return normalized.Contains("path/to/", StringComparison.OrdinalIgnoreCase) ||
-               normalized.Contains("/full/path", StringComparison.OrdinalIgnoreCase) ||
-               normalized.Contains("actual/path", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private async Task<string> ExecuteTextualToolCallAsync(TextualToolCall toolCall, CancellationToken cancellationToken)
-    {
-        try
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            string toolName = NormalizeTextualToolName(toolCall.Name);
-            if (IsEditToolCall(toolName) &&
-                !reActSubtaskTracker.CurrentAllowsEditTools())
-            {
-                return $"Rejected {toolName}: the current planned subtask is '{reActSubtaskTracker.CurrentDisplayName()}', not an edit/write subtask.";
-            }
-
-            return toolName switch
-            {
-                nameof(AgentTools.GetCurrentTime) => agentTools.GetCurrentTime(),
-                nameof(AgentTools.ReadFileContent) => agentTools.ReadFileContent(
-                    GetStringArgument(toolCall.Arguments, "filePath") ??
-                    GetStringArgument(toolCall.Arguments, "file_path") ??
-                    GetStringArgument(toolCall.Arguments, "path") ??
-                    string.Empty),
-                nameof(AgentTools.ListFiles) => agentTools.ListFiles(
-                    GetStringArgument(toolCall.Arguments, "directoryPath") ??
-                    GetStringArgument(toolCall.Arguments, "directory_path"),
-                    GetBoolArgument(toolCall.Arguments, "recursive") ?? false,
-                    GetIntArgument(toolCall.Arguments, "maxEntries") ??
-                    GetIntArgument(toolCall.Arguments, "max_entries") ??
-                    200),
-                nameof(AgentTools.ListProjectFiles) => agentTools.ListProjectFiles(
-                    GetStringArgument(toolCall.Arguments, "directoryPath") ??
-                    GetStringArgument(toolCall.Arguments, "directory_path") ??
-                    GetStringArgument(toolCall.Arguments, "path")),
-                nameof(AgentTools.SearchFiles) => agentTools.SearchFiles(
-                    GetStringArgument(toolCall.Arguments, "searchTerms") ??
-                    GetStringArgument(toolCall.Arguments, "search_terms") ??
-                    GetStringArgument(toolCall.Arguments, "terms") ??
-                    GetStringArgument(toolCall.Arguments, "query") ??
-                    string.Empty,
-                    GetStringArgument(toolCall.Arguments, "directoryPath") ??
-                    GetStringArgument(toolCall.Arguments, "directory_path") ??
-                    GetStringArgument(toolCall.Arguments, "path"),
-                    GetBoolArgument(toolCall.Arguments, "recursive") ?? true,
-                    GetBoolArgument(toolCall.Arguments, "matchCase") ??
-                    GetBoolArgument(toolCall.Arguments, "match_case") ??
-                    false,
-                    GetIntArgument(toolCall.Arguments, "maxMatches") ??
-                    GetIntArgument(toolCall.Arguments, "max_matches") ??
-                    200),
-                nameof(AgentTools.SearchFileContents) => agentTools.SearchFileContents(
-                    GetStringArgument(toolCall.Arguments, "searchTerms") ??
-                    GetStringArgument(toolCall.Arguments, "search_terms") ??
-                    GetStringArgument(toolCall.Arguments, "terms") ??
-                    GetStringArgument(toolCall.Arguments, "query") ??
-                    string.Empty,
-                    GetStringArgument(toolCall.Arguments, "directoryPath") ??
-                    GetStringArgument(toolCall.Arguments, "directory_path") ??
-                    GetStringArgument(toolCall.Arguments, "path"),
-                    GetStringArgument(toolCall.Arguments, "filePath") ??
-                    GetStringArgument(toolCall.Arguments, "file_path") ??
-                    GetStringArgument(toolCall.Arguments, "targetFile") ??
-                    GetStringArgument(toolCall.Arguments, "target_file"),
-                    GetBoolArgument(toolCall.Arguments, "recursive") ?? true,
-                    GetBoolArgument(toolCall.Arguments, "matchCase") ??
-                    GetBoolArgument(toolCall.Arguments, "match_case") ??
-                    false,
-                    GetIntArgument(toolCall.Arguments, "maxMatches") ??
-                    GetIntArgument(toolCall.Arguments, "max_matches") ??
-                    100),
-                nameof(AgentTools.SummarizeFilePurpose) => await agentTools.SummarizeFilePurpose(
-                    GetStringArgument(toolCall.Arguments, "filePath") ??
-                    GetStringArgument(toolCall.Arguments, "file_path") ??
-                    string.Empty),
-                nameof(AgentTools.GetCollectedContext) => agentTools.GetCollectedContext(
-                    GetStringArgument(toolCall.Arguments, "index") ?? "list",
-                    GetBoolArgument(toolCall.Arguments, "full") ?? false),
-                nameof(AgentTools.ApplyDiffPatchAsync) => await agentTools.ApplyDiffPatchAsync(
-                    GetStringArgument(toolCall.Arguments, "patch") ?? string.Empty,
-                    GetStringArgument(toolCall.Arguments, "workingDirectory") ??
-                    GetStringArgument(toolCall.Arguments, "working_directory")),
-                nameof(AgentTools.ApplySearchReplaceAsync) => await agentTools.ApplySearchReplaceAsync(
-                    GetStringArgument(toolCall.Arguments, "filePath") ??
-                    GetStringArgument(toolCall.Arguments, "file_path") ??
-                    GetStringArgument(toolCall.Arguments, "path") ??
-                    string.Empty,
-                    GetStringArgument(toolCall.Arguments, "search") ??
-                    GetStringArgument(toolCall.Arguments, "oldString") ??
-                    GetStringArgument(toolCall.Arguments, "old_string") ??
-                    GetStringArgument(toolCall.Arguments, "SEARCH") ??
-                    string.Empty,
-                    GetStringArgument(toolCall.Arguments, "replace") ??
-                    GetStringArgument(toolCall.Arguments, "newString") ??
-                    GetStringArgument(toolCall.Arguments, "new_string") ??
-                    GetStringArgument(toolCall.Arguments, "REPLACE") ??
-                    string.Empty),
-                nameof(AgentTools.CreateFileAsync) => await agentTools.CreateFileAsync(
-                    GetStringArgument(toolCall.Arguments, "filePath") ??
-                    GetStringArgument(toolCall.Arguments, "file_path") ??
-                    GetStringArgument(toolCall.Arguments, "path") ??
-                    string.Empty,
-                    GetStringArgument(toolCall.Arguments, "content") ??
-                    GetStringArgument(toolCall.Arguments, "text") ??
-                    string.Empty),
-                nameof(AgentTools.ExecuteShellCommandAsync) => await ExecuteShellToolCallAsync(toolCall),
-                _ => $"Error: Unknown textual tool call '{toolCall.Name}'."
-            };
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            return $"Error executing textual tool call '{toolCall.Name}': {ex.Message}";
-        }
-    }
-
-    private static bool IsEditToolCall(string toolName) =>
-        NormalizeTextualToolName(toolName) is nameof(AgentTools.ApplySearchReplaceAsync) or
-            nameof(AgentTools.CreateFileAsync) or
-            nameof(AgentTools.ApplyDiffPatchAsync);
-
-    private static string NormalizeTextualToolName(string name)
-    {
-        string normalized = name.Trim();
-        return normalized switch
-        {
-            "SearchReplace" or "search_replace" or "apply_search_replace" or "replace_file" => nameof(AgentTools.ApplySearchReplaceAsync),
-            "CreateFile" or "create_file" or "write_new_file" or "new_file" => nameof(AgentTools.CreateFileAsync),
-            "read_file" => nameof(AgentTools.ReadFileContent),
-            "list_files" => nameof(AgentTools.ListFiles),
-            "ListProjects" or "list_projects" or "list_project_files" or "project_inventory" => nameof(AgentTools.ListProjectFiles),
-            "SearchFileContents" or "SearchInFiles" or "search_in_files" or "search_file_contents" or "grep" => nameof(AgentTools.SearchFileContents),
-            "search_files" or "find_files" or "search_file_names" or "find_file_names" => nameof(AgentTools.SearchFiles),
-            _ => normalized
+            "read" => ReadFile(task.Argument, context),
+            "list" => agentTools.ListFiles(task.Argument, recursive: false),
+            "list-recursive" => agentTools.ListFiles(task.Argument, recursive: true),
+            "search-files" => agentTools.SearchFiles(task.Argument),
+            "search" or "search-contents" => agentTools.SearchFileContents(task.Argument),
+            "summarize" => await agentTools.SummarizeFilePurpose(task.Argument),
+            "patch" => await ExecutePatchTaskAsync(goal, task, context, observations, cancellationToken),
+            "create" => await ExecuteCreateTaskAsync(goal, task, context, observations, cancellationToken),
+            "write-summary" or "write-documentation" or "explain-to-user" =>
+                await ExecuteTextGenerationTaskAsync(goal, task, context, observations, cancellationToken),
+            "shell" or "verify" => await agentTools.ExecuteShellCommandAsync(task.Argument),
+            _ => $"Error: Unsupported planner action '{task.Action}'. Supported actions: read, list, list-recursive, search-files, search, summarize, patch, create, write_summary, write_documentation, explain_to_user, shell, verify."
         };
     }
 
-    private async Task<string> ExecuteShellToolCallAsync(TextualToolCall toolCall)
+    private string ReadFile(string filePath, ExecutorContext context)
     {
-        string command = GetStringArgument(toolCall.Arguments, "command") ?? string.Empty;
-        if (LooksLikeDirectoryListingCommand(command))
+        string result = agentTools.ReadFileContent(filePath);
+        if (!IsFailureResult(result))
         {
-            return "Rejected shell directory listing. Use the ListFiles tool instead.";
+            context.LastReadFilePath = filePath;
+            context.LastReadFileContent = result;
         }
 
-        if (LooksLikeShellFileEditCommand(command))
-        {
-            return "Rejected shell-based file edit. Read the relevant file, then use ApplySearchReplaceAsync with exact SEARCH and REPLACE text.";
-        }
-
-        return await agentTools.ExecuteShellCommandAsync(
-            command,
-            GetStringArgument(toolCall.Arguments, "workingDirectory") ??
-            GetStringArgument(toolCall.Arguments, "working_directory"),
-            GetIntArgument(toolCall.Arguments, "timeoutSeconds") ??
-            GetIntArgument(toolCall.Arguments, "timeout_seconds") ??
-            60);
+        return result;
     }
 
-    private static bool LooksLikeDirectoryListingCommand(string command)
+    private async Task<string> ExecutePatchTaskAsync(
+        string goal,
+        AgentTask task,
+        ExecutorContext context,
+        IReadOnlyList<TaskObservation> observations,
+        CancellationToken cancellationToken)
     {
-        string normalized = command.TrimStart().ToLowerInvariant();
-        return normalized.StartsWith("ls", StringComparison.Ordinal) ||
-               normalized.StartsWith("dir", StringComparison.Ordinal) ||
-               normalized.StartsWith("tree", StringComparison.Ordinal);
+        if (string.IsNullOrWhiteSpace(context.LastReadFilePath) ||
+            string.IsNullOrWhiteSpace(context.LastReadFileContent))
+        {
+            return "Error: Patch step requires a successful read step immediately before it or earlier in the plan.";
+        }
+
+        string codeBlock = SelectTargetCodeBlock(context.LastReadFileContent, task.Argument);
+        SearchReplacePatch patch = await GeneratePatchAsync(
+            goal,
+            task,
+            context.LastReadFilePath,
+            codeBlock,
+            observations,
+            cancellationToken);
+
+        if (!string.Equals(patch.FilePath, context.LastReadFilePath, StringComparison.OrdinalIgnoreCase) &&
+            !string.IsNullOrWhiteSpace(patch.FilePath))
+        {
+            return $"Error: Patch model targeted '{patch.FilePath}', but the executor only allows patching the last read file '{context.LastReadFilePath}'.";
+        }
+
+        return await agentTools.ApplySearchReplaceAsync(context.LastReadFilePath, patch.Search, patch.Replace);
     }
 
-    private static bool LooksLikeShellFileEditCommand(string command)
+    private async Task<string> ExecuteCreateTaskAsync(
+        string goal,
+        AgentTask task,
+        ExecutorContext context,
+        IReadOnlyList<TaskObservation> observations,
+        CancellationToken cancellationToken)
     {
-        string normalized = command.ToLowerInvariant();
-        return normalized.Contains(">>", StringComparison.Ordinal) ||
-               Regex.IsMatch(normalized, @"(^|[^<])>([^>]|$)") ||
-               normalized.Contains("sed -i", StringComparison.Ordinal) ||
-               normalized.Contains("perl -pi", StringComparison.Ordinal) ||
-               normalized.Contains("tee ", StringComparison.Ordinal);
+        CreatedFile createdFile = await GenerateNewFileAsync(goal, task, context, observations, cancellationToken);
+        return await agentTools.CreateFileAsync(createdFile.FilePath, createdFile.Content);
     }
 
-    private static TextualToolCall? TryParseToolCall(string responseText)
+    private async Task<string> ExecuteTextGenerationTaskAsync(
+        string goal,
+        AgentTask task,
+        ExecutorContext context,
+        IReadOnlyList<TaskObservation> observations,
+        CancellationToken cancellationToken)
     {
-        var match = Regex.Match(
-            responseText,
-            @"<tool_call>\s*(?<json>\{[\s\S]*?\})\s*</tool_call>",
-            RegexOptions.IgnoreCase);
+        var messages = new List<ChatMessage>
+        {
+            new(ChatRole.System, PromptLibrary.UserTextSystemPrompt),
+            new(
+                ChatRole.User,
+                $"Action: {task.Action}\n" +
+                $"Temperature: {task.GetTargetTemperature():0.0}\n\n" +
+                $"Goal:\n{goal}\n\n" +
+                $"Task:\n{task.Argument}\n\n" +
+                $"Last read file: {context.LastReadFilePath ?? "(none)"}\n\n" +
+                "Prior observations:\n" +
+                FormatObservations(observations))
+        };
 
-        if (!match.Success)
+        ChatResponse response;
+        using (PotatoConsole.StartProgress($"Generating {task.Action} response..."))
         {
-            return null;
+            response = await currentOpenAiClient.GetResponseAsync(
+                messages,
+                CreateChatOptions(task.GetTargetTemperature()),
+                cancellationToken);
         }
 
-        try
-        {
-            JsonNode? node = JsonNode.Parse(match.Groups["json"].Value);
-            string? name = node?["name"]?.GetValue<string>();
-            JsonObject? arguments = node?["arguments"] as JsonObject;
-            return string.IsNullOrWhiteSpace(name)
-                ? null
-                : new TextualToolCall(name, arguments ?? []);
-        }
-        catch
-        {
-            return null;
-        }
+        return string.IsNullOrWhiteSpace(response.Text)
+            ? "Error: Text generation returned an empty response."
+            : response.Text.Trim();
     }
 
-    private static bool TryExtractProposedFileContent(string responseText, out string fileContent)
+    private async Task<SearchReplacePatch> GeneratePatchAsync(
+        string goal,
+        AgentTask task,
+        string filePath,
+        string codeBlock,
+        IReadOnlyList<TaskObservation> observations,
+        CancellationToken cancellationToken)
     {
-        fileContent = string.Empty;
-        if (string.IsNullOrWhiteSpace(responseText) ||
-            !LooksLikeProposedFileContent(responseText))
+        var messages = new List<ChatMessage>
         {
-            return false;
+            new(ChatRole.System, PromptLibrary.PatchSystemPrompt),
+            new(
+                ChatRole.User,
+                "Return a JSON object only.\n\n" +
+                $"Goal:\n{goal}\n\n" +
+                $"Patch task:\n{task.Argument}\n\n" +
+                $"Target file:\n{filePath}\n\n" +
+                "Prior observations:\n" +
+                FormatObservations(observations) +
+                "\n\nSpecific code block to edit:\n```text\n" +
+                codeBlock +
+                "\n```")
+        };
+
+        ChatResponse response;
+        using (PotatoConsole.StartProgress($"Generating targeted patch for {PathResolver.FormatPathForDisplay(filePath)}..."))
+        {
+            response = await currentOpenAiClient.GetResponseAsync(
+                messages,
+                CreateChatOptions(task.GetTargetTemperature()),
+                cancellationToken);
         }
 
-        string normalized = responseText.Replace("\r\n", "\n", StringComparison.Ordinal);
-        Match fencedContent = Regex.Match(
-            normalized,
-            @"```(?:[A-Za-z0-9_+.-]+)?\s*\n(?<content>[\s\S]*?)\n```",
-            RegexOptions.IgnoreCase);
-        if (fencedContent.Success)
+        string json = ExtractJsonObject(response.Text);
+        SearchReplacePatch? patch = JsonSerializer.Deserialize<SearchReplacePatch>(json, JsonOptions);
+        if (patch is null ||
+            string.IsNullOrEmpty(patch.Search) ||
+            patch.Replace is null)
         {
-            fileContent = NormalizeGeneratedFileContent(fencedContent.Groups["content"].Value);
-            return fileContent.Length > 0;
+            throw new InvalidOperationException("Patch model did not return valid search/replace JSON.");
         }
 
-        string[] lines = normalized.Split('\n');
-        int startIndex = Array.FindIndex(lines, line =>
-            Regex.IsMatch(line, @"^\s*#\s+\S") ||
-            line.TrimStart().StartsWith("{", StringComparison.Ordinal) ||
-            line.TrimStart().StartsWith("[", StringComparison.Ordinal));
-        if (startIndex < 0)
+        if (!codeBlock.Contains(patch.Search, StringComparison.Ordinal))
         {
-            return false;
+            throw new InvalidOperationException("Patch model returned SEARCH text that is not present in the targeted code block.");
         }
 
-        int endIndex = lines.Length;
-        for (int i = startIndex + 1; i < lines.Length; i++)
+        return patch with { FilePath = string.IsNullOrWhiteSpace(patch.FilePath) ? filePath : patch.FilePath };
+    }
+
+    private async Task<CreatedFile> GenerateNewFileAsync(
+        string goal,
+        AgentTask task,
+        ExecutorContext context,
+        IReadOnlyList<TaskObservation> observations,
+        CancellationToken cancellationToken)
+    {
+        var messages = new List<ChatMessage>
         {
-            string trimmed = lines[i].Trim();
-            if (trimmed.Equals("---", StringComparison.Ordinal) ||
-                trimmed.StartsWith("**Finalized", StringComparison.OrdinalIgnoreCase) ||
-                trimmed.StartsWith("Finalized", StringComparison.OrdinalIgnoreCase) ||
-                trimmed.StartsWith("The file content is ready", StringComparison.OrdinalIgnoreCase) ||
-                trimmed.StartsWith("The requested file content is ready", StringComparison.OrdinalIgnoreCase) ||
-                trimmed.StartsWith("You can manually copy", StringComparison.OrdinalIgnoreCase) ||
-                trimmed.StartsWith("Copy this", StringComparison.OrdinalIgnoreCase) ||
-                trimmed.StartsWith("Let me know", StringComparison.OrdinalIgnoreCase))
+            new(ChatRole.System, PromptLibrary.CreateFileSystemPrompt),
+            new(
+                ChatRole.User,
+                "Return a JSON object only.\n\n" +
+                $"Goal:\n{goal}\n\n" +
+                $"Create task:\n{task.Argument}\n\n" +
+                $"Last read file: {context.LastReadFilePath ?? "(none)"}\n\n" +
+                "Prior observations:\n" +
+                FormatObservations(observations))
+        };
+
+        ChatResponse response;
+        using (PotatoConsole.StartProgress("Generating new file content..."))
+        {
+            response = await currentOpenAiClient.GetResponseAsync(
+                messages,
+                CreateChatOptions(task.GetTargetTemperature()),
+                cancellationToken);
+        }
+
+        string json = ExtractJsonObject(response.Text);
+        CreatedFile? createdFile = JsonSerializer.Deserialize<CreatedFile>(json, JsonOptions);
+        if (createdFile is null ||
+            string.IsNullOrWhiteSpace(createdFile.FilePath) ||
+            createdFile.Content is null)
+        {
+            throw new InvalidOperationException("Create-file model did not return valid JSON.");
+        }
+
+        return createdFile;
+    }
+
+    private static ChatOptions CreateChatOptions(double temperature) =>
+        new()
+        {
+            Temperature = (float)temperature
+        };
+
+    private static void ValidateTasks(IEnumerable<AgentTask> tasks)
+    {
+        int expectedStep = 1;
+        foreach (AgentTask task in tasks.OrderBy(task => task.Step))
+        {
+            if (task.Step != expectedStep)
             {
-                endIndex = i;
-                break;
+                throw new InvalidOperationException($"Planner step numbers must be sequential. Expected {expectedStep}, got {task.Step}.");
+            }
+
+            if (string.IsNullOrWhiteSpace(task.Action))
+            {
+                throw new InvalidOperationException($"Planner step {task.Step} has no action.");
+            }
+
+            if (string.IsNullOrWhiteSpace(task.Argument))
+            {
+                throw new InvalidOperationException($"Planner step {task.Step} has no argument.");
+            }
+
+            expectedStep++;
+        }
+    }
+
+    private static string ExtractJsonArray(string text)
+    {
+        string trimmed = StripCodeFence(text).Trim();
+        int start = trimmed.IndexOf('[', StringComparison.Ordinal);
+        int end = trimmed.LastIndexOf(']');
+        if (start < 0 || end < start)
+        {
+            throw new InvalidOperationException("Planner did not return a JSON array.");
+        }
+
+        return trimmed[start..(end + 1)];
+    }
+
+    private static string ExtractJsonObject(string text)
+    {
+        string trimmed = StripCodeFence(text).Trim();
+        int start = trimmed.IndexOf('{', StringComparison.Ordinal);
+        int end = trimmed.LastIndexOf('}');
+        if (start < 0 || end < start)
+        {
+            throw new InvalidOperationException("Model did not return a JSON object.");
+        }
+
+        return trimmed[start..(end + 1)];
+    }
+
+    private static string StripCodeFence(string text)
+    {
+        string trimmed = text.Trim();
+        if (!trimmed.StartsWith("```", StringComparison.Ordinal))
+        {
+            return trimmed;
+        }
+
+        int firstLineBreak = trimmed.IndexOf('\n', StringComparison.Ordinal);
+        int lastFence = trimmed.LastIndexOf("```", StringComparison.Ordinal);
+        if (firstLineBreak < 0 || lastFence <= firstLineBreak)
+        {
+            return trimmed;
+        }
+
+        return trimmed[(firstLineBreak + 1)..lastFence];
+    }
+
+    private static string SelectTargetCodeBlock(string fileContent, string patchArgument)
+    {
+        string[] lines = fileContent.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
+        string[] candidates = ExtractIdentifierCandidates(patchArgument);
+
+        foreach (string candidate in candidates)
+        {
+            for (int i = 0; i < lines.Length; i++)
+            {
+                if (!Regex.IsMatch(lines[i], $@"\b{Regex.Escape(candidate)}\b"))
+                {
+                    continue;
+                }
+
+                return SliceLines(lines, Math.Max(0, i - 25), Math.Min(lines.Length, i + 120));
             }
         }
 
-        fileContent = NormalizeGeneratedFileContent(string.Join('\n', lines[startIndex..endIndex]));
-        return fileContent.Length > 0;
+        const int maxPatchContextCharacters = 18_000;
+        if (fileContent.Length <= maxPatchContextCharacters)
+        {
+            return fileContent;
+        }
+
+        return fileContent[..maxPatchContextCharacters];
     }
 
-    private static bool LooksLikeProposedFileContent(string responseText)
+    private static string[] ExtractIdentifierCandidates(string text) =>
+        Regex.Matches(text, @"[A-Za-z_][A-Za-z0-9_]{2,}")
+            .Select(match => match.Value)
+            .Where(value => !CommonPlannerWords.Contains(value, StringComparer.OrdinalIgnoreCase))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+
+    private static readonly string[] CommonPlannerWords =
+    [
+        "the", "and", "for", "with", "from", "into", "replace", "update", "modify", "refactor",
+        "method", "class", "file", "code", "patch", "change", "implementation", "logic"
+    ];
+
+    private static string SliceLines(string[] lines, int start, int end)
     {
-        string normalized = responseText.ToLowerInvariant();
-        return normalized.Contains("```", StringComparison.Ordinal) ||
-               normalized.Contains("copy", StringComparison.Ordinal) ||
-               normalized.Contains("manually", StringComparison.Ordinal) ||
-               normalized.Contains("save", StringComparison.Ordinal) ||
-               normalized.Contains("here's the", StringComparison.Ordinal) ||
-               normalized.Contains("here is the", StringComparison.Ordinal);
+        var builder = new StringBuilder();
+        for (int i = start; i < end; i++)
+        {
+            builder.AppendLine(lines[i]);
+        }
+
+        return builder.ToString();
     }
 
-    private static string NormalizeGeneratedFileContent(string content)
+    private static string NormalizeAction(string action) =>
+        action.Trim().ToLowerInvariant().Replace("_", "-", StringComparison.Ordinal);
+
+    private static bool IsFailureResult(string result)
     {
-        string normalized = content.Trim();
-        return normalized.Length == 0 ? normalized : normalized + Environment.NewLine;
+        string trimmed = result.TrimStart();
+        return trimmed.StartsWith("Error:", StringComparison.OrdinalIgnoreCase) ||
+               trimmed.StartsWith("Rejected ", StringComparison.OrdinalIgnoreCase) ||
+               trimmed.Contains(" denied", StringComparison.OrdinalIgnoreCase) ||
+               trimmed.Contains(" failed", StringComparison.OrdinalIgnoreCase) ||
+               trimmed.Contains(" timed out", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static TextualToolCall? TryParseShellFence(string responseText)
+    private static string FirstLine(string text) =>
+        text.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n')[0];
+
+    private static string FormatTaskList(IReadOnlyList<AgentTask> tasks)
     {
-        var match = Regex.Match(
-            responseText,
-            @"```(?:shell|bash|sh|powershell|pwsh|console|terminal)?\s*\r?\n(?<command>[\s\S]*?)```",
-            RegexOptions.IgnoreCase);
-
-        if (!match.Success)
+        var builder = new StringBuilder();
+        builder.AppendLine("Planner produced this deterministic task list:");
+        foreach (AgentTask task in tasks)
         {
-            return null;
+            builder.AppendLine($"{task.Step}. {task.Action}: {task.Argument}");
         }
 
-        string command = match.Groups["command"].Value.Trim();
-        if (string.IsNullOrWhiteSpace(command))
-        {
-            return null;
-        }
-
-        return new TextualToolCall(
-            nameof(AgentTools.ExecuteShellCommandAsync),
-            new JsonObject
-            {
-                ["command"] = command,
-                ["workingDirectory"] = Environment.CurrentDirectory,
-                ["timeoutSeconds"] = 60
-            });
+        return builder.ToString().TrimEnd();
     }
 
-    private static TextualToolCall? TryParseSearchReplaceBlock(string responseText)
+    private static string FormatObservations(IEnumerable<TaskObservation> observations)
     {
-        TextualToolCall? aiderStyleCall = TryParseAiderSearchReplaceBlock(responseText);
-        if (aiderStyleCall is not null)
+        var builder = new StringBuilder();
+        foreach (TaskObservation observation in observations)
         {
-            return aiderStyleCall;
+            builder.AppendLine($"Step {observation.Step} {observation.Action} {observation.Argument}:");
+            builder.AppendLine(Truncate(observation.Result, 4_000));
+            builder.AppendLine();
         }
 
-        TextualToolCall? markdownCall = TryParseMarkdownSearchReplaceBlock(responseText);
-        if (markdownCall is not null)
-        {
-            return markdownCall;
-        }
-
-        return TryParseReplaceThisWithThisBlock(responseText);
+        return builder.Length == 0 ? "(none)" : builder.ToString();
     }
 
-    private static TextualToolCall? TryParseReplaceThisWithThisBlock(string responseText)
+    private static string BuildSuccessSummary(ExecutionResult result)
     {
-        Match match = Regex.Match(
-            responseText,
-            @"(?:replace\s+(?:this\s+)?(?:line|code|block)\s*:?)\s*```(?:[^\r\n`]*)?\r?\n(?<search>[\s\S]*?)\r?\n```\s*(?:with\s+(?:this\s+)?(?:animation\s+and\s+message|line|code|block)?\s*:?)\s*```(?:[^\r\n`]*)?\r?\n(?<replace>[\s\S]*?)\r?\n```",
-            RegexOptions.IgnoreCase);
-
-        if (!match.Success)
+        var builder = new StringBuilder();
+        builder.AppendLine("Execution completed.");
+        foreach (TaskObservation observation in result.Observations)
         {
-            return null;
+            builder.AppendLine($"- Step {observation.Step} {observation.Action}: {FirstLine(observation.Result)}");
         }
 
-        string? filePath = TryInferEditFilePath(responseText);
-        string search = match.Groups["search"].Value;
-        string replace = match.Groups["replace"].Value;
-        if (string.IsNullOrWhiteSpace(filePath) || string.IsNullOrEmpty(search))
-        {
-            return null;
-        }
-
-        return new TextualToolCall(
-            nameof(AgentTools.ApplySearchReplaceAsync),
-            new JsonObject
-            {
-                ["filePath"] = filePath,
-                ["search"] = search,
-                ["replace"] = replace
-            });
+        return builder.ToString().TrimEnd();
     }
 
-    private static TextualToolCall? TryParseDiffPatchBlock(string responseText)
+    private static string BuildFailureSummary(ExecutionResult result)
     {
-        Match match = Regex.Match(
-            responseText,
-            @"```diff\s*\r?\n(?<patch>[\s\S]*?)\r?\n```",
-            RegexOptions.IgnoreCase);
-
-        if (!match.Success)
-        {
-            return null;
-        }
-
-        string patch = match.Groups["patch"].Value.Trim();
-        if (string.IsNullOrWhiteSpace(patch) ||
-            !patch.Contains("--- ", StringComparison.Ordinal) ||
-            !patch.Contains("+++ ", StringComparison.Ordinal) ||
-            !patch.Contains("@@", StringComparison.Ordinal))
-        {
-            return null;
-        }
-
-        return new TextualToolCall(
-            nameof(AgentTools.ApplyDiffPatchAsync),
-            new JsonObject
-            {
-                ["patch"] = patch,
-                ["workingDirectory"] = Environment.CurrentDirectory
-            });
+        var builder = new StringBuilder();
+        builder.AppendLine("Execution stopped.");
+        builder.AppendLine(result.ErrorMessage ?? "A step failed.");
+        builder.AppendLine("No autonomous recovery loop was started.");
+        return builder.ToString().TrimEnd();
     }
 
-    private static bool LooksLikeUnavailableToolClaim(string responseText)
-    {
-        string normalized = responseText.ToLowerInvariant();
-        return normalized.Contains("tool", StringComparison.Ordinal) &&
-               (normalized.Contains("not available", StringComparison.Ordinal) ||
-                normalized.Contains("unavailable", StringComparison.Ordinal) ||
-                normalized.Contains("missing from the available", StringComparison.Ordinal) ||
-                normalized.Contains("missing from the current", StringComparison.Ordinal));
-    }
-
-    private static bool LooksLikeShellEditFallbackClaim(string responseText)
-    {
-        string normalized = responseText.ToLowerInvariant();
-        return normalized.Contains("executeshellcommandasync", StringComparison.Ordinal) &&
-               (normalized.Contains("fallback", StringComparison.Ordinal) ||
-                normalized.Contains("manually inject", StringComparison.Ordinal) ||
-                normalized.Contains("manual edit", StringComparison.Ordinal) ||
-                normalized.Contains("edit", StringComparison.Ordinal));
-    }
-
-    private static TextualToolCall? TryParseAiderSearchReplaceBlock(string responseText)
-    {
-        Match match = Regex.Match(
-            responseText,
-            @"(?<path>^[^\r\n<>`]+?)\s*\r?\n<<<<<<< SEARCH\r?\n(?<search>[\s\S]*?)\r?\n=======\r?\n(?<replace>[\s\S]*?)\r?\n>>>>>>> REPLACE",
-            RegexOptions.Multiline);
-
-        if (!match.Success)
-        {
-            return null;
-        }
-
-        string filePath = match.Groups["path"].Value.Trim();
-        string search = match.Groups["search"].Value;
-        string replace = match.Groups["replace"].Value;
-        if (string.IsNullOrWhiteSpace(filePath) || string.IsNullOrEmpty(search))
-        {
-            return null;
-        }
-
-        return new TextualToolCall(
-            nameof(AgentTools.ApplySearchReplaceAsync),
-            new JsonObject
-            {
-                ["filePath"] = filePath,
-                ["search"] = search,
-                ["replace"] = replace
-            });
-    }
-
-    private static TextualToolCall? TryParseMarkdownSearchReplaceBlock(string responseText)
-    {
-        Match match = Regex.Match(
-            responseText,
-            @"\*\*SEARCH\*\*\s*:?\s*```(?:[^\r\n`]*)?\r?\n(?<search>[\s\S]*?)\r?\n```\s*\*\*REPLACE\*\*\s*:?\s*```(?:[^\r\n`]*)?\r?\n(?<replace>[\s\S]*?)\r?\n```",
-            RegexOptions.IgnoreCase);
-
-        if (!match.Success)
-        {
-            return null;
-        }
-
-        string? filePath = TryInferEditFilePath(responseText);
-        string search = match.Groups["search"].Value;
-        string replace = match.Groups["replace"].Value;
-        if (string.IsNullOrWhiteSpace(filePath) || string.IsNullOrEmpty(search))
-        {
-            return null;
-        }
-
-        return new TextualToolCall(
-            nameof(AgentTools.ApplySearchReplaceAsync),
-            new JsonObject
-            {
-                ["filePath"] = filePath,
-                ["search"] = search,
-                ["replace"] = replace
-            });
-    }
-
-    private static string? TryInferEditFilePath(string responseText)
-    {
-        Match contextualMatch = Regex.Match(
-            responseText,
-            @"(?:file|in|to|target|edit|apply(?:ing)?(?:\s+this)?(?:\s+change)?(?:\s+to)?)\s*:?\s*`(?<path>[^`\r\n]+\.[A-Za-z0-9]+)`",
-            RegexOptions.IgnoreCase);
-        if (contextualMatch.Success)
-        {
-            return contextualMatch.Groups["path"].Value.Trim();
-        }
-
-        Match pathMatch = Regex.Match(
-            responseText,
-            @"(?<![`A-Za-z0-9_/\\.-])(?<path>[A-Za-z0-9_.-]+(?:[/\\][A-Za-z0-9_.-]+)*\.[A-Za-z0-9]+)(?![`A-Za-z0-9_/\\.-])");
-        return pathMatch.Success ? pathMatch.Groups["path"].Value.Trim() : null;
-    }
-
-    private static string? GetStringArgument(JsonObject arguments, string name)
-    {
-        JsonNode? node = arguments[name];
-        if (node is null)
-        {
-            return null;
-        }
-
-        try
-        {
-            return node.GetValue<string>();
-        }
-        catch
-        {
-            return node.ToJsonString();
-        }
-    }
-
-    private static int? GetIntArgument(JsonObject arguments, string name)
-    {
-        JsonNode? node = arguments[name];
-        if (node is null)
-        {
-            return null;
-        }
-
-        try
-        {
-            return node.GetValue<int>();
-        }
-        catch
-        {
-            return int.TryParse(node.ToString(), out int value) ? value : null;
-        }
-    }
-
-    private static bool? GetBoolArgument(JsonObject arguments, string name)
-    {
-        JsonNode? node = arguments[name];
-        if (node is null)
-        {
-            return null;
-        }
-
-        try
-        {
-            return node.GetValue<bool>();
-        }
-        catch
-        {
-            return bool.TryParse(node.ToString(), out bool value) ? value : null;
-        }
-    }
-
-    private sealed record TextualToolCall(string Name, JsonObject Arguments);
-
-    private string GetLatestModelQuestion()
-    {
-        for (int i = chatHistory.Count - 1; i >= 0; i--)
-        {
-            if (chatHistory[i].Role == ChatRole.User)
-            {
-                return chatHistory[i].Text;
-            }
-        }
-
-        return "(no user message in chat history)";
-    }
-
-    private void StoreLatestResponse(string responseText)
-    {
-        if (currentState == AgentState.Specifying)
-        {
-            latestSpecification = responseText;
-        }
-        else if (currentState == AgentState.Approaching)
-        {
-            latestApproach = responseText;
-        }
-    }
+    private static string Truncate(string text, int maxLength) =>
+        text.Length <= maxLength ? text : text[..Math.Max(0, maxLength - 3)] + "...";
 
     private async Task WriteUntrackedGreetingAsync()
     {
@@ -1522,7 +624,7 @@ internal sealed partial class PotatoSession
             ChatResponse greeting;
             using (PotatoConsole.StartProgress("Loading welcome message..."))
             {
-                greeting = await currentClient.GetResponseAsync(greetingMessages, new ChatOptions());
+                greeting = await currentOpenAiClient.GetResponseAsync(greetingMessages, CreateChatOptions(0.7));
             }
 
             PotatoConsole.WriteAgentResponse(greeting.Text);
@@ -1553,7 +655,7 @@ internal sealed partial class PotatoSession
 
     private void ArchiveCurrentSession()
     {
-        if (currentSessionNumber == 0 || chatHistory.Count <= 1)
+        if (currentSessionNumber == 0 || chatHistory.Count == 0)
         {
             currentSessionNumber = 0;
             currentSessionSubject = null;
@@ -1790,16 +892,8 @@ internal sealed partial class PotatoSession
     private void ResetConversationState()
     {
         ArchiveCurrentSession();
-        currentState = AgentState.Specifying;
-        reActMemory.Clear();
-        reActSubtaskTracker.Clear();
-        latestSpecification = null;
-        latestApproach = null;
-        latestUserRequest = null;
-        if (chatHistory.Count > 1)
-        {
-            chatHistory.RemoveRange(1, chatHistory.Count - 1);
-        }
+        executionMemory.Clear();
+        chatHistory.Clear();
     }
 
     private void SetUseCompiledDefaultPrompts(bool useCompiledDefaultsOnly)
@@ -1807,7 +901,6 @@ internal sealed partial class PotatoSession
         appSettingsStore.SetUseCompiledDefaultPrompts(useCompiledDefaultsOnly);
         PromptLibrary.SetUseCompiledDefaultsOnly(useCompiledDefaultsOnly);
         ResetConversationState();
-        chatHistory[0] = new ChatMessage(ChatRole.System, PromptLibrary.SystemPrompt);
     }
 
     private CancellationTokenSource BeginTaskCancellation()
@@ -1852,11 +945,24 @@ internal sealed partial class PotatoSession
         PotatoConsole.WriteStatus("Abort requested. Cancelling current task...");
     }
 
-    private enum ReActFallbackResult
+    private sealed class ExecutorContext
     {
-        None,
-        Prompted,
-        ExecutedTool
+        public string? LastReadFilePath { get; set; }
+        public string? LastReadFileContent { get; set; }
+    }
+
+    private sealed record TaskObservation(int Step, string Action, string Argument, string Result);
+
+    private sealed record ExecutionResult(
+        bool Success,
+        IReadOnlyList<TaskObservation> Observations,
+        string? ErrorMessage)
+    {
+        public static ExecutionResult Succeeded(IReadOnlyList<TaskObservation> observations) =>
+            new(true, observations, null);
+
+        public static ExecutionResult Failed(IReadOnlyList<TaskObservation> observations, string errorMessage) =>
+            new(false, observations, errorMessage);
     }
 
     private sealed record SessionTranscript(
