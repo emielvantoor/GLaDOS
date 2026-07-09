@@ -46,7 +46,7 @@ class Program
         PotatoConsole.WriteStartupBanner(gladosEndpoint, model);
 
 
-        var session = new PotatoSession(
+        var session = new PipelineSession(
             gladosEndpoint,
             openAiClient,
             clientFactory,

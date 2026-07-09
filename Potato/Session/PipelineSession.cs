@@ -9,7 +9,7 @@ using Potato.Tools;
 
 namespace Potato.Session;
 
-internal sealed class PotatoSession
+internal sealed class PipelineSession
 {
     private readonly Uri gladosEndpoint;
     private readonly GladosChatClientFactory clientFactory;
@@ -34,7 +34,7 @@ internal sealed class PotatoSession
     private DateTime currentSessionStartedAt;
     private CancellationTokenSource? currentTaskCancellationSource;
 
-    public PotatoSession(
+    public PipelineSession(
         Uri gladosEndpoint,
         IChatClient openAiClient,
         GladosChatClientFactory clientFactory,
