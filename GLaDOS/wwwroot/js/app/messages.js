@@ -1,24 +1,32 @@
     function getMessageText(messageElement) {
         const contentElement = messageElement.querySelector('.message-content');
-        return contentElement ? contentElement.innerText : messageElement.innerText;
+        const sourceElement = contentElement || messageElement;
+        const clone = sourceElement.cloneNode(true);
+        clone.querySelectorAll('.code-block-toolbar').forEach((toolbar) => toolbar.remove());
+        return clone.innerText;
+    }
+
+    async function writeClipboardText(text) {
+        if (navigator.clipboard && window.isSecureContext) {
+            await navigator.clipboard.writeText(text);
+            return;
+        }
+
+        const textarea = document.createElement('textarea');
+        textarea.value = text;
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand('copy');
+        textarea.remove();
     }
 
     async function copyMessageText(messageElement, copyButton) {
         const text = getMessageText(messageElement);
 
         try {
-            if (navigator.clipboard && window.isSecureContext) {
-                await navigator.clipboard.writeText(text);
-            } else {
-                const textarea = document.createElement('textarea');
-                textarea.value = text;
-                textarea.style.position = 'fixed';
-                textarea.style.opacity = '0';
-                document.body.appendChild(textarea);
-                textarea.select();
-                document.execCommand('copy');
-                textarea.remove();
-            }
+            await writeClipboardText(text);
 
             copyButton.textContent = 'Copied';
             window.setTimeout(() => {

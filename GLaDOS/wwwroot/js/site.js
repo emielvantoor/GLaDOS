@@ -20,6 +20,7 @@
         document.getElementById('inspectorToggle').addEventListener('click', toggleInspector);
         initializeTextFileComposer();
         initializeCollapsiblePanels();
+        initializeCodeBlockActions();
         initializeChats();
         await GLaDOSTools.renderToolList(document.getElementById('tools-list'), { endpoint: baseEndpoint });
         loadModels();
