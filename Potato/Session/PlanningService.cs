@@ -141,7 +141,13 @@ public class PlanningService(IEnumerable<IAgentTask> agentTasks)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
 
-    private async Task<string> BuildProjectMapAsync(string targetDirectory, IChatClient chatClient, CancellationToken cancellationToken)
+    public Task<string> BuildProjectMapAsync(
+        string targetDirectory,
+        IChatClient chatClient,
+        CancellationToken cancellationToken) =>
+        BuildProjectMapCoreAsync(targetDirectory, chatClient, cancellationToken);
+
+    private async Task<string> BuildProjectMapCoreAsync(string targetDirectory, IChatClient chatClient, CancellationToken cancellationToken)
     {
         var builder = new StringBuilder();
         builder.AppendLine($"ProjectMap root: {targetDirectory}");

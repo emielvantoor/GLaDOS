@@ -22,12 +22,14 @@ internal sealed class PipelineSession
     private readonly CurrentChatClientState chatClientState;
     private readonly PlanningService _planningService;
     private readonly ExecutionService _executionService;
+    private readonly ReActSession _reActSession;
     private readonly List<string> inputHistory = [];
     private readonly List<SessionTranscript> archivedSessions = [];
     private readonly List<ChatMessage> chatHistory = [];
     private readonly object taskCancellationLock = new();
 
     private IChatClient currentOpenAiClient;
+    private ExecutionMode executionMode;
     private int nextSessionNumber = 1;
     private int currentSessionNumber;
     private string? currentSessionSubject;
@@ -45,7 +47,8 @@ internal sealed class PipelineSession
         ExecutionMemory executionMemory,
         CurrentChatClientState chatClientState,
         PlanningService planningService,
-        ExecutionService executionService)
+        ExecutionService executionService,
+        ReActSession reActSession)
     {
         this.gladosEndpoint = gladosEndpoint;
         this.clientFactory = clientFactory;
@@ -57,7 +60,9 @@ internal sealed class PipelineSession
         this.chatClientState = chatClientState;
         _planningService = planningService;
         _executionService = executionService;
+        _reActSession = reActSession;
         currentOpenAiClient = openAiClient;
+        executionMode = ParseExecutionMode(options.ExecutionMode);
     }
 
     public async Task RunAsync()
@@ -76,6 +81,8 @@ internal sealed class PipelineSession
             appSettingsStore.SetSelectedModel,
             HandleTranscriptCommand,
             WriteSessions,
+            GetExecutionMode,
+            SetExecutionMode,
             () => currentOpenAiClient,
             SwitchModel);
 
@@ -136,6 +143,12 @@ internal sealed class PipelineSession
 
         try
         {
+            if (executionMode == ExecutionMode.ReAct)
+            {
+                await HandleUserGoalWithReActAsync(expandedGoal, cancellationToken);
+                return;
+            }
+
             List<AgentTask>? plan = await ReviewPlanAsync(expandedGoal, currentOpenAiClient, cancellationToken);
             if (plan is null)
             {
@@ -169,6 +182,24 @@ internal sealed class PipelineSession
         {
             EndTaskCancellation(taskCancellationSource);
         }
+    }
+
+    private async Task HandleUserGoalWithReActAsync(string expandedGoal, CancellationToken cancellationToken)
+    {
+        List<AgentTask>? plan = await ReviewPlanAsync(expandedGoal, currentOpenAiClient, cancellationToken);
+        if (plan is null)
+        {
+            string abortedMessage = "Plan was aborted. No ReAct execution was started.";
+            chatHistory.Add(new ChatMessage(ChatRole.Assistant, abortedMessage));
+            PotatoConsole.WriteStatus(abortedMessage);
+            ResetConversationState();
+            return;
+        }
+
+        string finalMessage = await _reActSession.ExecuteAsync(expandedGoal, plan, currentOpenAiClient, cancellationToken);
+        chatHistory.Add(new ChatMessage(ChatRole.Assistant, finalMessage));
+        PotatoConsole.WriteAgentResponse(finalMessage);
+        ResetConversationState();
     }
 
     private async Task<List<AgentTask>?> ReviewPlanAsync(
@@ -324,7 +355,6 @@ internal sealed class PipelineSession
         return builder.ToString().TrimEnd();
     }
 
-
     private async Task WriteUntrackedGreetingAsync()
     {
         try
@@ -354,6 +384,24 @@ internal sealed class PipelineSession
     {
         currentOpenAiClient = selectedOpenAiClient;
         chatClientState.SetOpenAiClient(selectedOpenAiClient);
+    }
+
+    private string GetExecutionMode() =>
+        executionMode == ExecutionMode.ReAct ? "react" : "pipeline";
+
+    private void SetExecutionMode(string mode)
+    {
+        executionMode = ParseExecutionMode(mode);
+        appSettingsStore.SetExecutionMode(GetExecutionMode());
+        ResetConversationState();
+    }
+
+    private static ExecutionMode ParseExecutionMode(string? mode)
+    {
+        string normalized = mode?.Trim().ToLowerInvariant() ?? string.Empty;
+        return normalized is "react" or "re-act" or "loop"
+            ? ExecutionMode.ReAct
+            : ExecutionMode.Pipeline;
     }
 
     private void EnsureCurrentSession(string firstUserInput)
@@ -669,4 +717,10 @@ internal sealed class PipelineSession
         string Subject,
         DateTime StartedAt,
         IReadOnlyList<ChatMessage> Messages);
+
+    private enum ExecutionMode
+    {
+        Pipeline,
+        ReAct
+    }
 }

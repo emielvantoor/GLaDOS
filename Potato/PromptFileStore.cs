@@ -21,6 +21,11 @@ internal sealed class PromptFileStore
 
         Directory.CreateDirectory(promptDirectory);
         string path = Path.Combine(promptDirectory, fileName);
+        string? fileDirectory = Path.GetDirectoryName(path);
+        if (!string.IsNullOrWhiteSpace(fileDirectory))
+        {
+            Directory.CreateDirectory(fileDirectory);
+        }
 
         if (!File.Exists(path))
         {

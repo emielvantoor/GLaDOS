@@ -22,6 +22,7 @@ class Program
         services.AddSingleton<CurrentChatClientState>();
         services.AddSingleton<ExecutionService>();
         services.AddSingleton<PlanningService>();
+        services.AddSingleton<ReActSession>();
         services.AddSingleton<AgentTools>();
         services.AddSingleton<ExecutionMemory>();
 
@@ -57,7 +58,8 @@ class Program
             provider.GetRequiredService<ExecutionMemory>(),
             provider.GetRequiredService<CurrentChatClientState>(),
             provider.GetRequiredService<PlanningService>(),
-            provider.GetRequiredService<ExecutionService>()
+            provider.GetRequiredService<ExecutionService>(),
+            provider.GetRequiredService<ReActSession>()
         );
 
         await session.RunAsync();
