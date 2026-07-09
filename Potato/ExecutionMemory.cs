@@ -52,6 +52,22 @@ public sealed class ExecutionMemory
             : FormatItem(item, full);
     }
 
+    public string GetRange(int startIndex, int endIndex, bool full = false)
+    {
+        ExecutionMemoryItem[] range = items
+            .Where(item => item.Index >= startIndex && item.Index < endIndex)
+            .ToArray();
+
+        if (range.Length == 0)
+        {
+            return "No new collected context is available.";
+        }
+
+        return string.Join(
+            Environment.NewLine + Environment.NewLine,
+            range.Select(item => FormatItem(item, full)));
+    }
+
     public async Task SummarizeLargeUnsummarizedItemsAsync(
         IChatClient summarizerClient,
         CancellationToken cancellationToken = default)

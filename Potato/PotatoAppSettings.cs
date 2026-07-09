@@ -8,12 +8,15 @@ public sealed class PotatoAppSettings
     public bool UseCompiledDefaultPrompts { get; init; }
 
     public string? SelectedModel { get; init; }
+
+    public string? ExecutionMode { get; init; }
 }
 
 public sealed class PotatoAppSettingsStore
 {
     private const string UseCompiledDefaultPromptsProperty = "UseCompiledDefaultPrompts";
     private const string SelectedModelProperty = "SelectedModel";
+    private const string ExecutionModeProperty = "ExecutionMode";
     private readonly string path;
 
     public PotatoAppSettingsStore(string path)
@@ -29,7 +32,8 @@ public sealed class PotatoAppSettingsStore
         return new PotatoAppSettings
         {
             UseCompiledDefaultPrompts = GetBool(root, UseCompiledDefaultPromptsProperty),
-            SelectedModel = GetString(root, SelectedModelProperty)
+            SelectedModel = GetString(root, SelectedModelProperty),
+            ExecutionMode = NormalizeExecutionMode(GetString(root, ExecutionModeProperty))
         };
     }
 
@@ -44,6 +48,13 @@ public sealed class PotatoAppSettingsStore
     {
         JsonObject root = LoadRoot();
         root[SelectedModelProperty] = model;
+        SaveRoot(root);
+    }
+
+    public void SetExecutionMode(string mode)
+    {
+        JsonObject root = LoadRoot();
+        root[ExecutionModeProperty] = NormalizeExecutionMode(mode) ?? "pipeline";
         SaveRoot(root);
     }
 
@@ -114,5 +125,16 @@ public sealed class PotatoAppSettingsStore
             string value = node.ToString();
             return string.IsNullOrWhiteSpace(value) ? null : value;
         }
+    }
+
+    private static string? NormalizeExecutionMode(string? mode)
+    {
+        string normalized = mode?.Trim().ToLowerInvariant() ?? string.Empty;
+        return normalized switch
+        {
+            "react" or "re-act" or "loop" => "react",
+            "pipeline" or "plan" or "deterministic" => "pipeline",
+            _ => null
+        };
     }
 }

@@ -336,6 +336,7 @@ internal static class PotatoConsole
         Console.WriteLine("  /model          Show model selection and switch models");
         Console.WriteLine("  /cd path        Change directory; Left/Right cycle completions, Enter accepts");
         Console.WriteLine("  /ask question   Ask a side question without changing chat history");
+        Console.WriteLine("  /mode           Show or change execution mode: status, pipeline, react");
         Console.WriteLine("  /prompts        Show or change prompt source: status, defaults, external");
         Console.WriteLine("  /sessions       List tracked sessions");
         Console.WriteLine("  /transcript     Show or save a tracked session transcript");
