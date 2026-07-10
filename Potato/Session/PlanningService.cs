@@ -175,10 +175,16 @@ public class PlanningService(IEnumerable<IAgentTask> agentTasks)
                 cancellationToken.ThrowIfCancellationRequested();
                 FileInfo file = files[index];
                 string relativePath = ToRelativeProjectMapPath(targetDirectory, file.FullName);
-                ProjectMapCacheEntry? cachedEntry = GetValidProjectMapCacheEntry(cache, relativePath, file, promptHash);
+                string fileHash = await ComputeFileHashAsync(file.FullName, cancellationToken);
+                ProjectMapCacheEntry? cachedEntry = GetValidProjectMapCacheEntry(cache, relativePath, fileHash, promptHash);
                 if (cachedEntry is not null)
                 {
                     progress.Update(BuildProjectMapProgressMessage(index + 1, files.Length, relativePath, cached: true));
+                    if (UpdateProjectMapCacheEntry(cache, relativePath, file, fileHash, promptHash, cachedEntry.Summary))
+                    {
+                        SaveProjectMapCache(cachePath, cache);
+                    }
+
                     AppendProjectMapSummary(builder, relativePath, cachedEntry.Summary);
                     continue;
                 }
@@ -191,6 +197,7 @@ public class PlanningService(IEnumerable<IAgentTask> agentTasks)
                 {
                     LastWriteTimeUtcTicks = file.LastWriteTimeUtc.Ticks,
                     Length = file.Length,
+                    FileHash = fileHash,
                     PromptHash = promptHash,
                     Summary = summary
                 };
@@ -312,7 +319,7 @@ public class PlanningService(IEnumerable<IAgentTask> agentTasks)
     private static ProjectMapCacheEntry? GetValidProjectMapCacheEntry(
         ProjectMapCache cache,
         string relativePath,
-        FileInfo file,
+        string fileHash,
         string promptHash)
     {
         if (!cache.Entries.TryGetValue(relativePath, out ProjectMapCacheEntry? entry))
@@ -320,12 +327,40 @@ public class PlanningService(IEnumerable<IAgentTask> agentTasks)
             return null;
         }
 
-        return entry.LastWriteTimeUtcTicks == file.LastWriteTimeUtc.Ticks &&
-               entry.Length == file.Length &&
+        return string.Equals(entry.FileHash, fileHash, StringComparison.Ordinal) &&
                string.Equals(entry.PromptHash, promptHash, StringComparison.Ordinal) &&
                !string.IsNullOrWhiteSpace(entry.Summary)
             ? entry
             : null;
+    }
+
+    private static bool UpdateProjectMapCacheEntry(
+        ProjectMapCache cache,
+        string relativePath,
+        FileInfo file,
+        string fileHash,
+        string promptHash,
+        string summary)
+    {
+        if (cache.Entries.TryGetValue(relativePath, out ProjectMapCacheEntry? entry) &&
+            entry.LastWriteTimeUtcTicks == file.LastWriteTimeUtc.Ticks &&
+            entry.Length == file.Length &&
+            string.Equals(entry.FileHash, fileHash, StringComparison.Ordinal) &&
+            string.Equals(entry.PromptHash, promptHash, StringComparison.Ordinal) &&
+            string.Equals(entry.Summary, summary, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        cache.Entries[relativePath] = new ProjectMapCacheEntry
+        {
+            LastWriteTimeUtcTicks = file.LastWriteTimeUtc.Ticks,
+            Length = file.Length,
+            FileHash = fileHash,
+            PromptHash = promptHash,
+            Summary = summary
+        };
+        return true;
     }
 
     private static ProjectMapCache LoadProjectMapCache(string cachePath)
@@ -386,6 +421,13 @@ public class PlanningService(IEnumerable<IAgentTask> agentTasks)
 
     private static string ComputeHash(string value) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value)));
+
+    private static async Task<string> ComputeFileHashAsync(string filePath, CancellationToken cancellationToken)
+    {
+        await using FileStream stream = File.OpenRead(filePath);
+        byte[] hash = await SHA256.HashDataAsync(stream, cancellationToken);
+        return Convert.ToHexString(hash);
+    }
 
     private static List<AgentTask> EnsureInstructionReadsBeforeImplementation(
         IReadOnlyList<AgentTask> tasks,
@@ -672,6 +714,8 @@ public class PlanningService(IEnumerable<IAgentTask> agentTasks)
         public long LastWriteTimeUtcTicks { get; init; }
 
         public long Length { get; init; }
+
+        public string FileHash { get; init; } = string.Empty;
 
         public string PromptHash { get; init; } = string.Empty;
 

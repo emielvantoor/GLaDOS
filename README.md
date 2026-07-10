@@ -58,3 +58,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - The Potato directory contains utility functions for common operations
 
 For more information about the agent system, see [agents.md](agents.md).
+
+## Language Models
+- **Location**: The appsettings of GLaDOS contain a setting to specify the target path of where the models are located.
+- **Format**: Only GGUF format is currently working with Qwen compatible models.
