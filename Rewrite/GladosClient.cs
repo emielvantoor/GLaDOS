@@ -9,7 +9,7 @@ internal sealed class GladosClient(HttpClient httpClient, string model)
     public static GladosClient FromEnvironment()
     {
         string endpoint = Environment.GetEnvironmentVariable("GLADOS_OPENAI_ENDPOINT") ?? "http://localhost:11434/v1";
-        string model = Environment.GetEnvironmentVariable("GLADOS_MODEL") ?? "phi-silica";
+        string model = Environment.GetEnvironmentVariable("GLADOS_MODEL") ?? "Qwen3-8B-Q4_K_M";
         var httpClient = new HttpClient
         {
             BaseAddress = new Uri(endpoint.TrimEnd('/') + "/")

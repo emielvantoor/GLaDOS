@@ -2,37 +2,30 @@ namespace Rewrite;
 
 internal static class Program
 {
-    private static async Task Main()
+    private static async Task Main(string[] args)
     {
         var client = GladosClient.FromEnvironment();
         var translator = new CommandTranslator(client);
 
         Console.WriteLine("Rewrite - translate wise input into shell commands.");
-        Console.WriteLine("Type a request, or 'exit' to quit.");
+        Console.WriteLine("Usage: Rewrite.exe <wise>");
 
-        while (true)
+        var wise = string.Join(" ", args);
+        Console.WriteLine("Wise: " + wise);
+
+        if (string.IsNullOrWhiteSpace(wise))
         {
-            Console.Write("> ");
-            string? input = Console.ReadLine();
-            if (string.IsNullOrWhiteSpace(input))
-            {
-                continue;
-            }
-
-            if (input.Equals("exit", StringComparison.OrdinalIgnoreCase) ||
-                input.Equals("quit", StringComparison.OrdinalIgnoreCase))
-            {
-                return;
-            }
-
-            CommandTranslationResult result = await translator.TranslateAsync(input);
-            if (!result.Success)
-            {
-                Console.WriteLine($"Could not translate request: {result.Error}");
-                continue;
-            }
-
-            Console.WriteLine(result.Command);
+            Console.WriteLine("Empty wise, unable to translate");
+            return;
         }
+        
+        CommandTranslationResult result = await translator.TranslateAsync(wise);
+        if (!result.Success)
+        {
+            Console.WriteLine($"Could not translate request: {result.Error}");
+            return;
+        }
+
+        Console.WriteLine(result.Command);
     }
 }

@@ -4,11 +4,6 @@ internal sealed class CommandTranslator(GladosClient gladosClient)
 {
     public async Task<CommandTranslationResult> TranslateAsync(string wise)
     {
-        if (CommandTemplates.TryTranslate(wise, out string? knownCommand))
-        {
-            return CommandTranslationResult.Translated(knownCommand!);
-        }
-
         bool understood = await gladosClient.CanUnderstandAsync(wise);
         if (!understood)
         {
