@@ -165,6 +165,7 @@ internal static class PotatoConsole
         Console.WriteLine();
         Console.ForegroundColor = ConsoleColor.DarkGray;
         Console.WriteLine("  Tips: Type @path/to/file to attach file contents to your message.");
+        Console.WriteLine("        Use Alt + Enter to add new line");
         Console.ResetColor();
         WriteSeparator();
         Console.ForegroundColor = ConsoleColor.DarkGray;
