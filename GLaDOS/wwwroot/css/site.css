@@ -9,6 +9,10 @@
     --border-color: #aeb8b0;
     --title-color: #171a18;
     --status-color: #66706b;
+    --portal-orange: #f47c20;
+    --portal-orange-hover: #d95f0a;
+    --portal-blue: #00a1e4;
+    --portal-blue-hover: #087fb4;
     --accent-color: #f47c20;
     --accent-hover: #d95f0a;
     --accent-secondary: #00a1e4;
@@ -35,6 +39,10 @@
     --border-color: #3c4740;
     --title-color: #fbf7ea;
     --status-color: #aab4ad;
+    --portal-orange: #ff7f1f;
+    --portal-orange-hover: #ffa348;
+    --portal-blue: #00a7e1;
+    --portal-blue-hover: #33c2f3;
     --accent-color: #ff7f1f;
     --accent-hover: #ffa348;
     --accent-secondary: #00a7e1;
@@ -633,23 +641,37 @@ button#submitBtn:disabled {
 .chat-list-item {
     width: 100%;
     min-width: 0;
-    border: 1px solid transparent;
+    border: 1px solid color-mix(in srgb, var(--portal-blue) 14%, transparent);
     border-radius: 6px;
-    background: transparent;
+    background:
+        linear-gradient(90deg, color-mix(in srgb, var(--portal-blue) 7%, transparent), transparent 54%),
+        transparent;
     color: var(--text-main);
     cursor: pointer;
     padding: 8px 9px;
     text-align: left;
+    transition: background-color 0.16s, border-color 0.16s, box-shadow 0.16s;
 }
 
 .chat-list-item:hover {
-    background: var(--surface-color);
+    border-color: color-mix(in srgb, var(--portal-blue) 42%, transparent);
+    background:
+        linear-gradient(90deg, color-mix(in srgb, var(--portal-blue) 14%, transparent), transparent 62%),
+        var(--surface-color);
 }
 
 .chat-list-item.active {
-    border-color: color-mix(in srgb, var(--accent-color) 45%, transparent);
-    background: color-mix(in srgb, var(--accent-color) 12%, transparent);
-    box-shadow: inset 3px 0 0 var(--accent-color);
+    border-color: color-mix(in srgb, var(--portal-blue) 55%, transparent);
+    background:
+        linear-gradient(90deg, color-mix(in srgb, var(--portal-blue) 18%, transparent), transparent 66%),
+        color-mix(in srgb, var(--portal-orange) 7%, transparent);
+    box-shadow:
+        inset 3px 0 0 var(--portal-blue),
+        inset 0 1px 0 color-mix(in srgb, var(--portal-orange) 44%, transparent);
+}
+
+.chat-list-item.active .chat-list-title {
+    color: color-mix(in srgb, var(--portal-blue) 72%, var(--text-main));
 }
 
 .chat-list-title {
