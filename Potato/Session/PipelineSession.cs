@@ -138,6 +138,12 @@ internal sealed class PipelineSession
         using CancellationTokenSource taskCancellationSource = BeginTaskCancellation();
         CancellationToken cancellationToken = taskCancellationSource.Token;
         string expandedGoal = fileMentionExpander.Expand(userInput);
+        if (IsNonActionableUserInput(userInput))
+        {
+            PotatoConsole.WriteAgentResponse("How can I help?");
+            return;
+        }
+
         EnsureCurrentSession(userInput);
         chatHistory.Add(new ChatMessage(ChatRole.User, expandedGoal));
 
@@ -245,6 +251,12 @@ internal sealed class PipelineSession
     {
         string normalized = input.Trim().Trim('.', '!', '?').ToLowerInvariant();
         return normalized is "abort" or "cancel" or "stop" or "no" or "n";
+    }
+
+    private static bool IsNonActionableUserInput(string input)
+    {
+        string normalized = input.Trim().Trim('.', '!', '?').ToLowerInvariant();
+        return normalized is "test" or "testing" or "ping" or "hello" or "hi" or "hey";
     }
 
     private static string BuildReplanGoal(string originalGoal, string previousPlan, string correction) =>

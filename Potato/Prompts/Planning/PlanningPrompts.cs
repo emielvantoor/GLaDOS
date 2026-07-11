@@ -36,11 +36,13 @@ internal static partial class PromptLibrary
         - If a file path is not listed as a "File:" entry in Workspace context, assume it is not available to read during planning.
         - Never invent files, folders, types, methods, tests, or project structure.
         - A read task argument must exactly match a "File:" path shown in Workspace context. Do not read a path that is only implied by a directory, project name, ProjectMap root, or user wording.
-        - For repository-wide documentation requests, such as creating, expanding, improving, or updating a root README, first use inspect-project with "." to gather the repository structure before choosing specific files to read.
-        - For repository-wide documentation requests, read the existing target documentation file when it appears in Workspace context. Also read the most relevant repository guidance, manifests, and feature documentation that appear in Workspace context, such as agents.md, README.md, *.sln, *.csproj, package.json, pyproject.toml, Cargo.toml, go.mod, FEATURE.md, or docs/*.md. Prefer a small representative set over every source file.
-        - For repository-wide documentation requests, the documentation-changing step must be write-documentation when that action is supported. Use apply-patch only for a narrow localized documentation edit. Do not use write-report as the only documentation-producing action.
-        - For repository-wide documentation requests where the root README.md is absent from Workspace context, do not read a guessed README path. First use inspect-project with ".", then create-file "README.md", then write-documentation "README.md" when write-documentation is supported.
-        - For "write a README for the current repository" when root README.md is absent: the valid plan is inspect-project "." followed by create-file "README.md", write-documentation "README.md", and write-report. The invalid plan is read "README.md", "GLaDOS/README.md", or any other README path not listed as a "File:" entry.
+        - Only plan documentation changes when the user explicitly asks to create, write, rewrite, expand, improve, update, or edit documentation, README, docs, guides, architecture notes, specs, or Markdown content. Do not infer documentation work from vague, test, greeting, placeholder, or single-word input.
+        - If the user request is not an actionable repository task, return a single write-report task that asks what they want help with. Do not inspect the project or edit files.
+        - For explicit repository-wide documentation requests, such as creating, expanding, improving, or updating a root README, first use inspect-project with "." to gather the repository structure before choosing specific files to read.
+        - For explicit repository-wide documentation requests, read the existing target documentation file when it appears in Workspace context. Also read the most relevant repository guidance, manifests, and feature documentation that appear in Workspace context, such as agents.md, README.md, *.sln, *.csproj, package.json, pyproject.toml, Cargo.toml, go.mod, FEATURE.md, or docs/*.md. Prefer a small representative set over every source file.
+        - For explicit repository-wide documentation requests, the documentation-changing step must be write-documentation when that action is supported. Use apply-patch only for a narrow localized documentation edit. Do not use write-report as the only documentation-producing action.
+        - For explicit repository-wide documentation requests where the root README.md is absent from Workspace context, do not read a guessed README path. First use inspect-project with ".", then create-file "README.md", then write-documentation "README.md" when write-documentation is supported.
+        - For the explicit request "write a README for the current repository" when root README.md is absent: the valid plan is inspect-project "." followed by create-file "README.md", write-documentation "README.md", and write-report. The invalid plan is read "README.md", "GLaDOS/README.md", or any other README path not listed as a "File:" entry.
         - After write-documentation changes an existing documentation file, read that file again before write-report so the final report can mention what was produced and catch obvious omissions.
         - Before planning implementation work, check Workspace context for instruction or feature files near the target area, such as AGENTS.md, agents.md, FEATURE.md, README.md, CONTRIBUTING.md, .github/copilot-instructions.md, .github/instructions.md, .github/features/*.md, or docs/*.md.
         - If an instruction or feature file appears relevant to the requested target area, read it before planning create-file or apply-patch steps.
@@ -74,17 +76,9 @@ internal static partial class PromptLibrary
           {"Step":3,"Action":"write-report","Argument":"Summarize the backend TypeScript change and any verification result.","Reason":"Give the user a natural final report."}
         ]
 
-        Repository README example:
+        Non-actionable input example:
         [
-          {"Step":1,"Action":"inspect-project","Argument":".","Reason":"Build a repository-wide overview before changing root documentation."},
-          {"Step":2,"Action":"read","Argument":"README.md","Reason":"Inspect the existing README so useful content is preserved and gaps are identified."},
-          {"Step":3,"Action":"read","Argument":"agents.md","Reason":"Read repository-level agent or architecture guidance relevant to the README."},
-          {"Step":4,"Action":"read","Argument":"GLaDOS.sln","Reason":"Identify the solution structure and included projects."},
-          {"Step":5,"Action":"read","Argument":"GLaDOS/GLaDOS.csproj","Reason":"Understand the main application framework, dependencies, and project references."},
-          {"Step":6,"Action":"read","Argument":"Potato/FEATURE.md","Reason":"Capture feature-level details for a major repository component."},
-          {"Step":7,"Action":"write-documentation","Argument":"Target file: README.md\nRequirements: Expand the README with a grounded project overview, architecture, project layout, major components, setup, build/run commands, configuration notes, and links to relevant docs based only on inspected files.","Reason":"Rewrite the README using the dedicated documentation task."},
-          {"Step":8,"Action":"read","Argument":"README.md","Reason":"Review the generated README before reporting completion."},
-          {"Step":9,"Action":"write-report","Argument":"Summarize the README update, source files inspected, and any remaining documentation gaps.","Reason":"Give the user a concise final report."}
+          {"Step":1,"Action":"write-report","Argument":"Ask the user what they want help with. Do not mention files or claim any repository work was done.","Reason":"The request is not an actionable repository task."}
         ]
         """);
 
