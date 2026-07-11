@@ -36,7 +36,7 @@ GLaDOS.sln         # Solution file for multi-project management
 ```
 
 ## Getting Started
-1. **Prerequisites**: Install [.NET SDK](https://dotnet.microsoft.com/download)
+1. **Prerequisites**: Install [.NET SDK v8.0.100](https://dotnet.microsoft.com/download/dotnet/8.0) (minimum version required)
 2. **Clone Repository**: 
    ```bash
    git clone https://github.com/yourusername/jarvis.git
@@ -49,6 +49,9 @@ GLaDOS.sln         # Solution file for multi-project management
    ```bash
    dotnet build GLaDOS/GLaDOS.csproj --no-restore /p:AllowMissingPrunePackageData=true /p:NuGetAudit=false -m:1 -v:minimal
    ```
+   > ⚠️ This build command requires .NET SDK v8.0.100 with the following dependencies:
+   > - Microsoft.AspNetCore.App 8.0.0
+   > - System.Text.Json 8.0.0
 5. **Run Application**: 
    ```bash
    dotnet run --project GLaDOS

@@ -1551,28 +1551,53 @@ public class AgentTools(ExecutionMemory memory, CurrentChatClientState chatClien
         string[] replaceLines = NormalizeLines(replace);
         if (searchLines.Length == 1 && replaceLines.Length == 1)
         {
+            if (searchLines[0].Equals(replaceLines[0], StringComparison.Ordinal))
+            {
+                return ["No line changes."];
+            }
+
             return [$"1 - {searchLines[0]}", $"1 + {replaceLines[0]}"];
         }
 
         var lines = new List<string>();
         int maxLines = Math.Max(searchLines.Length, replaceLines.Length);
-        int visibleLines = Math.Min(maxLines, 20);
-        for (int i = 0; i < visibleLines; i++)
+        int changedLines = 0;
+        for (int i = 0; i < maxLines; i++)
         {
-            if (i < searchLines.Length)
+            string? searchLine = i < searchLines.Length ? searchLines[i] : null;
+            string? replaceLine = i < replaceLines.Length ? replaceLines[i] : null;
+            if (searchLine is not null &&
+                replaceLine is not null &&
+                searchLine.Equals(replaceLine, StringComparison.Ordinal))
             {
-                lines.Add($"{i + 1} - {searchLines[i]}");
+                continue;
             }
 
-            if (i < replaceLines.Length)
+            changedLines++;
+            if (changedLines > 20)
             {
-                lines.Add($"{i + 1} + {replaceLines[i]}");
+                continue;
+            }
+
+            if (searchLine is not null)
+            {
+                lines.Add($"{i + 1} - {searchLine}");
+            }
+
+            if (replaceLine is not null)
+            {
+                lines.Add($"{i + 1} + {replaceLine}");
             }
         }
 
-        if (maxLines > visibleLines)
+        if (changedLines == 0)
         {
-            lines.Add($"... {maxLines - visibleLines} more changed line(s)");
+            return ["No line changes."];
+        }
+
+        if (changedLines > 20)
+        {
+            lines.Add($"... {changedLines - 20} more changed line(s)");
         }
 
         return lines;

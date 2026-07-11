@@ -1,3 +1,4 @@
+using System.Text;
 using Microsoft.Extensions.AI;
 
 namespace Potato;
@@ -201,132 +202,179 @@ internal static class PotatoConsole
         int cursorIndex = 0;
         int historyIndex = history.Count;
         string draftInput = string.Empty;
-        int renderedLength = placeholderLength;
+        int renderedLength = placeholderLength > 0 ? 1 : 0;
         int inlineCompletionIndex = 0;
         string inlineCompletionKey = string.Empty;
 
-        while (true)
+        EnableBracketedPaste();
+        try
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (cancellationToken.CanBeCanceled && !Console.KeyAvailable)
+            while (true)
             {
-                Thread.Sleep(50);
-                continue;
-            }
+                cancellationToken.ThrowIfCancellationRequested();
+                if (cancellationToken.CanBeCanceled && !Console.KeyAvailable)
+                {
+                    Thread.Sleep(50);
+                    continue;
+                }
 
-            ConsoleKeyInfo key = Console.ReadKey(intercept: true);
+                ConsoleKeyInfo key = Console.ReadKey(intercept: true);
 
-            switch (key.Key)
-            {
-                case ConsoleKey.Enter:
-                    NormalizeInlineCompletionCycle(buffer, cursorIndex, ref inlineCompletionKey, ref inlineCompletionIndex);
-                    if (TryGetInlineCompletion(buffer, cursorIndex, inlineCompletionIndex, out InlineCompletionCandidate? completion) &&
-                        completion is not null)
-                    {
-                        int replacementStart = Math.Clamp(completion.ReplacementStart, 0, cursorIndex);
-                        buffer.RemoveRange(replacementStart, cursorIndex - replacementStart);
-                        buffer.InsertRange(replacementStart, completion.ReplacementText);
-                        cursorIndex = replacementStart + completion.ReplacementText.Length;
-                        inlineCompletionIndex = 0;
-                        inlineCompletionKey = string.Empty;
-                        RedrawInputLine(buffer, cursorIndex, inputLeft, inputTop, placeholder, inlineCompletionIndex, ref renderedLength);
-                        break;
-                    }
-
-                    Console.WriteLine();
-                    WriteSeparator();
-                    Console.WriteLine();
-                    return new string(buffer.ToArray());
-
-                case ConsoleKey.Backspace:
-                    if (cursorIndex > 0)
-                    {
-                        buffer.RemoveAt(cursorIndex - 1);
-                        cursorIndex--;
-                        NormalizeInlineCompletionCycle(buffer, cursorIndex, ref inlineCompletionKey, ref inlineCompletionIndex);
-                        RedrawInputLine(buffer, cursorIndex, inputLeft, inputTop, placeholder, inlineCompletionIndex, ref renderedLength);
-                    }
-                    break;
-
-                case ConsoleKey.Delete:
-                    if (cursorIndex < buffer.Count)
-                    {
-                        buffer.RemoveAt(cursorIndex);
-                        NormalizeInlineCompletionCycle(buffer, cursorIndex, ref inlineCompletionKey, ref inlineCompletionIndex);
-                        RedrawInputLine(buffer, cursorIndex, inputLeft, inputTop, placeholder, inlineCompletionIndex, ref renderedLength);
-                    }
-                    break;
-
-                case ConsoleKey.LeftArrow:
-                    if (TryCycleInlineCompletion(buffer, cursorIndex, -1, ref inlineCompletionKey, ref inlineCompletionIndex))
-                    {
-                        RedrawInputLine(buffer, cursorIndex, inputLeft, inputTop, placeholder, inlineCompletionIndex, ref renderedLength);
-                    }
-                    else if (cursorIndex > 0)
-                    {
-                        cursorIndex--;
-                        RedrawInputLine(buffer, cursorIndex, inputLeft, inputTop, placeholder, inlineCompletionIndex, ref renderedLength);
-                    }
-                    break;
-
-                case ConsoleKey.RightArrow:
-                    if (TryCycleInlineCompletion(buffer, cursorIndex, 1, ref inlineCompletionKey, ref inlineCompletionIndex))
-                    {
-                        RedrawInputLine(buffer, cursorIndex, inputLeft, inputTop, placeholder, inlineCompletionIndex, ref renderedLength);
-                    }
-                    else if (cursorIndex < buffer.Count)
-                    {
-                        cursorIndex++;
-                        RedrawInputLine(buffer, cursorIndex, inputLeft, inputTop, placeholder, inlineCompletionIndex, ref renderedLength);
-                    }
-                    break;
-
-                case ConsoleKey.Home:
-                    cursorIndex = 0;
-                    RedrawInputLine(buffer, cursorIndex, inputLeft, inputTop, placeholder, inlineCompletionIndex, ref renderedLength);
-                    break;
-
-                case ConsoleKey.End:
-                    cursorIndex = buffer.Count;
-                    RedrawInputLine(buffer, cursorIndex, inputLeft, inputTop, placeholder, inlineCompletionIndex, ref renderedLength);
-                    break;
-
-                case ConsoleKey.UpArrow:
-                    if (history.Count > 0 && historyIndex > 0)
-                    {
-                        if (historyIndex == history.Count)
+                switch (key.Key)
+                {
+                    case ConsoleKey.Enter:
+                        if ((key.Modifiers & ConsoleModifiers.Alt) != 0 || Console.KeyAvailable)
                         {
-                            draftInput = new string(buffer.ToArray());
+                            buffer.Insert(cursorIndex, '\n');
+                            cursorIndex++;
+                            NormalizeInlineCompletionCycle(buffer, cursorIndex, ref inlineCompletionKey, ref inlineCompletionIndex);
+                            RedrawInputLine(buffer, cursorIndex, inputLeft, inputTop, placeholder, inlineCompletionIndex, ref renderedLength);
+                            break;
                         }
 
-                        historyIndex--;
-                        ReplaceBuffer(buffer, history[historyIndex], ref cursorIndex);
                         NormalizeInlineCompletionCycle(buffer, cursorIndex, ref inlineCompletionKey, ref inlineCompletionIndex);
-                        RedrawInputLine(buffer, cursorIndex, inputLeft, inputTop, placeholder, inlineCompletionIndex, ref renderedLength);
-                    }
-                    break;
+                        if (TryGetInlineCompletion(buffer, cursorIndex, inlineCompletionIndex, out InlineCompletionCandidate? completion) &&
+                            completion is not null)
+                        {
+                            int replacementStart = Math.Clamp(completion.ReplacementStart, 0, cursorIndex);
+                            buffer.RemoveRange(replacementStart, cursorIndex - replacementStart);
+                            buffer.InsertRange(replacementStart, completion.ReplacementText);
+                            cursorIndex = replacementStart + completion.ReplacementText.Length;
+                            inlineCompletionIndex = 0;
+                            inlineCompletionKey = string.Empty;
+                            RedrawInputLine(buffer, cursorIndex, inputLeft, inputTop, placeholder, inlineCompletionIndex, ref renderedLength);
+                            break;
+                        }
 
-                case ConsoleKey.DownArrow:
-                    if (history.Count > 0 && historyIndex < history.Count)
-                    {
-                        historyIndex++;
-                        string value = historyIndex == history.Count ? draftInput : history[historyIndex];
-                        ReplaceBuffer(buffer, value, ref cursorIndex);
-                        NormalizeInlineCompletionCycle(buffer, cursorIndex, ref inlineCompletionKey, ref inlineCompletionIndex);
-                        RedrawInputLine(buffer, cursorIndex, inputLeft, inputTop, placeholder, inlineCompletionIndex, ref renderedLength);
-                    }
-                    break;
+                        MoveCursorToInputLineEnd(inputTop);
+                        Console.WriteLine();
+                        WriteSeparator();
+                        Console.WriteLine();
+                        return new string(buffer.ToArray());
 
-                default:
-                    if (!char.IsControl(key.KeyChar))
-                    {
-                        buffer.Insert(cursorIndex, key.KeyChar);
-                        cursorIndex++;
-                        NormalizeInlineCompletionCycle(buffer, cursorIndex, ref inlineCompletionKey, ref inlineCompletionIndex);
+                    case ConsoleKey.Escape:
+                        string escapeSequence = ReadQueuedEscapeSequence(key);
+                        if (TryGetBracketedPasteContent(escapeSequence, out string? pastedText) && pastedText is not null)
+                        {
+                            string normalizedPaste = NormalizePastedText(pastedText);
+                            buffer.InsertRange(cursorIndex, normalizedPaste);
+                            cursorIndex += normalizedPaste.Length;
+                            NormalizeInlineCompletionCycle(buffer, cursorIndex, ref inlineCompletionKey, ref inlineCompletionIndex);
+                            RedrawInputLine(buffer, cursorIndex, inputLeft, inputTop, placeholder, inlineCompletionIndex, ref renderedLength);
+                        }
+                        else if (IsShiftEnterSequence(escapeSequence))
+                        {
+                            buffer.Insert(cursorIndex, '\n');
+                            cursorIndex++;
+                            NormalizeInlineCompletionCycle(buffer, cursorIndex, ref inlineCompletionKey, ref inlineCompletionIndex);
+                            RedrawInputLine(buffer, cursorIndex, inputLeft, inputTop, placeholder, inlineCompletionIndex, ref renderedLength);
+                        }
+                        break;
+
+                    case ConsoleKey.Backspace:
+                        if (cursorIndex > 0)
+                        {
+                            buffer.RemoveAt(cursorIndex - 1);
+                            cursorIndex--;
+                            NormalizeInlineCompletionCycle(buffer, cursorIndex, ref inlineCompletionKey, ref inlineCompletionIndex);
+                            RedrawInputLine(buffer, cursorIndex, inputLeft, inputTop, placeholder, inlineCompletionIndex, ref renderedLength);
+                        }
+                        break;
+
+                    case ConsoleKey.Delete:
+                        if (cursorIndex < buffer.Count)
+                        {
+                            buffer.RemoveAt(cursorIndex);
+                            NormalizeInlineCompletionCycle(buffer, cursorIndex, ref inlineCompletionKey, ref inlineCompletionIndex);
+                            RedrawInputLine(buffer, cursorIndex, inputLeft, inputTop, placeholder, inlineCompletionIndex, ref renderedLength);
+                        }
+                        break;
+
+                    case ConsoleKey.LeftArrow:
+                        if (TryCycleInlineCompletion(buffer, cursorIndex, -1, ref inlineCompletionKey, ref inlineCompletionIndex))
+                        {
+                            RedrawInputLine(buffer, cursorIndex, inputLeft, inputTop, placeholder, inlineCompletionIndex, ref renderedLength);
+                        }
+                        else if (cursorIndex > 0)
+                        {
+                            cursorIndex--;
+                            RedrawInputLine(buffer, cursorIndex, inputLeft, inputTop, placeholder, inlineCompletionIndex, ref renderedLength);
+                        }
+                        break;
+
+                    case ConsoleKey.RightArrow:
+                        if (TryCycleInlineCompletion(buffer, cursorIndex, 1, ref inlineCompletionKey, ref inlineCompletionIndex))
+                        {
+                            RedrawInputLine(buffer, cursorIndex, inputLeft, inputTop, placeholder, inlineCompletionIndex, ref renderedLength);
+                        }
+                        else if (cursorIndex < buffer.Count)
+                        {
+                            cursorIndex++;
+                            RedrawInputLine(buffer, cursorIndex, inputLeft, inputTop, placeholder, inlineCompletionIndex, ref renderedLength);
+                        }
+                        break;
+
+                    case ConsoleKey.Home:
+                        cursorIndex = 0;
                         RedrawInputLine(buffer, cursorIndex, inputLeft, inputTop, placeholder, inlineCompletionIndex, ref renderedLength);
-                    }
-                    break;
+                        break;
+
+                    case ConsoleKey.End:
+                        cursorIndex = buffer.Count;
+                        RedrawInputLine(buffer, cursorIndex, inputLeft, inputTop, placeholder, inlineCompletionIndex, ref renderedLength);
+                        break;
+
+                    case ConsoleKey.UpArrow:
+                        if (TryMoveCursorToAdjacentInputLine(buffer, -1, ref cursorIndex))
+                        {
+                            NormalizeInlineCompletionCycle(buffer, cursorIndex, ref inlineCompletionKey, ref inlineCompletionIndex);
+                            RedrawInputLine(buffer, cursorIndex, inputLeft, inputTop, placeholder, inlineCompletionIndex, ref renderedLength);
+                        }
+                        else if (history.Count > 0 && historyIndex > 0)
+                        {
+                            if (historyIndex == history.Count)
+                            {
+                                draftInput = new string(buffer.ToArray());
+                            }
+
+                            historyIndex--;
+                            ReplaceBuffer(buffer, history[historyIndex], ref cursorIndex);
+                            NormalizeInlineCompletionCycle(buffer, cursorIndex, ref inlineCompletionKey, ref inlineCompletionIndex);
+                            RedrawInputLine(buffer, cursorIndex, inputLeft, inputTop, placeholder, inlineCompletionIndex, ref renderedLength);
+                        }
+                        break;
+
+                    case ConsoleKey.DownArrow:
+                        if (TryMoveCursorToAdjacentInputLine(buffer, 1, ref cursorIndex))
+                        {
+                            NormalizeInlineCompletionCycle(buffer, cursorIndex, ref inlineCompletionKey, ref inlineCompletionIndex);
+                            RedrawInputLine(buffer, cursorIndex, inputLeft, inputTop, placeholder, inlineCompletionIndex, ref renderedLength);
+                        }
+                        else if (history.Count > 0 && historyIndex < history.Count)
+                        {
+                            historyIndex++;
+                            string value = historyIndex == history.Count ? draftInput : history[historyIndex];
+                            ReplaceBuffer(buffer, value, ref cursorIndex);
+                            NormalizeInlineCompletionCycle(buffer, cursorIndex, ref inlineCompletionKey, ref inlineCompletionIndex);
+                            RedrawInputLine(buffer, cursorIndex, inputLeft, inputTop, placeholder, inlineCompletionIndex, ref renderedLength);
+                        }
+                        break;
+
+                    default:
+                        if (!char.IsControl(key.KeyChar))
+                        {
+                            buffer.Insert(cursorIndex, key.KeyChar);
+                            cursorIndex++;
+                            NormalizeInlineCompletionCycle(buffer, cursorIndex, ref inlineCompletionKey, ref inlineCompletionIndex);
+                            RedrawInputLine(buffer, cursorIndex, inputLeft, inputTop, placeholder, inlineCompletionIndex, ref renderedLength);
+                        }
+                        break;
+                }
             }
+        }
+        finally
+        {
+            DisableBracketedPaste();
         }
     }
 
@@ -1056,45 +1104,44 @@ internal static class PotatoConsole
             }
         }
 
-        int currentLength = text.Length == 0
-            ? placeholder.Length
-            : text.Length + completion.Length;
-        int inputWidth = GetInputWidth(inputLeft);
-        int viewStart = GetInputViewStart(cursorIndex, text.Length, inputWidth);
-        string visibleText = GetVisibleText(text, viewStart, inputWidth);
-        int visibleCursorIndex = cursorIndex - viewStart;
-        string visibleCompletion = string.Empty;
-        if (completion.Length > 0 && viewStart + visibleText.Length >= text.Length)
-        {
-            int completionWidth = Math.Max(0, inputWidth - visibleText.Length);
-            visibleCompletion = completion.Length > completionWidth ? completion[..completionWidth] : completion;
-        }
-
-        currentLength = text.Length == 0
-            ? Math.Min(placeholder.Length, inputWidth)
-            : visibleText.Length + visibleCompletion.Length;
-        ClearRenderedInput(inputLeft, inputTop, Math.Max(renderedLength, currentLength));
-        Console.SetCursorPosition(inputLeft, inputTop);
+        int currentLength = 1;
+        ClearRenderedInputLines(inputLeft, inputTop, Math.Max(renderedLength, currentLength));
         if (text.Length == 0)
         {
             Console.ForegroundColor = ConsoleColor.DarkGray;
-            Console.Write(placeholder.Length > inputWidth ? placeholder[..inputWidth] : placeholder);
+            WriteSingleLineText(placeholder, inputLeft, inputTop);
             Console.ResetColor();
+            MoveCursor(inputLeft, inputTop);
         }
         else
         {
+            InputLineView lineView = GetInputLineView(text, cursorIndex);
+            string lineText = lineView.Text;
+            bool completionStartsOnCurrentLine = completion.Length > 0 && lineView.EndIndex == text.Length;
+            int inputWidth = GetInputWidth(inputLeft);
+            int viewStart = GetInputViewStart(lineView.CursorColumn, lineText.Length, inputWidth);
+            string visibleText = GetVisibleText(lineText, viewStart, inputWidth);
+            int visibleCursorIndex = lineView.CursorColumn - viewStart;
+            string visibleCompletion = string.Empty;
+            if (completionStartsOnCurrentLine && viewStart + visibleText.Length >= lineText.Length)
+            {
+                int completionWidth = Math.Max(0, inputWidth - visibleText.Length);
+                visibleCompletion = completion.Length > completionWidth ? completion[..completionWidth] : completion;
+            }
+
             Console.ResetColor();
-            Console.Write(visibleText);
+            WriteSingleLineText(visibleText, inputLeft, inputTop);
             if (visibleCompletion.Length > 0)
             {
                 Console.ForegroundColor = ConsoleColor.DarkGray;
                 Console.Write(visibleCompletion);
                 Console.ResetColor();
             }
+
+            MoveCursor(inputLeft, inputTop, visibleCursorIndex);
         }
 
         renderedLength = currentLength;
-        MoveCursor(inputLeft, inputTop, visibleCursorIndex);
     }
 
     private static int Mod(int value, int divisor)
@@ -1129,6 +1176,20 @@ internal static class PotatoConsole
         Console.SetCursorPosition(Math.Min(inputLeft + cursorIndex, maxLeft), inputTop);
     }
 
+    private static void MoveCursorToInputLineEnd(int inputTop)
+    {
+        int maxLeft = Math.Max(0, Console.BufferWidth - 1);
+        int maxTop = Math.Max(0, Console.BufferHeight - 1);
+        Console.SetCursorPosition(maxLeft, Math.Clamp(inputTop, 0, maxTop));
+    }
+
+    private static void MoveCursor(int left, int top)
+    {
+        int maxLeft = Math.Max(0, Console.BufferWidth - 1);
+        int maxTop = Math.Max(0, Console.BufferHeight - 1);
+        Console.SetCursorPosition(Math.Clamp(left, 0, maxLeft), Math.Clamp(top, 0, maxTop));
+    }
+
     private static int GetInputWidth(int inputLeft)
     {
         return Math.Max(1, Console.BufferWidth - inputLeft - 1);
@@ -1160,6 +1221,63 @@ internal static class PotatoConsole
         return text.Substring(viewStart, length);
     }
 
+    private static InputLineView GetInputLineView(string text, int cursorIndex)
+    {
+        int safeCursorIndex = Math.Clamp(cursorIndex, 0, text.Length);
+        int lineStart = text.LastIndexOf('\n', Math.Max(0, safeCursorIndex - 1));
+        lineStart = lineStart < 0 ? 0 : lineStart + 1;
+
+        int lineEnd = text.IndexOf('\n', safeCursorIndex);
+        lineEnd = lineEnd < 0 ? text.Length : lineEnd;
+
+        return new InputLineView(
+            text[lineStart..lineEnd],
+            lineStart,
+            lineEnd,
+            safeCursorIndex - lineStart);
+    }
+
+    private static bool TryMoveCursorToAdjacentInputLine(List<char> buffer, int direction, ref int cursorIndex)
+    {
+        if (buffer.Count == 0 || !buffer.Contains('\n'))
+        {
+            return false;
+        }
+
+        string text = new(buffer.ToArray());
+        InputLineView currentLine = GetInputLineView(text, cursorIndex);
+        if (direction < 0)
+        {
+            if (currentLine.StartIndex == 0)
+            {
+                return false;
+            }
+
+            int previousLineEnd = currentLine.StartIndex - 1;
+            int previousLineStart = text.LastIndexOf('\n', Math.Max(0, previousLineEnd - 1));
+            previousLineStart = previousLineStart < 0 ? 0 : previousLineStart + 1;
+            cursorIndex = previousLineStart + Math.Min(currentLine.CursorColumn, previousLineEnd - previousLineStart);
+            return true;
+        }
+
+        if (currentLine.EndIndex >= text.Length)
+        {
+            return false;
+        }
+
+        int nextLineStart = currentLine.EndIndex + 1;
+        int nextLineEnd = text.IndexOf('\n', nextLineStart);
+        nextLineEnd = nextLineEnd < 0 ? text.Length : nextLineEnd;
+        cursorIndex = nextLineStart + Math.Min(currentLine.CursorColumn, nextLineEnd - nextLineStart);
+        return true;
+    }
+
+    private static void WriteSingleLineText(string text, int inputLeft, int inputTop)
+    {
+        Console.SetCursorPosition(inputLeft, inputTop);
+        Console.Write(text);
+    }
+
     private static void ClearRenderedInput(int inputLeft, int inputTop, int length)
     {
         if (length <= 0)
@@ -1183,7 +1301,178 @@ internal static class PotatoConsole
         }
     }
 
+    private static void ClearRenderedInputLines(int inputLeft, int inputTop, int lineCount)
+    {
+        if (lineCount <= 0)
+        {
+            return;
+        }
+
+        int width = Math.Max(1, Console.BufferWidth);
+        for (int line = 0; line < lineCount && inputTop + line < Console.BufferHeight; line++)
+        {
+            int left = line == 0 ? inputLeft : 0;
+            int count = Math.Max(0, width - left);
+            Console.SetCursorPosition(left, inputTop + line);
+            Console.Write(new string(' ', count));
+        }
+    }
+
+    private static void EnableBracketedPaste()
+    {
+        if (!Console.IsOutputRedirected)
+        {
+            Console.Write("\u001b[?2004h");
+        }
+    }
+
+    private static void DisableBracketedPaste()
+    {
+        if (!Console.IsOutputRedirected)
+        {
+            Console.Write("\u001b[?2004l");
+        }
+    }
+
+    private static string ReadQueuedEscapeSequence(ConsoleKeyInfo escapeKey)
+    {
+        var sequence = new StringBuilder().Append(escapeKey.KeyChar);
+        int idleTicks = 0;
+
+        while (idleTicks < 20 && sequence.Length < 100_000)
+        {
+            if (!Console.KeyAvailable)
+            {
+                idleTicks++;
+                Thread.Sleep(1);
+                continue;
+            }
+
+            idleTicks = 0;
+            ConsoleKeyInfo key = Console.ReadKey(intercept: true);
+            sequence.Append(key.Key == ConsoleKey.Enter ? '\n' : key.KeyChar);
+
+            if (sequence.ToString().Contains("\u001b[201~", StringComparison.Ordinal))
+            {
+                break;
+            }
+        }
+
+        return sequence.ToString();
+    }
+
+    private static bool TryGetBracketedPasteContent(string escapeSequence, out string? content)
+    {
+        const string startMarker = "\u001b[200~";
+        const string endMarker = "\u001b[201~";
+
+        content = null;
+        int startIndex = escapeSequence.IndexOf(startMarker, StringComparison.Ordinal);
+        if (startIndex < 0)
+        {
+            return false;
+        }
+
+        int contentStartIndex = startIndex + startMarker.Length;
+        int endIndex = escapeSequence.IndexOf(endMarker, contentStartIndex, StringComparison.Ordinal);
+        if (endIndex < 0)
+        {
+            content = escapeSequence[contentStartIndex..];
+            return true;
+        }
+
+        content = escapeSequence[contentStartIndex..endIndex];
+        return true;
+    }
+
+    private static bool IsShiftEnterSequence(string escapeSequence)
+    {
+        return escapeSequence is "\u001b[13;2u" or "\u001b[13;2~" or "\u001b[27;2;13~";
+    }
+
+    private static string NormalizePastedText(string text)
+    {
+        return text
+            .Replace("\r\n", "\n", StringComparison.Ordinal)
+            .Replace('\r', '\n');
+    }
+
+    private static int MeasureRenderedLineCount(int inputLeft, string text)
+    {
+        (_, int endTop) = GetRenderedPosition(inputLeft, 0, text, text.Length);
+        return endTop + 1;
+    }
+
+    private static (int Left, int Top) GetRenderedPosition(int inputLeft, int inputTop, string text, int textIndex)
+    {
+        int width = Math.Max(1, Console.BufferWidth);
+        int left = inputLeft;
+        int top = inputTop;
+        int safeTextIndex = Math.Clamp(textIndex, 0, text.Length);
+
+        for (int i = 0; i < safeTextIndex; i++)
+        {
+            AdvanceRenderedPosition(text[i], width, ref left, ref top);
+        }
+
+        return (left, top);
+    }
+
+    private static void WriteRenderedText(string text, int inputLeft, int inputTop, out int endLeft, out int endTop)
+    {
+        int width = Math.Max(1, Console.BufferWidth);
+        int left = inputLeft;
+        int top = inputTop;
+
+        foreach (char value in text)
+        {
+            if (value == '\r')
+            {
+                continue;
+            }
+
+            if (value == '\n')
+            {
+                AdvanceRenderedPosition(value, width, ref left, ref top);
+                continue;
+            }
+
+            MoveCursor(left, top);
+            Console.Write(value);
+            AdvanceRenderedPosition(value, width, ref left, ref top);
+        }
+
+        endLeft = left;
+        endTop = top;
+    }
+
+    private static void AdvanceRenderedPosition(char value, int width, ref int left, ref int top)
+    {
+        if (value == '\r')
+        {
+            return;
+        }
+
+        if (value == '\n')
+        {
+            left = 0;
+            top++;
+            return;
+        }
+
+        if (left >= width - 1)
+        {
+            left = 0;
+            top++;
+            return;
+        }
+
+        left++;
+    }
+
     private sealed record InlineCompletionCandidate(string ReplacementText, int ReplacementStart, string DisplayText);
+
+    private sealed record InputLineView(string Text, int StartIndex, int EndIndex, int CursorColumn);
 
     private sealed record PathCompletion(string ReplacementText, string DisplayText);
 
