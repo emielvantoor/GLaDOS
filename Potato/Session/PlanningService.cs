@@ -134,7 +134,7 @@ public class PlanningService(IEnumerable<IAgentTask> agentTasks)
         IReadOnlySet<string> indexedPaths = ExtractIndexedPaths(workspaceContext);
         tasks = PreferAttachedMentionPaths(tasks, goal, indexedPaths);
         tasks = EnsureInstructionReadsBeforeImplementation(tasks, indexedPaths);
-        ValidateTasks(tasks, supportedActions);
+        ValidateTasks(tasks, supportedActions, indexedPaths);
         return tasks.OrderBy(task => task.Step).ToList();
     }
 
@@ -486,7 +486,7 @@ public class PlanningService(IEnumerable<IAgentTask> agentTasks)
         for (int index = 0; index < orderedTasks.Length; index++)
         {
             string action = StringHelper.NormalizeAction(orderedTasks[index].Action);
-            if (action is "create-file" or "apply-patch")
+            if (IsImplementationAction(action))
             {
                 return index;
             }
@@ -551,7 +551,7 @@ public class PlanningService(IEnumerable<IAgentTask> agentTasks)
                     yield return path;
                 }
             }
-            else if (action == "apply-patch" &&
+            else if ((action == "apply-patch" || action == "write-code") &&
                      TryExtractTargetFile(task.Argument, out string? targetFilePath) &&
                      targetFilePath is not null)
             {
@@ -621,6 +621,9 @@ public class PlanningService(IEnumerable<IAgentTask> agentTasks)
         string path = NormalizeProjectPath(value);
         return path.Contains('/', StringComparison.Ordinal) || Path.HasExtension(path);
     }
+
+    private static bool IsImplementationAction(string action) =>
+        action is "apply-patch" or "write-code" or "create-file" or "write-documentation";
 
     private static List<AgentTask> PreferAttachedMentionPaths(
         IReadOnlyList<AgentTask> tasks,
@@ -733,9 +736,14 @@ public class PlanningService(IEnumerable<IAgentTask> agentTasks)
 
     private sealed record AttachedMentionPath(string Path, string FileName);
     
-    private static void ValidateTasks(IEnumerable<AgentTask> tasks, IReadOnlyCollection<string> supportedActions)
+    private static void ValidateTasks(
+        IEnumerable<AgentTask> tasks,
+        IReadOnlyCollection<string> supportedActions,
+        IReadOnlySet<string> indexedPaths)
     {
         var supportedActionSet = supportedActions.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var availablePaths = new HashSet<string>(indexedPaths, StringComparer.OrdinalIgnoreCase);
+        var lastReadPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         int expectedStep = 1;
         foreach (AgentTask task in tasks.OrderBy(task => task.Step))
         {
@@ -767,8 +775,111 @@ public class PlanningService(IEnumerable<IAgentTask> agentTasks)
                 throw new InvalidOperationException($"Planner step {task.Step} has no reason.");
             }
 
+            ValidateTaskPathContract(task, action, availablePaths, lastReadPaths);
             expectedStep++;
         }
+    }
+
+    private static void ValidateTaskPathContract(
+        AgentTask task,
+        string action,
+        ISet<string> availablePaths,
+        ISet<string> lastReadPaths)
+    {
+        switch (action)
+        {
+            case "read":
+            {
+                string readPath = NormalizeProjectPath(task.Argument);
+                if (!availablePaths.Contains(readPath))
+                {
+                    throw new InvalidOperationException(
+                        $"Planner step {task.Step} reads '{task.Argument}', but that path is neither present in Workspace context nor created earlier in the plan.");
+                }
+
+                lastReadPaths.Add(readPath);
+                return;
+            }
+
+            case "create-file":
+            {
+                string createdPath = NormalizeProjectPath(task.Argument);
+                if (!LooksLikeProjectPath(createdPath))
+                {
+                    throw new InvalidOperationException(
+                        $"Planner step {task.Step} create-file argument must be a concrete file path.");
+                }
+
+                availablePaths.Add(createdPath);
+                return;
+            }
+
+            case "apply-patch":
+            case "write-code":
+            {
+                ValidateImplementationTarget(task, action, availablePaths, lastReadPaths);
+                return;
+            }
+
+            case "write-documentation":
+            {
+                string documentationPath = NormalizeProjectPath(ExtractDocumentationTargetPath(task.Argument));
+                if (!LooksLikeProjectPath(documentationPath))
+                {
+                    throw new InvalidOperationException(
+                        $"Planner step {task.Step} write-documentation argument must name a concrete documentation file path.");
+                }
+
+                if (!availablePaths.Contains(documentationPath))
+                {
+                    throw new InvalidOperationException(
+                        $"Planner step {task.Step} writes documentation to '{documentationPath}', but that file is neither indexed nor created earlier in the plan.");
+                }
+                return;
+            }
+        }
+    }
+
+    private static void ValidateImplementationTarget(
+        AgentTask task,
+        string action,
+        ISet<string> availablePaths,
+        ISet<string> lastReadPaths)
+    {
+        if (!TryExtractTargetFile(task.Argument, out string? targetFilePath) ||
+            string.IsNullOrWhiteSpace(targetFilePath))
+        {
+            throw new InvalidOperationException(
+                $"Planner step {task.Step} {action} argument must include 'Target file: <path>' followed by concrete instructions.");
+        }
+
+        string normalizedTargetPath = NormalizeProjectPath(targetFilePath);
+        if (!availablePaths.Contains(normalizedTargetPath))
+        {
+            throw new InvalidOperationException(
+                $"Planner step {task.Step} targets '{normalizedTargetPath}', but that file is neither indexed nor created earlier in the plan.");
+        }
+
+        if (!lastReadPaths.Contains(normalizedTargetPath))
+        {
+            throw new InvalidOperationException(
+                $"Planner step {task.Step} targets '{normalizedTargetPath}' before a successful read step for that same file.");
+        }
+    }
+
+    private static string ExtractDocumentationTargetPath(string argument)
+    {
+        const string targetPrefix = "Target file:";
+        string normalized = argument.Replace("\r\n", "\n", StringComparison.Ordinal);
+        int targetIndex = normalized.IndexOf(targetPrefix, StringComparison.OrdinalIgnoreCase);
+        if (targetIndex < 0)
+        {
+            return argument.Trim();
+        }
+
+        int pathStart = targetIndex + targetPrefix.Length;
+        int pathEnd = normalized.IndexOf('\n', pathStart);
+        return (pathEnd < 0 ? normalized[pathStart..] : normalized[pathStart..pathEnd]).Trim();
     }
 
     private static string ExtractJsonArray(string text)

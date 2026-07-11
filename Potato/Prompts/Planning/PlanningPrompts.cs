@@ -72,7 +72,7 @@ internal static partial class PromptLibrary
         Example:
         [
           {"Step":1,"Action":"read","Argument":"src/backend/session.ts","Reason":"Inspect the backend session code requested by the user."},
-          {"Step":2,"Action":"apply-patch","Argument":"Update only the backend TypeScript session flow described in the user request.","Reason":"Apply the requested change within the detected backend TypeScript area."},
+          {"Step":2,"Action":"apply-patch","Argument":"Target file: src/backend/session.ts\nInstructions: Update only the backend TypeScript session flow described in the user request.","Reason":"Apply the requested change within the detected backend TypeScript area."},
           {"Step":3,"Action":"write-report","Argument":"Summarize the backend TypeScript change and any verification result.","Reason":"Give the user a natural final report."}
         ]
 
