@@ -351,7 +351,7 @@ internal sealed class PipelineSession
         var builder = new StringBuilder();
         builder.AppendLine("Execution stopped.");
         builder.AppendLine(result.ErrorMessage ?? "A step failed.");
-        builder.AppendLine("No autonomous recovery loop was started.");
+        builder.AppendLine("Adaptive replanning only runs when a task explicitly requests it.");
         return builder.ToString().TrimEnd();
     }
 

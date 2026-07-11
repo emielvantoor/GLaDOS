@@ -60,6 +60,6 @@ public class ArchitectRefactorTask : AgentTaskBase, IAgentTask
             return "Error: Architect phase returned an empty blueprint.";
         }
 
-        return response.Text.Trim();
+        return $"{StringHelper.ReplanRequiredMarker}{Environment.NewLine}{response.Text.Trim()}";
     }
 }

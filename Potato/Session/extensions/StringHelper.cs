@@ -2,8 +2,13 @@ namespace Potato.Session.extensions;
 
 public static class StringHelper
 {
+    public const string ReplanRequiredMarker = "[[POTATO_REPLAN_REQUIRED]]";
+
     public static string NormalizeAction(string action) =>
         action.Trim().ToLowerInvariant().Replace("_", "-", StringComparison.Ordinal);
+
+    public static bool IsReplanRequiredResult(string result) =>
+        result.Contains(ReplanRequiredMarker, StringComparison.Ordinal);
     
     public static bool IsFailureResult(string result)
     {

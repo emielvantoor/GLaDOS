@@ -5,6 +5,7 @@ using System.Text.Json.Serialization;
 using Microsoft.Extensions.AI;
 using Potato.Models;
 using Potato.Session.extensions;
+using Potato.Session.Models;
 using Potato.Session.Tasks;
 
 namespace Potato.Session;
@@ -92,7 +93,14 @@ public class PlanningService(IEnumerable<IAgentTask> agentTasks)
         ".md"
     ];
 
-    public async Task<List<AgentTask>> PlanAsync(string goal, IChatClient chatClient, CancellationToken cancellationToken)
+    public Task<List<AgentTask>> PlanAsync(string goal, IChatClient chatClient, CancellationToken cancellationToken) =>
+        PlanAsync(goal, [], chatClient, cancellationToken);
+
+    public async Task<List<AgentTask>> PlanAsync(
+        string goal,
+        IReadOnlyList<TaskObservation> observations,
+        IChatClient chatClient,
+        CancellationToken cancellationToken)
     {
         string workspaceContext = await BuildProjectMapAsync(Environment.CurrentDirectory, chatClient, cancellationToken);
         IReadOnlyList<string> supportedActions = GetSupportedActions();
@@ -104,7 +112,8 @@ public class PlanningService(IEnumerable<IAgentTask> agentTasks)
                 goal,
                 workspaceContext,
                 supportedActions,
-                planningGuidance))
+                planningGuidance,
+                observations.FormatObservations()))
         };
 
         ChatResponse response;

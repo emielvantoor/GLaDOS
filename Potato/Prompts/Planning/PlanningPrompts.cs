@@ -21,6 +21,9 @@ internal static partial class PromptLibrary
         User request:
         {{UserRequest}}
 
+        Execution observations so far:
+        {{ExecutionObservations}}
+
         Workspace context:
         {{WorkspaceContext}}
 
@@ -51,6 +54,9 @@ internal static partial class PromptLibrary
         - After detecting the target area, continue only within that language, framework, or layer unless the user explicitly asks for a cross-stack change.
         - Do not refactor frontend files when the request targets backend code, and do not refactor backend files when the request targets frontend code.
         - If the target area is ambiguous, first read the most relevant manifest, README, or source file, then use write-report to explain the ambiguity instead of editing unrelated code.
+        - If Execution observations so far is not "(none)", plan only the remaining next steps needed to finish the original request.
+        - Do not repeat successful completed steps from Execution observations unless a fresh read is required because a prior step changed that exact file.
+        - If an observation contains an architect-refactor blueprint, use it as implementation guidance and continue with concrete create-file, apply-patch, write-code, or write-report steps.
         - Produce a deterministic, linear plan for the executor.
         - Every task must contain exactly these properties: Step, Action, Argument, Reason.
         - Step must be a sequential integer starting at 1.
@@ -71,10 +77,12 @@ internal static partial class PromptLibrary
         string userRequest,
         string workspaceContext,
         IReadOnlyCollection<string> supportedActions,
-        IReadOnlyCollection<string> planningGuidance) =>
+        IReadOnlyCollection<string> planningGuidance,
+        string executionObservations) =>
         Render(PlannerUser, new Dictionary<string, string>
         {
             ["UserRequest"] = userRequest,
+            ["ExecutionObservations"] = executionObservations,
             ["WorkspaceContext"] = workspaceContext,
             ["SupportedActions"] = BuildSupportedActionList(supportedActions),
             ["PlanningGuidance"] = BuildPlanningGuidance(planningGuidance)
