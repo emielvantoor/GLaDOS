@@ -1,14 +1,14 @@
 # GLaDOS Project
 
 ## Overview
-GLaDOS is a multi-component AI platform featuring a web interface (GLaDOS), core logic (GLaDOS.Core), Llama integration (GLaDOS.LLama), ONNX model support (GLaDOS.Onnx), and utility tools (Potato). It provides chat functionality, model management, and extensible agent systems.
+GLaDOS is a comprehensive AI platform that integrates various components to provide advanced chat functionality, model management, and extensible agent systems. The platform is built with a modular architecture, allowing for easy expansion and customization. This README provides a detailed guide on setting up, building, and running the GLaDOS project.
 
 ## Key Features
-- **AI Chat Interface**: Web-based chat with real-time streaming and history
-- **Model Management**: Support for OpenAI and custom Llama models
-- **Extensible Agents**: Modular agent system with metadata and permissions
-- **Web Interface**: ASP.NET Core web app with rich UI components
-- **Tool Integration**: Built-in tools for bash execution and web search
+- **AI Chat Interface**: Real-time chat with streaming capabilities and message history.
+- **Model Management**: Support for OpenAI and custom Llama models.
+- **Extensible Agents**: Modular agent system with metadata and permissions.
+- **Web Interface**: ASP.NET Core-based web application with rich UI components.
+- **Tool Integration**: Built-in tools for executing bash commands and performing web searches.
 
 ## Project Structure
 ```
@@ -37,15 +37,32 @@ GLaDOS.sln         # Solution file for multi-project management
 
 ## Getting Started
 1. **Prerequisites**: Install [.NET SDK](https://dotnet.microsoft.com/download)
-2. **Clone Repository**: `git clone https://github.com/yourusername/jarvis.git`
-3. **Restore Dependencies**: `dotnet restore`
-4. **Run Application**: `dotnet run` from the solution root
-5. **Explore Documentation**: See [agents.md](agents.md) for agent system details
+2. **Clone Repository**: 
+   ```bash
+   git clone https://github.com/yourusername/jarvis.git
+   ```
+3. **Restore Dependencies**: 
+   ```bash
+   dotnet restore
+   ```
+4. **Build Project**: 
+   ```bash
+   dotnet build GLaDOS/GLaDOS.csproj --no-restore /p:AllowMissingPrunePackageData=true /p:NuGetAudit=false -m:1 -v:minimal
+   ```
+5. **Run Application**: 
+   ```bash
+   dotnet run --project GLaDOS
+   ```
+6. **Explore Documentation**: See [agents.md](agents.md) for agent system details
+
+## Configuration
+- **Model Path**: The appsettings of GLaDOS contain a setting to specify the target path of where the models are located.
+- **Format**: Only GGUF format is currently working with Qwen compatible models.
 
 ## Contributing
 - Review existing [agents.md](agents.md) documentation
 - Follow .NET coding standards
-- Add tests for new features (test directories may exist in subprojects)
+- Add tests for new features
 - Update documentation when adding new features
 
 ## License
@@ -56,9 +73,3 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - ONNX model support is implemented in the GLaDOS.Onnx directory
 - Llama integration handles model loading and inference pipelines
 - The Potato directory contains utility functions for common operations
-
-For more information about the agent system, see [agents.md](agents.md).
-
-## Language Models
-- **Location**: The appsettings of GLaDOS contain a setting to specify the target path of where the models are located.
-- **Format**: Only GGUF format is currently working with Qwen compatible models.
