@@ -33,6 +33,7 @@ class Program
         services.AddSingleton<IAgentTask, WriteCodeTask>();
         services.AddSingleton<IAgentTask, WriteReportTask>();
         services.AddSingleton<IAgentTask, ApplyPatchTask>();
+        services.AddSingleton<IAgentTask, ArchitectRefactorTask>();
 
         var provider = services.BuildServiceProvider();
 

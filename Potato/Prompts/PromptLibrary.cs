@@ -35,7 +35,8 @@ internal static partial class PromptLibrary
     {
         yield return PlannerSystem;
         yield return PlannerUser;
-        yield return PatchSystem;
+        yield return ArchitectRefactorSystem;
+        yield return ArchitectRefactorUser;
         yield return ApplyPatchSystem;
         yield return ApplyPatchUser;
         yield return WriteCodeSystem;
