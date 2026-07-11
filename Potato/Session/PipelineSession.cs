@@ -408,7 +408,7 @@ internal sealed class PipelineSession
         var builder = new StringBuilder();
         builder.AppendLine("Execution stopped.");
         builder.AppendLine(result.ErrorMessage ?? "A step failed.");
-        builder.AppendLine("Adaptive replanning only runs when a task explicitly requests it.");
+        builder.AppendLine("Adaptive replanning was attempted when the failure was recoverable and budget remained.");
         return builder.ToString().TrimEnd();
     }
 

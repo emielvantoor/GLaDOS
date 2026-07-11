@@ -62,8 +62,10 @@ internal static partial class PromptLibrary
         - If the target area is ambiguous, first read the most relevant manifest, README, or source file, then use write-report to explain the ambiguity instead of editing unrelated code.
         - If Execution observations so far is not "(none)", plan only the remaining next steps needed to finish the original request.
         - Do not repeat successful completed steps from Execution observations unless a fresh read is required because a prior step changed that exact file.
+        - If an Execution observation says a create-file step failed because the target already exists, do not plan create-file for that path again. For existing Markdown documentation targets, use write-documentation when supported.
         - If an observation contains an architect-refactor blueprint, use it as implementation guidance and continue with concrete create-file, apply-patch, write-code, or write-report steps.
         - Produce a deterministic, linear plan for the executor.
+        - Context-gathering actions such as read, inspect-project, search-files, search-file-contents, list-files, list-project-files, and summarize-file-purpose are never sufficient as the final step. Follow them with the requested implementation, review, documentation, shell, or a write-report that answers the user.
         - Every task must contain exactly these properties: Step, Action, Argument, Reason.
         - Step must be a sequential integer starting at 1.
         - Action must be one of the supported actions listed above.

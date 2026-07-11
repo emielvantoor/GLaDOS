@@ -55,6 +55,8 @@ internal static partial class PromptLibrary
         yield return ProjectMapUser;
         yield return ExecutionPlanningSystem;
         yield return ExecutionPlanningUser;
+        yield return ShellScriptSystem;
+        yield return ShellScriptUser;
         yield return ExecutionMemorySummaryUser;
         yield return FilePurposeUser;
         yield return GreetingUser;

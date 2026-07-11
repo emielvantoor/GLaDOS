@@ -631,6 +631,11 @@ public class AgentTools(ExecutionMemory memory, CurrentChatClientState chatClien
             return StoreAndReturn($"{nameof(ExecuteShellCommandAsync)} {command}", "Rejected shell directory listing. Use the ListFiles tool instead.");
         }
 
+        if (LooksLikeCompoundShellCommand(command))
+        {
+            return StoreAndReturn($"{nameof(ExecuteShellCommandAsync)} {command}", "Rejected compound shell command. Run exactly one shell operation at a time; do not combine commands with &&, ||, ;, pipes, redirection, or multiple lines.");
+        }
+
         if (LooksLikeShellFileEditCommand(command))
         {
             return StoreAndReturn($"{nameof(ExecuteShellCommandAsync)} {command}", "Rejected shell-based file edit. Use CreateFileAsync for new files, or read the relevant file and use ApplySearchReplaceAsync with exact SEARCH and REPLACE text.");
@@ -1417,6 +1422,63 @@ public class AgentTools(ExecutionMemory memory, CurrentChatClientState chatClien
                normalized.Contains("sed -i", StringComparison.Ordinal) ||
                normalized.Contains("perl -pi", StringComparison.Ordinal) ||
                normalized.Contains("tee ", StringComparison.Ordinal);
+    }
+
+    private static bool LooksLikeCompoundShellCommand(string command)
+    {
+        bool inSingleQuote = false;
+        bool inDoubleQuote = false;
+        bool escaped = false;
+
+        for (int i = 0; i < command.Length; i++)
+        {
+            char current = command[i];
+            if (escaped)
+            {
+                escaped = false;
+                continue;
+            }
+
+            if (current == '\\')
+            {
+                escaped = true;
+                continue;
+            }
+
+            if (current == '\'' && !inDoubleQuote)
+            {
+                inSingleQuote = !inSingleQuote;
+                continue;
+            }
+
+            if (current == '"' && !inSingleQuote)
+            {
+                inDoubleQuote = !inDoubleQuote;
+                continue;
+            }
+
+            if (inSingleQuote || inDoubleQuote)
+            {
+                continue;
+            }
+
+            if (current is '\r' or '\n' or ';' or '|')
+            {
+                return true;
+            }
+
+            if (current == '&' && i + 1 < command.Length && command[i + 1] == '&')
+            {
+                return true;
+            }
+
+            if (current == '>' || current == '<')
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private void WriteToolCall(string toolName, IReadOnlyList<(string Name, string Value)> parameters)

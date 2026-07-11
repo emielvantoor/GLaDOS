@@ -607,15 +607,26 @@ internal static class PotatoConsole
         Console.WriteLine(prompt);
         Console.WriteLine();
 
-        Console.ForegroundColor = ConsoleColor.DarkGray;
-        Console.WriteLine("  1. Yes, allow once");
-        Console.ForegroundColor = ConsoleColor.Cyan;
-        Console.WriteLine("  2. Yes, allow always (default)");
-        Console.ForegroundColor = ConsoleColor.DarkGray;
-        Console.WriteLine("  3. No, suggest changes (esc)");
+        string[] choices =
+        [
+            "Yes, allow once",
+            "Yes, allow always (default)",
+            "No, suggest changes (esc)"
+        ];
+        int selectedIndex = 1;
+        int optionTop = Console.CursorTop;
+        for (int i = 0; i < choices.Length; i++)
+        {
+            Console.WriteLine();
+        }
+
+        RenderPermissionChoices(choices, selectedIndex, optionTop);
+        Console.SetCursorPosition(0, optionTop + choices.Length);
         Console.ResetColor();
         Console.WriteLine();
-        Console.Write("Choice [1/2/3, Enter=2]: ");
+        Console.Write("Choice [↑/↓, 1/2/3, Enter=selected]: ");
+        int inputLeft = Console.CursorLeft;
+        int inputTop = Console.CursorTop;
 
         while (true)
         {
@@ -638,12 +649,34 @@ internal static class PotatoConsole
                     Console.WriteLine(key.Key == ConsoleKey.Escape ? "esc" : "3");
                     return ToolPermissionChoice.Deny;
 
+                case ConsoleKey.UpArrow:
+                case ConsoleKey.LeftArrow:
+                    selectedIndex = (selectedIndex + choices.Length - 1) % choices.Length;
+                    RenderPermissionChoices(choices, selectedIndex, optionTop);
+                    Console.SetCursorPosition(inputLeft, inputTop);
+                    break;
+
+                case ConsoleKey.DownArrow:
+                case ConsoleKey.RightArrow:
+                    selectedIndex = (selectedIndex + 1) % choices.Length;
+                    RenderPermissionChoices(choices, selectedIndex, optionTop);
+                    Console.SetCursorPosition(inputLeft, inputTop);
+                    break;
+
                 case ConsoleKey.Enter:
-                    Console.WriteLine();
-                    return ToolPermissionChoice.AllowAlways;
+                    Console.WriteLine(selectedIndex + 1);
+                    return PermissionChoiceForIndex(selectedIndex);
             }
         }
     }
+
+    private static ToolPermissionChoice PermissionChoiceForIndex(int selectedIndex) =>
+        selectedIndex switch
+        {
+            0 => ToolPermissionChoice.AllowOnce,
+            1 => ToolPermissionChoice.AllowAlways,
+            _ => ToolPermissionChoice.Deny
+        };
 
     private static void WritePermissionDetail(string detail)
     {

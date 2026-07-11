@@ -13,6 +13,7 @@ namespace Potato.Session;
 
 public class PlanningService(IEnumerable<IAgentTask> agentTasks)
 {
+    private const int MaxPlannerValidationAttempts = 3;
     private const int ProjectMapCacheSchemaVersion = 1;
     private const string ProjectMapCacheDirectoryName = ".potato";
     private const string ProjectMapCacheFileName = "project-map-cache.json";
@@ -106,36 +107,85 @@ public class PlanningService(IEnumerable<IAgentTask> agentTasks)
         string workspaceContext = await BuildProjectMapAsync(Environment.CurrentDirectory, chatClient, cancellationToken);
         IReadOnlyList<string> supportedActions = GetSupportedActions();
         IReadOnlyList<string> planningGuidance = GetPlanningGuidance();
-        var messages = new List<ChatMessage>
-        {
-            new(ChatRole.System, Prompts.PromptLibrary.PlannerSystemPrompt),
-            new(ChatRole.User, Prompts.PromptLibrary.BuildPlannerUserPrompt(
-                goal,
-                workspaceContext,
-                supportedActions,
-                planningGuidance,
-                observations.FormatObservations()))
-        };
+        string executionObservations = observations.FormatObservations();
+        Exception? lastPlanningError = null;
 
-        ChatResponse response;
-        using (PotatoConsole.StartProgress("Planning deterministic task list..."))
+        for (int attempt = 1; attempt <= MaxPlannerValidationAttempts; attempt++)
         {
-            response = await chatClient.GetResponseAsync(messages, AgentTaskBase.CreateJsonChatOptions(0.0),
-                cancellationToken);
+            var messages = new List<ChatMessage>
+            {
+                new(ChatRole.System, Prompts.PromptLibrary.PlannerSystemPrompt),
+                new(ChatRole.User, Prompts.PromptLibrary.BuildPlannerUserPrompt(
+                    goal,
+                    workspaceContext,
+                    supportedActions,
+                    planningGuidance,
+                    executionObservations))
+            };
+
+            ChatResponse response;
+            using (PotatoConsole.StartProgress(FormatPlanningProgress(attempt)))
+            {
+                response = await chatClient.GetResponseAsync(messages, AgentTaskBase.CreateJsonChatOptions(0.0),
+                    cancellationToken);
+            }
+
+            try
+            {
+                string json = ExtractJsonArray(response.Text);
+                List<AgentTask>? tasks = JsonSerializer.Deserialize<List<AgentTask>>(json, AgentTaskBase.JsonOptions);
+                if (tasks is null || tasks.Count == 0)
+                {
+                    throw new InvalidOperationException("Planner returned no tasks.");
+                }
+
+                IReadOnlySet<string> indexedPaths = ExtractIndexedPaths(workspaceContext);
+                IReadOnlySet<string> availablePaths = AddObservedExistingPaths(indexedPaths, observations);
+                tasks = PreferAttachedMentionPaths(tasks, goal, availablePaths);
+                tasks = EnsureInstructionReadsBeforeImplementation(tasks, availablePaths);
+                tasks = ResolveUniqueIndexedPathReferences(tasks, availablePaths);
+                tasks = RewriteCreateFileForExistingDocumentation(tasks, availablePaths);
+                ValidateTasks(tasks, supportedActions, availablePaths);
+                return tasks.OrderBy(task => task.Step).ToList();
+            }
+            catch (InvalidOperationException ex)
+            {
+                lastPlanningError = ex;
+                if (attempt == MaxPlannerValidationAttempts)
+                {
+                    break;
+                }
+
+                PotatoConsole.WriteStatus($"Planner validation failed: {ex.Message}");
+                executionObservations = BuildPlannerRetryObservations(observations, ex.Message);
+            }
         }
 
-        string json = ExtractJsonArray(response.Text);
-        List<AgentTask>? tasks = JsonSerializer.Deserialize<List<AgentTask>>(json, AgentTaskBase.JsonOptions);
-        if (tasks is null || tasks.Count == 0)
+        throw new InvalidOperationException(
+            $"Planner could not produce a valid task list after {MaxPlannerValidationAttempts} attempts: {lastPlanningError?.Message}");
+    }
+
+    private static string FormatPlanningProgress(int attempt) =>
+        attempt == 1
+            ? "Planning deterministic task list..."
+            : $"Repairing planner task list ({attempt}/{MaxPlannerValidationAttempts})...";
+
+    private static string BuildPlannerRetryObservations(
+        IReadOnlyList<TaskObservation> observations,
+        string validationMessage)
+    {
+        var builder = new StringBuilder();
+        string formattedObservations = observations.FormatObservations();
+        if (!string.Equals(formattedObservations, "(none)", StringComparison.Ordinal))
         {
-            throw new InvalidOperationException("Planner returned no tasks.");
+            builder.AppendLine(formattedObservations.TrimEnd());
+            builder.AppendLine();
         }
 
-        IReadOnlySet<string> indexedPaths = ExtractIndexedPaths(workspaceContext);
-        tasks = PreferAttachedMentionPaths(tasks, goal, indexedPaths);
-        tasks = EnsureInstructionReadsBeforeImplementation(tasks, indexedPaths);
-        ValidateTasks(tasks, supportedActions, indexedPaths);
-        return tasks.OrderBy(task => task.Step).ToList();
+        builder.AppendLine("Planner validation feedback from previous attempt:");
+        builder.AppendLine(validationMessage);
+        builder.AppendLine("Return a corrected JSON array that completes the user request and satisfies this validation feedback.");
+        return builder.ToString();
     }
 
     private IReadOnlyList<string> GetSupportedActions() =>
@@ -660,6 +710,41 @@ public class PlanningService(IEnumerable<IAgentTask> agentTasks)
     private static bool IsImplementationAction(string action) =>
         action is "apply-patch" or "write-code" or "create-file" or "write-documentation";
 
+    private static bool IsContextGatheringAction(string action) =>
+        action is "read" or "inspect-project" or "search-files" or "search-file-contents" or
+            "list-files" or "list-project-files" or "summarize-file-purpose";
+
+    private static IReadOnlySet<string> AddObservedExistingPaths(
+        IReadOnlySet<string> indexedPaths,
+        IReadOnlyList<TaskObservation> observations)
+    {
+        var availablePaths = new HashSet<string>(indexedPaths, StringComparer.OrdinalIgnoreCase);
+        foreach (TaskObservation observation in observations)
+        {
+            foreach (string existingPath in ExtractObservedExistingPaths(observation.Result))
+            {
+                availablePaths.Add(existingPath);
+            }
+        }
+
+        return availablePaths;
+    }
+
+    private static IEnumerable<string> ExtractObservedExistingPaths(string observationResult)
+    {
+        foreach (Match match in Regex.Matches(
+                     observationResult,
+                     @"File '(?<path>[^']+)' already exists",
+                     RegexOptions.IgnoreCase))
+        {
+            string path = NormalizeProjectPath(match.Groups["path"].Value);
+            if (LooksLikeProjectPath(path))
+            {
+                yield return path;
+            }
+        }
+    }
+
     private static List<AgentTask> PreferAttachedMentionPaths(
         IReadOnlyList<AgentTask> tasks,
         string goal,
@@ -710,6 +795,152 @@ public class PlanningService(IEnumerable<IAgentTask> agentTasks)
         return TryGetAttachedReplacement(argument, attachedPathsByFileName, indexedPaths, out replacement)
             ? replacement
             : argument;
+    }
+
+    private static List<AgentTask> ResolveUniqueIndexedPathReferences(
+        IReadOnlyList<AgentTask> tasks,
+        IReadOnlySet<string> indexedPaths) =>
+        tasks
+            .OrderBy(task => task.Step)
+            .Select(task => task with { Argument = ResolveUniqueIndexedPathReference(task.Action, task.Argument, indexedPaths) })
+            .ToList();
+
+    private static List<AgentTask> RewriteCreateFileForExistingDocumentation(
+        IReadOnlyList<AgentTask> tasks,
+        IReadOnlySet<string> availablePaths)
+    {
+        var orderedTasks = tasks.OrderBy(task => task.Step).ToArray();
+        var result = new List<AgentTask>();
+        for (int index = 0; index < orderedTasks.Length; index++)
+        {
+            AgentTask task = orderedTasks[index];
+            if (!IsCreateFileForExistingDocumentation(task, availablePaths, out string documentationPath))
+            {
+                result.Add(task);
+                continue;
+            }
+
+            if (HasLaterDocumentationWrite(orderedTasks, index, documentationPath))
+            {
+                continue;
+            }
+
+            result.Add(task with
+            {
+                Action = "write-documentation",
+                Argument = documentationPath,
+                Reason = $"Write documentation to existing file {documentationPath} instead of creating it."
+            });
+        }
+
+        return RenumberTasks(result);
+    }
+
+    private static bool IsCreateFileForExistingDocumentation(
+        AgentTask task,
+        IReadOnlySet<string> availablePaths,
+        out string documentationPath)
+    {
+        documentationPath = string.Empty;
+        if (StringHelper.NormalizeAction(task.Action) != "create-file")
+        {
+            return false;
+        }
+
+        string createdPath = NormalizeProjectPath(task.Argument);
+        if (!availablePaths.Contains(createdPath) || !IsDocumentationPath(createdPath))
+        {
+            return false;
+        }
+
+        documentationPath = createdPath;
+        return true;
+    }
+
+    private static bool HasLaterDocumentationWrite(
+        IReadOnlyList<AgentTask> orderedTasks,
+        int currentIndex,
+        string documentationPath)
+    {
+        for (int index = currentIndex + 1; index < orderedTasks.Count; index++)
+        {
+            AgentTask laterTask = orderedTasks[index];
+            if (StringHelper.NormalizeAction(laterTask.Action) != "write-documentation")
+            {
+                continue;
+            }
+
+            string laterPath = NormalizeProjectPath(ExtractDocumentationTargetPath(laterTask.Argument));
+            if (string.Equals(laterPath, documentationPath, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsDocumentationPath(string path) =>
+        path.EndsWith(".md", StringComparison.OrdinalIgnoreCase) ||
+        path.EndsWith(".mdx", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(Path.GetFileName(path), "README", StringComparison.OrdinalIgnoreCase);
+
+    private static string ResolveUniqueIndexedPathReference(
+        string action,
+        string argument,
+        IReadOnlySet<string> indexedPaths)
+    {
+        string normalizedAction = StringHelper.NormalizeAction(action);
+        if (normalizedAction == "read" &&
+            TryResolveUniqueIndexedBasename(argument, indexedPaths, out string resolvedReadPath))
+        {
+            return resolvedReadPath;
+        }
+
+        if ((normalizedAction == "apply-patch" ||
+             normalizedAction == "write-code" ||
+             normalizedAction == "write-documentation") &&
+            TryExtractTargetFile(argument, out string? targetFilePath) &&
+            targetFilePath is not null &&
+            TryResolveUniqueIndexedBasename(targetFilePath, indexedPaths, out string resolvedTargetPath))
+        {
+            return ReplaceExtractedTargetFile(argument, targetFilePath, resolvedTargetPath);
+        }
+
+        if (normalizedAction == "write-documentation" &&
+            TryResolveUniqueIndexedBasename(argument, indexedPaths, out string resolvedDocumentationPath))
+        {
+            return resolvedDocumentationPath;
+        }
+
+        return argument;
+    }
+
+    private static bool TryResolveUniqueIndexedBasename(
+        string candidatePath,
+        IReadOnlySet<string> indexedPaths,
+        out string resolvedPath)
+    {
+        resolvedPath = string.Empty;
+        string normalizedCandidate = NormalizeProjectPath(candidatePath);
+        if (indexedPaths.Contains(normalizedCandidate) ||
+            normalizedCandidate.Contains('/', StringComparison.Ordinal) ||
+            !Path.HasExtension(normalizedCandidate))
+        {
+            return false;
+        }
+
+        string[] matches = indexedPaths
+            .Where(path => string.Equals(Path.GetFileName(path), normalizedCandidate, StringComparison.OrdinalIgnoreCase))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        if (matches.Length != 1)
+        {
+            return false;
+        }
+
+        resolvedPath = matches[0];
+        return true;
     }
 
     private static bool TryGetAttachedReplacement(
@@ -782,11 +1013,12 @@ public class PlanningService(IEnumerable<IAgentTask> agentTasks)
         IReadOnlyCollection<string> supportedActions,
         IReadOnlySet<string> indexedPaths)
     {
+        AgentTask[] orderedTasks = tasks.OrderBy(task => task.Step).ToArray();
         var supportedActionSet = supportedActions.ToHashSet(StringComparer.OrdinalIgnoreCase);
         var availablePaths = new HashSet<string>(indexedPaths, StringComparer.OrdinalIgnoreCase);
         var lastReadPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         int expectedStep = 1;
-        foreach (AgentTask task in tasks.OrderBy(task => task.Step))
+        foreach (AgentTask task in orderedTasks)
         {
             if (task.Step != expectedStep)
             {
@@ -819,6 +1051,27 @@ public class PlanningService(IEnumerable<IAgentTask> agentTasks)
             ValidateTaskPathContract(task, action, availablePaths, lastReadPaths);
             expectedStep++;
         }
+
+        ValidatePlanCompletesUserRequest(orderedTasks);
+    }
+
+    private static void ValidatePlanCompletesUserRequest(IReadOnlyList<AgentTask> orderedTasks)
+    {
+        if (orderedTasks.Count == 0)
+        {
+            return;
+        }
+
+        AgentTask lastTask = orderedTasks[^1];
+        string lastAction = StringHelper.NormalizeAction(lastTask.Action);
+        if (!IsContextGatheringAction(lastAction))
+        {
+            return;
+        }
+
+        throw new InvalidOperationException(
+            $"Planner step {lastTask.Step} ends with context-gathering action '{lastTask.Action}'. " +
+            "Add an implementation, review, documentation, shell, or write-report step that completes the user request.");
     }
 
     private static void ValidateTaskPathContract(

@@ -118,6 +118,7 @@ public class GLaDOSProtocol : IAgentProtocol
         sb.Append("Do not translate argument names to QwenAgent aliases such as file_path, old_string, or new_string unless the selected tool schema uses those exact names.\n");
         sb.Append("When calling a tool, output only the tool call. Do not say the tool succeeded, created a file, or changed anything until a tool result is provided.\n");
         sb.Append("Tool calls may appear after reasoning blocks (<think>...</think>).\n");
+        sb.Append("When the human ask for help about how to do something. May be an shell script, do not execute a tool or show how a tool can be called. Just answer the question in text or code block if needed\n");
     }
 
     private static bool TryExtractToolCallJson(string text, out string rawJson)

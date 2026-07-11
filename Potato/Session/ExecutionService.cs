@@ -39,7 +39,23 @@ public class ExecutionService(
 
                 if (StringHelper.IsFailureResult(result))
                 {
-                    return ExecutionResult.Failed(observations, $"Step {task.Step} failed: {StringHelper.FirstLine(result)}");
+                    if (!CanAdaptiveReplanAfterFailure(result))
+                    {
+                        return ExecutionResult.Failed(observations, $"Step {task.Step} failed: {StringHelper.FirstLine(result)}");
+                    }
+
+                    if (replanCount >= MaxAdaptiveReplans)
+                    {
+                        return ExecutionResult.Failed(
+                            observations,
+                            $"Step {task.Step} failed after {MaxAdaptiveReplans} adaptive replans: {StringHelper.FirstLine(result)}");
+                    }
+
+                    replanCount++;
+                    PotatoConsole.WriteStatus($"Adaptive replan {replanCount}/{MaxAdaptiveReplans} after step {task.Step} failed.");
+                    activeTasks = await planningService.PlanAsync(goal, observations, chatClient, cancellationToken);
+                    taskIndex = 0;
+                    continue;
                 }
 
                 if (StringHelper.IsReplanRequiredResult(result))
@@ -87,5 +103,12 @@ public class ExecutionService(
         }
 
         return await agentTask.ExecuteTaskAsync(goal, task, context, observations, chatClient, cancellationToken);
+    }
+
+    private static bool CanAdaptiveReplanAfterFailure(string result)
+    {
+        string firstLine = StringHelper.FirstLine(result);
+        return !firstLine.Contains(" denied", StringComparison.OrdinalIgnoreCase) &&
+               !firstLine.Contains("Unsupported planner action", StringComparison.OrdinalIgnoreCase);
     }
 }
