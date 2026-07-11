@@ -609,24 +609,16 @@ internal static class PotatoConsole
 
         string[] choices =
         [
-            "Yes, allow once",
-            "Yes, allow always (default)",
-            "No, suggest changes (esc)"
+            "once",
+            "always",
+            "deny"
         ];
         int selectedIndex = 1;
-        int optionTop = Console.CursorTop;
-        for (int i = 0; i < choices.Length; i++)
-        {
-            Console.WriteLine();
-        }
-
-        RenderPermissionChoices(choices, selectedIndex, optionTop);
-        Console.SetCursorPosition(0, optionTop + choices.Length);
+        Console.Write("Choice (arrows/Enter): ");
+        int choiceLeft = Console.CursorLeft;
+        int choiceTop = Console.CursorTop;
+        RenderInlinePermissionChoices(choices, selectedIndex, choiceLeft, choiceTop);
         Console.ResetColor();
-        Console.WriteLine();
-        Console.Write("Choice [↑/↓, 1/2/3, Enter=selected]: ");
-        int inputLeft = Console.CursorLeft;
-        int inputTop = Console.CursorTop;
 
         while (true)
         {
@@ -652,15 +644,13 @@ internal static class PotatoConsole
                 case ConsoleKey.UpArrow:
                 case ConsoleKey.LeftArrow:
                     selectedIndex = (selectedIndex + choices.Length - 1) % choices.Length;
-                    RenderPermissionChoices(choices, selectedIndex, optionTop);
-                    Console.SetCursorPosition(inputLeft, inputTop);
+                    RenderInlinePermissionChoices(choices, selectedIndex, choiceLeft, choiceTop);
                     break;
 
                 case ConsoleKey.DownArrow:
                 case ConsoleKey.RightArrow:
                     selectedIndex = (selectedIndex + 1) % choices.Length;
-                    RenderPermissionChoices(choices, selectedIndex, optionTop);
-                    Console.SetCursorPosition(inputLeft, inputTop);
+                    RenderInlinePermissionChoices(choices, selectedIndex, choiceLeft, choiceTop);
                     break;
 
                 case ConsoleKey.Enter:
@@ -677,6 +667,27 @@ internal static class PotatoConsole
             1 => ToolPermissionChoice.AllowAlways,
             _ => ToolPermissionChoice.Deny
         };
+
+    private static void RenderInlinePermissionChoices(string[] choices, int selectedIndex, int left, int top)
+    {
+        Console.SetCursorPosition(left, top);
+        for (int i = 0; i < choices.Length; i++)
+        {
+            Console.ForegroundColor = i == selectedIndex ? ConsoleColor.Cyan : ConsoleColor.DarkGray;
+            string optionText = $"{i + 1} {choices[i]}";
+            Console.Write(i == selectedIndex ? $"[{optionText}]" : $" {optionText} ");
+            if (i < choices.Length - 1)
+            {
+                Console.ResetColor();
+                Console.Write("  ");
+            }
+        }
+
+        int endLeft = Console.CursorLeft;
+        ClearLineRemainder();
+        Console.SetCursorPosition(endLeft, top);
+        Console.ResetColor();
+    }
 
     private static void WritePermissionDetail(string detail)
     {

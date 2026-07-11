@@ -1124,6 +1124,12 @@ public class PlanningService(IEnumerable<IAgentTask> agentTasks)
                         $"Planner step {task.Step} write-documentation argument must name a concrete documentation file path.");
                 }
 
+                if (!IsDocumentationPath(documentationPath))
+                {
+                    throw new InvalidOperationException(
+                        $"Planner step {task.Step} uses write-documentation for non-Markdown target '{documentationPath}'. Use apply-patch or write-code for source files.");
+                }
+
                 if (!availablePaths.Contains(documentationPath))
                 {
                     throw new InvalidOperationException(

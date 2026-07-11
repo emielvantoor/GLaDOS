@@ -28,6 +28,9 @@ internal static partial class PromptLibrary
         Rules:
         - The Create task value is the file path to create.
         - Generate content for the target project named by that path.
+        - The content property must contain only bytes that belong in the target file.
+        - Never wrap the content property in a Markdown code fence. If the target file extension matches a fence language you would normally use, such as .html with ```html, .cs with ```csharp, .js with ```javascript, or .json with ```json, omit the opening and closing ``` markers and put only the file contents in content.
+        - For HTML files, content must begin with the first HTML token such as <!DOCTYPE html> or <html>; do not prepend Markdown headings, design summaries, explanations, or fenced code markers.
         - Treat Last read file and Prior observations as reference context, not as files to edit or dependencies to import.
         - If this file defines a supporting component for an entry point, make the component complete enough for the entry point to compile without relying on uncreated classes.
 

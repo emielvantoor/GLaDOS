@@ -35,6 +35,7 @@ class Program
         services.AddSingleton<IAgentTask, WriteReportTask>();
         services.AddSingleton<IAgentTask, ApplyPatchTask>();
         services.AddSingleton<IAgentTask, ArchitectRefactorTask>();
+        services.AddSingleton<IAgentTask, DesignTask>();
         services.AddSingleton<IAgentTask, ShellScriptTask>();
 
         var provider = services.BuildServiceProvider();

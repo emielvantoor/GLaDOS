@@ -13,6 +13,7 @@ public class WriteDocumentationTask(AgentTools agentTools) : AgentTaskBase, IAge
     public override IReadOnlyList<string> PlanningGuidance =>
     [
         "Use write-documentation to create or completely overwrite Markdown files like README.md, agents.md, or architecture specs.",
+        "Never use write-documentation for source files such as .html, .css, .js, .ts, .cs, .json, or .xml; use apply-patch or write-code for those files.",
         "For simple requests, set Argument to the exact destination file path (e.g., 'README.md').",
         "For detailed requests, put the edit target and requirements in Argument using this format: Target file: <exact path>\nRequirements: <target audience, scope, and layout requirements>."
     ];
@@ -29,6 +30,11 @@ public class WriteDocumentationTask(AgentTools agentTools) : AgentTaskBase, IAge
         if (string.IsNullOrWhiteSpace(filePath))
         {
             return "Error: write-documentation requires a target file path in the Argument property.";
+        }
+
+        if (!IsDocumentationPath(filePath))
+        {
+            return $"Error: write-documentation can only target Markdown documentation files, not '{filePath}'. Use apply-patch or write-code for source files.";
         }
 
         var messages = new List<ChatMessage>
@@ -115,4 +121,9 @@ public class WriteDocumentationTask(AgentTools agentTools) : AgentTaskBase, IAge
         targetFilePath = path;
         return true;
     }
+
+    private static bool IsDocumentationPath(string path) =>
+        path.EndsWith(".md", StringComparison.OrdinalIgnoreCase) ||
+        path.EndsWith(".mdx", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(Path.GetFileName(path), "README", StringComparison.OrdinalIgnoreCase);
 }

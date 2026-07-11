@@ -910,7 +910,7 @@ public class AgentTools(ExecutionMemory memory, CurrentChatClientState chatClien
     [Description("Creates a new text file after showing the full content to the user and asking for permission. Fails if the file already exists.")]
     public async Task<string> CreateFileAsync(
         [Description("The path for the new file. Absolute paths are accepted; relative paths resolve from the current working directory.")] string filePath,
-        [Description("The full text content to write into the new file.")] string content)
+        [Description("The full text content to write into the new file. Do not wrap it in Markdown code fences, even when the file extension matches the fence language such as .html and ```html.")] string content)
     {
         if (!TryReserveToolInvocation(nameof(CreateFileAsync), out string rejectionReason))
         {
@@ -941,17 +941,18 @@ public class AgentTools(ExecutionMemory memory, CurrentChatClientState chatClien
             return StoreAndReturn(nameof(CreateFileAsync), $"Error: Parent directory '{parentDirectory}' does not exist. Create or choose an existing directory first.");
         }
 
+        string sanitizedContent = SanitizeGeneratedFileContent(resolvedPath, content);
         ToolPermissionChoice approval = RequestPermission(
             PermissionKey(nameof(CreateFileAsync), resolvedPath),
             $"WriteFile Creating {PathResolver.FormatPathForDisplay(resolvedPath)}",
-            FormatCreateFilePreview(content ?? string.Empty));
+            FormatCreateFilePreview(sanitizedContent));
         if (approval == ToolPermissionChoice.Deny)
         {
             WriteCompactToolResult(false, "WriteFile denied", resolvedPath);
             return StoreAndReturn(nameof(CreateFileAsync), "File creation denied by user.");
         }
 
-        await File.WriteAllTextAsync(resolvedPath, content, CurrentCancellationToken);
+        await File.WriteAllTextAsync(resolvedPath, sanitizedContent, CurrentCancellationToken);
         SuccessfulEditCount++;
         WriteCompactToolResult(true, "WriteFile created", resolvedPath);
         return StoreAndReturn(nameof(CreateFileAsync), $"File created successfully at {resolvedPath}.");
@@ -960,7 +961,7 @@ public class AgentTools(ExecutionMemory memory, CurrentChatClientState chatClien
     [Description("Creates or completely overwrites a text file after showing the full content to the user and asking for permission.")]
     public async Task<string> OverwriteFileAsync(
         [Description("The path for the file. Absolute paths are accepted; relative paths resolve from the current working directory.")] string filePath,
-        [Description("The full text content to write into the file.")] string content)
+        [Description("The full text content to write into the file. Do not wrap it in Markdown code fences, even when the file extension matches the fence language such as .html and ```html.")] string content)
     {
         if (!TryReserveToolInvocation(nameof(OverwriteFileAsync), out string rejectionReason))
         {
@@ -986,22 +987,95 @@ public class AgentTools(ExecutionMemory memory, CurrentChatClientState chatClien
             return StoreAndReturn(nameof(OverwriteFileAsync), $"Error: Parent directory '{parentDirectory}' does not exist. Create or choose an existing directory first.");
         }
 
+        string sanitizedContent = SanitizeGeneratedFileContent(resolvedPath, content);
         bool fileExisted = File.Exists(resolvedPath);
         string action = fileExisted ? "Overwriting" : "Creating";
         ToolPermissionChoice approval = RequestPermission(
             PermissionKey(nameof(OverwriteFileAsync), resolvedPath),
             $"WriteFile {action} {PathResolver.FormatPathForDisplay(resolvedPath)}",
-            FormatCreateFilePreview(content ?? string.Empty));
+            FormatCreateFilePreview(sanitizedContent));
         if (approval == ToolPermissionChoice.Deny)
         {
             WriteCompactToolResult(false, "WriteFile denied", resolvedPath);
             return StoreAndReturn(nameof(OverwriteFileAsync), "File overwrite denied by user.");
         }
 
-        await File.WriteAllTextAsync(resolvedPath, content, CurrentCancellationToken);
+        await File.WriteAllTextAsync(resolvedPath, sanitizedContent, CurrentCancellationToken);
         SuccessfulEditCount++;
         WriteCompactToolResult(true, fileExisted ? "WriteFile wrote" : "WriteFile created", resolvedPath);
         return StoreAndReturn(nameof(OverwriteFileAsync), $"File written successfully at {resolvedPath}.");
+    }
+
+    internal static string SanitizeGeneratedFileContent(string filePath, string? content)
+    {
+        string value = content ?? string.Empty;
+        string extension = Path.GetExtension(filePath);
+        if (extension.Equals(".md", StringComparison.OrdinalIgnoreCase) ||
+            extension.Equals(".markdown", StringComparison.OrdinalIgnoreCase))
+        {
+            return value;
+        }
+
+        if (extension.Equals(".html", StringComparison.OrdinalIgnoreCase) ||
+            extension.Equals(".htm", StringComparison.OrdinalIgnoreCase))
+        {
+            return SanitizeHtmlContent(value);
+        }
+
+        return StripSingleOuterCodeFence(value);
+    }
+
+    private static string SanitizeHtmlContent(string content)
+    {
+        string value = StripSingleOuterCodeFence(content).Trim();
+        int start = IndexOfHtmlDocumentStart(value);
+        if (start > 0)
+        {
+            value = value[start..].TrimStart();
+        }
+
+        int end = value.LastIndexOf("</html>", StringComparison.OrdinalIgnoreCase);
+        if (end >= 0)
+        {
+            value = value[..(end + "</html>".Length)].TrimEnd();
+        }
+
+        return StripSingleOuterCodeFence(value).Trim();
+    }
+
+    private static int IndexOfHtmlDocumentStart(string content)
+    {
+        int doctype = content.IndexOf("<!DOCTYPE", StringComparison.OrdinalIgnoreCase);
+        int html = content.IndexOf("<html", StringComparison.OrdinalIgnoreCase);
+        if (doctype < 0)
+        {
+            return html;
+        }
+
+        if (html < 0)
+        {
+            return doctype;
+        }
+
+        return Math.Min(doctype, html);
+    }
+
+    private static string StripSingleOuterCodeFence(string content)
+    {
+        string trimmed = content.Trim();
+        if (!trimmed.StartsWith("```", StringComparison.Ordinal))
+        {
+            return content;
+        }
+
+        int firstLineBreak = trimmed.IndexOf('\n', StringComparison.Ordinal);
+        int lastFence = trimmed.LastIndexOf("```", StringComparison.Ordinal);
+        if (firstLineBreak < 0 || lastFence <= firstLineBreak)
+        {
+            return content;
+        }
+
+        return trimmed[(firstLineBreak + 1)..lastFence];
     }
 
     private static bool IsPlaceholderPath(string? filePath)
