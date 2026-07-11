@@ -7,6 +7,11 @@ using LLama.Sampling;
 
 namespace GLaDOS.LLama;
 
+/// <summary>
+/// Represents a language model implementation based on the LLaMA architecture.
+/// This class is responsible for loading, initializing, and generating responses using a LLaMA model.
+/// It inherits from <see cref="LanguageModel"/> and implements <see cref="IDisposable"/> for resource management.
+/// </summary>
 public class LLamaLanguageModel : LanguageModel, IDisposable
 {
     private Grammar? _grammer;
@@ -42,6 +47,13 @@ public class LLamaLanguageModel : LanguageModel, IDisposable
         return Task.CompletedTask;
     }
 
+    /// <summary>
+    /// Asynchronously generates a response based on the provided prompt and chat options.
+    /// </summary>
+    /// <param name="prompt">The input prompt to generate a response for.</param>
+    /// <param name="chatOptions">Configuration options for the chat generation.</param>
+    /// <param name="cancellationToken">A token to cancel the operation.</param>
+    /// <returns>A string containing the generated response.</returns>
     protected override async Task<string> OnGenerateResponseAsync(
         string prompt,
         ChatOptions chatOptions,
