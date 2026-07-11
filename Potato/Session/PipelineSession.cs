@@ -218,7 +218,7 @@ internal sealed class PipelineSession
             PotatoConsole.WriteAgentResponse(formattedPlan);
             PotatoConsole.WriteStatus("Review plan: type execute/yes to run, type changes to re-plan, or abort to cancel.");
 
-            string? reviewInput = PotatoConsole.ReadPromptInput(inputHistory, "execute, changes, or abort");
+            string? reviewInput = PotatoConsole.ReadPromptInput(inputHistory, "execute, changes, or abort", cancellationToken);
             if (string.IsNullOrWhiteSpace(reviewInput))
             {
                 continue;

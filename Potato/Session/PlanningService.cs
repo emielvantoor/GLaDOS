@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 using Microsoft.Extensions.AI;
 using Potato.Models;
 using Potato.Session.extensions;
@@ -130,7 +131,9 @@ public class PlanningService(IEnumerable<IAgentTask> agentTasks)
             throw new InvalidOperationException("Planner returned no tasks.");
         }
 
-        tasks = EnsureInstructionReadsBeforeImplementation(tasks, ExtractIndexedPaths(workspaceContext));
+        IReadOnlySet<string> indexedPaths = ExtractIndexedPaths(workspaceContext);
+        tasks = PreferAttachedMentionPaths(tasks, goal, indexedPaths);
+        tasks = EnsureInstructionReadsBeforeImplementation(tasks, indexedPaths);
         ValidateTasks(tasks, supportedActions);
         return tasks.OrderBy(task => task.Step).ToList();
     }
@@ -619,6 +622,101 @@ public class PlanningService(IEnumerable<IAgentTask> agentTasks)
         return path.Contains('/', StringComparison.Ordinal) || Path.HasExtension(path);
     }
 
+    private static List<AgentTask> PreferAttachedMentionPaths(
+        IReadOnlyList<AgentTask> tasks,
+        string goal,
+        IReadOnlySet<string> indexedPaths)
+    {
+        Dictionary<string, string> attachedPathsByFileName = ExtractAttachedMentionPaths(goal)
+            .Select(path => new AttachedMentionPath(path, Path.GetFileName(path)))
+            .Where(path => !string.IsNullOrWhiteSpace(path.FileName))
+            .GroupBy(path => path.FileName, StringComparer.OrdinalIgnoreCase)
+            .Where(group => group.Select(path => path.Path).Distinct(StringComparer.OrdinalIgnoreCase).Count() == 1)
+            .ToDictionary(group => group.Key, group => group.First().Path, StringComparer.OrdinalIgnoreCase);
+
+        if (attachedPathsByFileName.Count == 0)
+        {
+            return tasks.OrderBy(task => task.Step).ToList();
+        }
+
+        return tasks
+            .OrderBy(task => task.Step)
+            .Select(task => task with { Argument = PreferAttachedMentionPath(task.Argument, attachedPathsByFileName, indexedPaths) })
+            .ToList();
+    }
+
+    private static IEnumerable<string> ExtractAttachedMentionPaths(string goal)
+    {
+        foreach (Match match in Regex.Matches(goal, @"--- begin file: (?<path>.+?) ---"))
+        {
+            string path = NormalizeProjectPath(match.Groups["path"].Value);
+            if (!string.IsNullOrWhiteSpace(path))
+            {
+                yield return path;
+            }
+        }
+    }
+
+    private static string PreferAttachedMentionPath(
+        string argument,
+        IReadOnlyDictionary<string, string> attachedPathsByFileName,
+        IReadOnlySet<string> indexedPaths)
+    {
+        if (TryExtractTargetFile(argument, out string? targetFilePath) &&
+            targetFilePath is not null &&
+            TryGetAttachedReplacement(targetFilePath, attachedPathsByFileName, indexedPaths, out string? replacement))
+        {
+            return ReplaceExtractedTargetFile(argument, targetFilePath, replacement);
+        }
+
+        return TryGetAttachedReplacement(argument, attachedPathsByFileName, indexedPaths, out replacement)
+            ? replacement
+            : argument;
+    }
+
+    private static bool TryGetAttachedReplacement(
+        string candidatePath,
+        IReadOnlyDictionary<string, string> attachedPathsByFileName,
+        IReadOnlySet<string> indexedPaths,
+        out string replacement)
+    {
+        replacement = string.Empty;
+        string normalizedCandidate = NormalizeProjectPath(candidatePath);
+        string fileName = Path.GetFileName(normalizedCandidate);
+        if (string.IsNullOrWhiteSpace(fileName) ||
+            !attachedPathsByFileName.TryGetValue(fileName, out string? attachedPath) ||
+            string.Equals(normalizedCandidate, attachedPath, StringComparison.OrdinalIgnoreCase) ||
+            indexedPaths.Contains(normalizedCandidate))
+        {
+            return false;
+        }
+
+        replacement = attachedPath;
+        return true;
+    }
+
+    private static string ReplaceExtractedTargetFile(string argument, string oldTargetFilePath, string replacement)
+    {
+        const string targetPrefix = "Target file:";
+        string normalized = argument.Replace("\r\n", "\n", StringComparison.Ordinal);
+        int targetIndex = normalized.IndexOf(targetPrefix, StringComparison.OrdinalIgnoreCase);
+        if (targetIndex < 0)
+        {
+            return argument;
+        }
+
+        int pathStart = targetIndex + targetPrefix.Length;
+        int pathEnd = normalized.IndexOf('\n', pathStart);
+        pathEnd = pathEnd < 0 ? normalized.Length : pathEnd;
+        string existingTarget = normalized[pathStart..pathEnd].Trim();
+        if (!string.Equals(existingTarget, oldTargetFilePath, StringComparison.Ordinal))
+        {
+            return argument;
+        }
+
+        return normalized[..pathStart] + " " + replacement + normalized[pathEnd..];
+    }
+
     private static string NormalizeProjectPath(string path)
     {
         string normalized = path.Trim().Replace('\\', '/');
@@ -632,6 +730,8 @@ public class PlanningService(IEnumerable<IAgentTask> agentTasks)
 
     private static List<AgentTask> RenumberTasks(IEnumerable<AgentTask> tasks) =>
         tasks.Select((task, index) => task with { Step = index + 1 }).ToList();
+
+    private sealed record AttachedMentionPath(string Path, string FileName);
     
     private static void ValidateTasks(IEnumerable<AgentTask> tasks, IReadOnlyCollection<string> supportedActions)
     {

@@ -189,7 +189,10 @@ internal static class PotatoConsole
         return (inputLeft, inputTop, placeholder.Length);
     }
 
-    public static string? ReadPromptInput(IReadOnlyList<string> history, string? placeholder = null)
+    public static string? ReadPromptInput(
+        IReadOnlyList<string> history,
+        string? placeholder = null,
+        CancellationToken cancellationToken = default)
     {
         placeholder = string.IsNullOrWhiteSpace(placeholder) ? DefaultPromptPlaceholder : placeholder;
         (int inputLeft, int inputTop, int placeholderLength) = WritePrompt(placeholder);
@@ -204,16 +207,26 @@ internal static class PotatoConsole
 
         while (true)
         {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (cancellationToken.CanBeCanceled && !Console.KeyAvailable)
+            {
+                Thread.Sleep(50);
+                continue;
+            }
+
             ConsoleKeyInfo key = Console.ReadKey(intercept: true);
 
             switch (key.Key)
             {
                 case ConsoleKey.Enter:
                     NormalizeInlineCompletionCycle(buffer, cursorIndex, ref inlineCompletionKey, ref inlineCompletionIndex);
-                    if (TryGetInlineCompletion(buffer, cursorIndex, inlineCompletionIndex, out string completion))
+                    if (TryGetInlineCompletion(buffer, cursorIndex, inlineCompletionIndex, out InlineCompletionCandidate? completion) &&
+                        completion is not null)
                     {
-                        buffer.InsertRange(cursorIndex, completion);
-                        cursorIndex += completion.Length;
+                        int replacementStart = Math.Clamp(completion.ReplacementStart, 0, cursorIndex);
+                        buffer.RemoveRange(replacementStart, cursorIndex - replacementStart);
+                        buffer.InsertRange(replacementStart, completion.ReplacementText);
+                        cursorIndex = replacementStart + completion.ReplacementText.Length;
                         inlineCompletionIndex = 0;
                         inlineCompletionKey = string.Empty;
                         RedrawInputLine(buffer, cursorIndex, inputLeft, inputTop, placeholder, inlineCompletionIndex, ref renderedLength);
@@ -791,7 +804,7 @@ internal static class PotatoConsole
         ref string inlineCompletionKey,
         ref int inlineCompletionIndex)
     {
-        if (!TryGetInlineCompletionCandidates(buffer, cursorIndex, out string key, out List<string> completions) ||
+        if (!TryGetInlineCompletionCandidates(buffer, cursorIndex, out string key, out List<InlineCompletionCandidate> completions) ||
             completions.Count <= 1)
         {
             return false;
@@ -813,7 +826,7 @@ internal static class PotatoConsole
         ref string inlineCompletionKey,
         ref int inlineCompletionIndex)
     {
-        if (!TryGetInlineCompletionCandidates(buffer, cursorIndex, out string key, out List<string> completions))
+        if (!TryGetInlineCompletionCandidates(buffer, cursorIndex, out string key, out List<InlineCompletionCandidate> completions))
         {
             inlineCompletionKey = string.Empty;
             inlineCompletionIndex = 0;
@@ -837,23 +850,23 @@ internal static class PotatoConsole
         List<char> buffer,
         int cursorIndex,
         int inlineCompletionIndex,
-        out string completion)
+        out InlineCompletionCandidate? completion)
     {
-        completion = string.Empty;
-        if (!TryGetInlineCompletionCandidates(buffer, cursorIndex, out _, out List<string> completions))
+        completion = null;
+        if (!TryGetInlineCompletionCandidates(buffer, cursorIndex, out _, out List<InlineCompletionCandidate> completions))
         {
             return false;
         }
 
         completion = completions[Mod(inlineCompletionIndex, completions.Count)];
-        return completion.Length > 0;
+        return completion.DisplayText.Length > 0 || completion.ReplacementText.Length > 0;
     }
 
     private static bool TryGetInlineCompletionCandidates(
         List<char> buffer,
         int cursorIndex,
         out string key,
-        out List<string> completions)
+        out List<InlineCompletionCandidate> completions)
     {
         key = string.Empty;
         completions = [];
@@ -865,7 +878,7 @@ internal static class PotatoConsole
         string text = new(buffer.ToArray());
         if (TryGetCdArgument(text, out int argumentStartIndex, out string argument))
         {
-            if (!TryFindPathCompletions(argument, includeFiles: false, appendDirectorySeparator: false, out List<string> argumentCompletions))
+            if (!TryFindPathCompletions(argument, includeFiles: false, appendDirectorySeparator: false, out List<PathCompletion> argumentCompletions))
             {
                 return false;
             }
@@ -873,20 +886,26 @@ internal static class PotatoConsole
             key = text;
             bool completeBareCommand = argumentStartIndex == text.Length && text.Equals("/cd", StringComparison.OrdinalIgnoreCase);
             completions = argumentCompletions
-                .Select(value => completeBareCommand ? " " + value : value)
-                .Where(value => value.Length > 0)
+                .Select(value => completeBareCommand
+                    ? new InlineCompletionCandidate(" " + value.ReplacementText, cursorIndex, " " + value.DisplayText)
+                    : new InlineCompletionCandidate(value.ReplacementText, argumentStartIndex, value.DisplayText))
+                .Where(value => value.DisplayText.Length > 0 || value.ReplacementText.Length > 0)
                 .ToList();
             return completions.Count > 0;
         }
 
-        if (TryGetFileMentionArgument(text, out string mentionArgument))
+        if (TryGetFileMentionArgument(text, out int mentionArgumentStartIndex, out string mentionArgument))
         {
-            if (!TryFindPathCompletions(mentionArgument, includeFiles: true, appendDirectorySeparator: true, out completions))
+            if (!TryFindPathCompletions(mentionArgument, includeFiles: true, appendDirectorySeparator: true, out List<PathCompletion> mentionCompletions))
             {
                 return false;
             }
 
             key = text;
+            completions = mentionCompletions
+                .Select(value => new InlineCompletionCandidate(value.ReplacementText, mentionArgumentStartIndex, value.DisplayText))
+                .Where(value => value.DisplayText.Length > 0 || value.ReplacementText.Length > 0)
+                .ToList();
             return completions.Count > 0;
         }
 
@@ -923,8 +942,9 @@ internal static class PotatoConsole
         return true;
     }
 
-    private static bool TryGetFileMentionArgument(string text, out string argument)
+    private static bool TryGetFileMentionArgument(string text, out int argumentStartIndex, out string argument)
     {
+        argumentStartIndex = 0;
         argument = string.Empty;
         int tokenStart = text.LastIndexOfAny([' ', '\t', '\r', '\n']);
         tokenStart = tokenStart < 0 ? 0 : tokenStart + 1;
@@ -933,6 +953,7 @@ internal static class PotatoConsole
             return false;
         }
 
+        argumentStartIndex = tokenStart + 1;
         argument = text[(tokenStart + 1)..].Trim('"', '\'');
         return true;
     }
@@ -941,7 +962,7 @@ internal static class PotatoConsole
         string argument,
         bool includeFiles,
         bool appendDirectorySeparator,
-        out List<string> completions)
+        out List<PathCompletion> completions)
     {
         completions = [];
         string normalizedArgument = argument.Replace(Path.AltDirectorySeparatorChar, Path.DirectorySeparatorChar);
@@ -998,12 +1019,18 @@ internal static class PotatoConsole
             .ThenBy(candidate => candidate.Name, StringComparer.OrdinalIgnoreCase)
             .Select(candidate =>
             {
-                string value = candidate.Name![namePrefix.Length..];
-                return candidate.IsDirectory && appendDirectorySeparator
-                    ? value + Path.DirectorySeparatorChar
-                    : value;
+                string replacementText = baseArgument + candidate.Name;
+                if (candidate.IsDirectory && appendDirectorySeparator)
+                {
+                    replacementText += Path.DirectorySeparatorChar;
+                }
+
+                string displayText = replacementText.Length >= normalizedArgument.Length
+                    ? replacementText[normalizedArgument.Length..]
+                    : string.Empty;
+                return new PathCompletion(replacementText, displayText);
             })
-            .Where(value => value.Length > 0)
+            .Where(value => value.DisplayText.Length > 0 || !string.Equals(value.ReplacementText, normalizedArgument, StringComparison.Ordinal))
             .ToList();
 
         return completions.Count > 0;
@@ -1022,7 +1049,11 @@ internal static class PotatoConsole
         string completion = string.Empty;
         if (text.Length > 0)
         {
-            TryGetInlineCompletion(buffer, cursorIndex, inlineCompletionIndex, out completion);
+            if (TryGetInlineCompletion(buffer, cursorIndex, inlineCompletionIndex, out InlineCompletionCandidate? candidate) &&
+                candidate is not null)
+            {
+                completion = candidate.DisplayText;
+            }
         }
 
         int currentLength = text.Length == 0
@@ -1151,6 +1182,10 @@ internal static class PotatoConsole
             top++;
         }
     }
+
+    private sealed record InlineCompletionCandidate(string ReplacementText, int ReplacementStart, string DisplayText);
+
+    private sealed record PathCompletion(string ReplacementText, string DisplayText);
 
     private sealed record PathCompletionCandidate(string? Name, bool IsDirectory);
 
