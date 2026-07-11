@@ -49,7 +49,7 @@ public abstract class AgentTaskBase
 
         if (!match.Success)
         {
-            throw new InvalidOperationException("Refactor model did not return <SEARCH>/<REPLACE> blocks.");
+            throw new InvalidOperationException("Patch model did not return <SEARCH>/<REPLACE> blocks.");
         }
 
         return new SearchReplacePatch

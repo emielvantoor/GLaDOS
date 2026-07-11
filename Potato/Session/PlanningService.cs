@@ -474,7 +474,7 @@ public class PlanningService(IEnumerable<IAgentTask> agentTasks)
         for (int index = 0; index < orderedTasks.Length; index++)
         {
             string action = StringHelper.NormalizeAction(orderedTasks[index].Action);
-            if (action is "create-file" or "refactor-prompt")
+            if (action is "create-file" or "apply-patch")
             {
                 return index;
             }
@@ -539,7 +539,7 @@ public class PlanningService(IEnumerable<IAgentTask> agentTasks)
                     yield return path;
                 }
             }
-            else if (action == "refactor-prompt" &&
+            else if (action == "apply-patch" &&
                      TryExtractTargetFile(task.Argument, out string? targetFilePath) &&
                      targetFilePath is not null)
             {

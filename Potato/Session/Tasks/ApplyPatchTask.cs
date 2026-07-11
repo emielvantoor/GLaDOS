@@ -6,16 +6,16 @@ using Potato.Tools;
 
 namespace Potato.Session.Tasks;
 
-public class RefactorTask(AgentTools agentTools) : AgentTaskBase, IAgentTask
+public class ApplyPatchTask(AgentTools agentTools) : AgentTaskBase, IAgentTask
 {
-    protected override string Name { get; } = "refactor-prompt";
+    protected override string Name { get; } = "apply-patch";
 
     public override IReadOnlyList<string> PlanningGuidance =>
     [
-        "Use refactor-prompt only after reading the file that should be changed.",
-        "When reading another file only as a reference, read the reference first and then read the target file immediately before refactor-prompt.",
-        "For refactor-prompt, put the edit target and instructions in Argument using this format: Target file: <exact path from Workspace context or prior create-file>\nInstructions: <concrete edit instructions>.",
-        "Never use refactor-prompt to edit a file that was described as a reference."
+        $"Use {Name} only after reading the file that should be changed.",
+        $"When reading another file only as a reference, read the reference first and then read the target file immediately before {Name}.",
+        $"For {Name}, put the edit target and instructions in Argument using this format: Target file: <exact path from Workspace context or prior create-file>\nInstructions: <concrete edit instructions>.",
+        $"Never use {Name} to edit a file that was described as a reference."
     ];
     
     public async Task<string> ExecuteTaskAsync(string goal,
@@ -28,12 +28,12 @@ public class RefactorTask(AgentTools agentTools) : AgentTaskBase, IAgentTask
         if (string.IsNullOrWhiteSpace(context.LastReadFilePath) ||
             string.IsNullOrWhiteSpace(context.LastReadFileContent))
         {
-            return "Error: refactor_prompt requires a successful read step first.";
+            return $"Error: {Name} requires a successful read step first.";
         }
 
-        (string filePath, string fileContent, string instructions) = ResolveRefactorTarget(task, context);
+        (string filePath, string fileContent, string instructions) = ResolvePatchTarget(task, context);
 
-        SearchReplacePatch patch = await GenerateRefactorPatchAsync(
+        SearchReplacePatch patch = await GeneratePatchAsync(
             goal,
             task,
             filePath,
@@ -46,7 +46,7 @@ public class RefactorTask(AgentTools agentTools) : AgentTaskBase, IAgentTask
         return await agentTools.ApplySearchReplaceAsync(filePath, patch.Search, patch.Replace);
     }
 
-    private (string FilePath, string FileContent, string Instructions) ResolveRefactorTarget(
+    private (string FilePath, string FileContent, string Instructions) ResolvePatchTarget(
         AgentTask task,
         ExecutorContext context)
     {
@@ -69,7 +69,7 @@ public class RefactorTask(AgentTools agentTools) : AgentTaskBase, IAgentTask
         string content = agentTools.ReadFileContent(targetFilePath!);
         if (StringHelper.IsFailureResult(content))
         {
-            throw new InvalidOperationException($"Could not read explicit refactor target '{targetFilePath}': {StringHelper.FirstLine(content)}");
+            throw new InvalidOperationException($"Could not read explicit patch target '{targetFilePath}': {StringHelper.FirstLine(content)}");
         }
 
         return (targetFilePath!, content, instructions);
@@ -105,7 +105,7 @@ public class RefactorTask(AgentTools agentTools) : AgentTaskBase, IAgentTask
         return true;
     }
 
-    private async Task<SearchReplacePatch> GenerateRefactorPatchAsync(
+    private async Task<SearchReplacePatch> GeneratePatchAsync(
         string goal,
         AgentTask task,
         string filePath,
@@ -117,10 +117,10 @@ public class RefactorTask(AgentTools agentTools) : AgentTaskBase, IAgentTask
     {
         var messages = new List<ChatMessage>
         {
-            new(ChatRole.System, Prompts.PromptLibrary.RefactorSystemPrompt),
+            new(ChatRole.System, Prompts.PromptLibrary.ApplyPatchSystemPrompt),
             new(
                 ChatRole.User,
-                Prompts.PromptLibrary.BuildRefactorUserPrompt(
+                Prompts.PromptLibrary.BuildApplyPatchUserPrompt(
                     goal,
                     filePath,
                     fileContent,
@@ -130,7 +130,7 @@ public class RefactorTask(AgentTools agentTools) : AgentTaskBase, IAgentTask
 
         ChatResponse response;
         using (PotatoConsole.StartProgress(
-                   $"Generating refactor patch for {PathResolver.FormatPathForDisplay(filePath)}..."))
+                   $"Generating patch for {PathResolver.FormatPathForDisplay(filePath)}..."))
         {
             response = await chatClient.GetResponseAsync(
                 messages,
@@ -142,13 +142,13 @@ public class RefactorTask(AgentTools agentTools) : AgentTaskBase, IAgentTask
 
         if (string.IsNullOrEmpty(patch.Search) || patch.Replace is null)
         {
-            throw new InvalidOperationException("Refactor model did not return valid SEARCH/REPLACE blocks.");
+            throw new InvalidOperationException("Apply patch model did not return valid SEARCH/REPLACE blocks.");
         }
 
         if (!fileContent.Contains(patch.Search, StringComparison.Ordinal))
         {
             throw new InvalidOperationException(
-                "Refactor model returned SEARCH text that is not present in the full file content.");
+                "Apply patch model returned SEARCH text that is not present in the full file content.");
         }
 
         return patch with { FilePath = filePath };

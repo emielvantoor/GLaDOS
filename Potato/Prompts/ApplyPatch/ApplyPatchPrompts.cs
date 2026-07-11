@@ -2,16 +2,16 @@ namespace Potato.Prompts;
 
 internal static partial class PromptLibrary
 {
-    private static readonly PromptDefinition RefactorSystem = new(
-        "refactor-system.md",
+    private static readonly PromptDefinition ApplyPatchSystem = new(
+        "apply-patch-system.md",
         "You generate exact SEARCH/REPLACE patches. " +
         "Return the patch blocks only. " +
         "Do not include markdown fences or commentary.");
 
-    private static readonly PromptDefinition RefactorUser = new(
-        "refactor-user.md",
+    private static readonly PromptDefinition ApplyPatchUser = new(
+        "apply-patch-user.md",
         """
-        You are the Refactor phase of Potato.
+        You are the Apply Patch phase of Potato.
         Return exactly one SEARCH/REPLACE patch and nothing else.
         The SEARCH text must be copied exactly from the provided full file content.
         The SEARCH block must be large enough to match exactly once.
@@ -48,15 +48,18 @@ internal static partial class PromptLibrary
         ```
         """);
 
-    public static string RefactorSystemPrompt => Load(RefactorSystem);
+    
 
-    public static string BuildRefactorUserPrompt(
+    public static string ApplyPatchSystemPrompt => Load(ApplyPatchSystem);
+
+
+    public static string BuildApplyPatchUserPrompt(
         string goal,
         string filePath,
         string fileContent,
         string instructions,
         string priorObservations) =>
-        Render(RefactorUser, new Dictionary<string, string>
+        Render(ApplyPatchUser, new Dictionary<string, string>
         {
             ["Goal"] = goal,
             ["FilePath"] = filePath,
@@ -64,4 +67,6 @@ internal static partial class PromptLibrary
             ["PriorObservations"] = priorObservations,
             ["FileContent"] = fileContent
         });
+
+   
 }

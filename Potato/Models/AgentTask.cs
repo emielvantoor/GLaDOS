@@ -20,7 +20,7 @@ public sealed record AgentTask
     {
         return Action.Trim().ToLowerInvariant().Replace("_", "-", StringComparison.Ordinal) switch
         {
-            "read" or "refactor-prompt" or "review_code" => 0.0,
+            "read" or "apply-patch" or "review_code" => 0.0,
             "write-report" => 0.7,
             _ => 0.0
         };

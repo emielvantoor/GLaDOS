@@ -30,8 +30,9 @@ class Program
         services.AddSingleton<IAgentTask, CreateNewFileTask>();
         services.AddSingleton<IAgentTask, InspectProjectTask>();
         services.AddSingleton<IAgentTask, ReadFileTask>();
+        services.AddSingleton<IAgentTask, WriteCodeTask>();
         services.AddSingleton<IAgentTask, WriteReportTask>();
-        services.AddSingleton<IAgentTask, RefactorTask>();
+        services.AddSingleton<IAgentTask, ApplyPatchTask>();
 
         var provider = services.BuildServiceProvider();
 

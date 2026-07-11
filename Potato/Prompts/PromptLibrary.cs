@@ -36,8 +36,10 @@ internal static partial class PromptLibrary
         yield return PlannerSystem;
         yield return PlannerUser;
         yield return PatchSystem;
-        yield return RefactorSystem;
-        yield return RefactorUser;
+        yield return ApplyPatchSystem;
+        yield return ApplyPatchUser;
+        yield return WriteCodeSystem;
+        yield return WriteCodeUser;
         yield return CreateFileSystem;
         yield return CreateFileUser;
         yield return UserTextSystem;
