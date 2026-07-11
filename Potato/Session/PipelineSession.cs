@@ -81,6 +81,7 @@ internal sealed class PipelineSession
             appSettingsStore.SetSelectedModel,
             HandleTranscriptCommand,
             WriteSessions,
+            ContinueSession,
             GetExecutionMode,
             SetExecutionMode,
             () => currentOpenAiClient,
@@ -146,16 +147,17 @@ internal sealed class PipelineSession
 
         EnsureCurrentSession(userInput);
         chatHistory.Add(new ChatMessage(ChatRole.User, expandedGoal));
+        string contextualGoal = BuildContextualGoal(expandedGoal);
 
         try
         {
             if (executionMode == ExecutionMode.ReAct)
             {
-                await HandleUserGoalWithReActAsync(expandedGoal, cancellationToken);
+                await HandleUserGoalWithReActAsync(contextualGoal, cancellationToken);
                 return;
             }
 
-            List<AgentTask>? plan = await ReviewPlanAsync(expandedGoal, currentOpenAiClient, cancellationToken);
+            List<AgentTask>? plan = await ReviewPlanAsync(contextualGoal, currentOpenAiClient, cancellationToken);
             if (plan is null)
             {
                 string abortedMessage = "Plan was aborted. No execution was started.";
@@ -165,7 +167,7 @@ internal sealed class PipelineSession
                 return;
             }
 
-            ExecutionResult result = await _executionService.ExecutePlanAsync(expandedGoal, plan, currentOpenAiClient, cancellationToken);
+            ExecutionResult result = await _executionService.ExecutePlanAsync(contextualGoal, plan, currentOpenAiClient, cancellationToken);
             string finalMessage = result.Success
                 ? BuildSuccessSummary(result)
                 : BuildFailureSummary(result);
@@ -257,6 +259,49 @@ internal sealed class PipelineSession
     {
         string normalized = input.Trim().Trim('.', '!', '?').ToLowerInvariant();
         return normalized is "test" or "testing" or "ping" or "hello" or "hi" or "hey";
+    }
+
+    private string BuildContextualGoal(string currentGoal)
+    {
+        IReadOnlyList<ChatMessage> priorMessages = chatHistory.Count > 0
+            ? chatHistory.Take(chatHistory.Count - 1).ToArray()
+            : [];
+
+        if (priorMessages.Count == 0)
+        {
+            return currentGoal;
+        }
+
+        return $"""
+        Current request:
+        {currentGoal}
+
+        Prior chat context from this Potato session:
+        {FormatConversationContext(priorMessages)}
+
+        Use the prior chat context to understand references like "continue", "same file", "that change", or follow-up corrections. The current request is authoritative if it conflicts with earlier context.
+        """;
+    }
+
+    private static string FormatConversationContext(IReadOnlyList<ChatMessage> messages)
+    {
+        const int maxContextCharacters = 20_000;
+        var builder = new StringBuilder();
+
+        for (int i = messages.Count - 1; i >= 0; i--)
+        {
+            ChatMessage message = messages[i];
+            string text = string.IsNullOrWhiteSpace(message.Text) ? "(empty)" : message.Text.Trim();
+            string entry = $"{message.Role}: {text}\n\n";
+            if (builder.Length + entry.Length > maxContextCharacters)
+            {
+                break;
+            }
+
+            builder.Insert(0, entry);
+        }
+
+        return builder.ToString().TrimEnd();
     }
 
     private static string BuildReplanGoal(string originalGoal, string previousPlan, string correction) =>
@@ -466,6 +511,55 @@ internal sealed class PipelineSession
             PotatoConsole.WriteStatus(
                 $"{currentSessionNumber}: {currentSessionSubject} ({currentSessionStartedAt:g}, {chatHistory.Count} messages, current)");
         }
+    }
+
+    private void ContinueSession(string arguments)
+    {
+        int sessionNumber = ParseContinueSessionSelector(arguments);
+        if (sessionNumber == 0)
+        {
+            PotatoConsole.WriteError("No matching session. Type /sessions to list tracked sessions.");
+            return;
+        }
+
+        if (currentSessionNumber == sessionNumber)
+        {
+            PotatoConsole.WriteStatus($"Session {sessionNumber} is already current.");
+            return;
+        }
+
+        int archivedIndex = archivedSessions.FindIndex(candidate => candidate.Number == sessionNumber);
+        if (archivedIndex < 0)
+        {
+            PotatoConsole.WriteError("Only archived sessions can be continued. Type /sessions to list tracked sessions.");
+            return;
+        }
+
+        SessionTranscript session = archivedSessions[archivedIndex];
+        ArchiveCurrentSession();
+        archivedSessions.RemoveAt(archivedIndex);
+
+        currentSessionNumber = session.Number;
+        currentSessionSubject = session.Subject;
+        currentSessionStartedAt = session.StartedAt;
+        chatHistory.Clear();
+        chatHistory.AddRange(session.Messages.Select(CloneMessage));
+        executionMemory.Clear();
+
+        PotatoConsole.WriteSuccess(
+            $"Continuing session {session.Number}: {session.Subject} ({chatHistory.Count} messages).");
+    }
+
+    private int ParseContinueSessionSelector(string arguments)
+    {
+        string selector = arguments.Trim();
+        if (string.IsNullOrWhiteSpace(selector) || selector.Equals("last", StringComparison.OrdinalIgnoreCase) ||
+            selector.Equals("latest", StringComparison.OrdinalIgnoreCase))
+        {
+            return archivedSessions.Count > 0 ? archivedSessions[^1].Number : currentSessionNumber;
+        }
+
+        return ParseSessionSelector(selector);
     }
 
     private void HandleTranscriptCommand(string arguments)

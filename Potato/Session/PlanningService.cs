@@ -161,22 +161,22 @@ public class PlanningService(IEnumerable<IAgentTask> agentTasks)
 
     private async Task<string> BuildProjectMapCoreAsync(string targetDirectory, IChatClient chatClient, CancellationToken cancellationToken)
     {
+        ProjectMapCacheLocation cacheLocation = GetProjectMapCacheLocation(targetDirectory);
         var builder = new StringBuilder();
-        builder.AppendLine($"ProjectMap root: {targetDirectory}");
+        builder.AppendLine($"ProjectMap root: {cacheLocation.TargetDirectory}");
 
-        FileInfo[] files = EnumerateProjectMapFiles(targetDirectory)
+        FileInfo[] files = EnumerateProjectMapFiles(cacheLocation.TargetDirectory)
             .Where(IsProjectMapFile)
-            .OrderBy(file => ToRelativeProjectMapPath(targetDirectory, file.FullName), StringComparer.OrdinalIgnoreCase)
+            .OrderBy(file => ToRelativeProjectMapPath(cacheLocation.TargetDirectory, file.FullName), StringComparer.OrdinalIgnoreCase)
             .ToArray();
         string promptHash = ComputeHash(Prompts.PromptLibrary.BuildProjectMapCacheKey);
-        string cachePath = GetProjectMapCachePath(targetDirectory);
-        ProjectMapCache cache = LoadProjectMapCache(cachePath);
+        ProjectMapCache cache = LoadProjectMapCache(cacheLocation.CachePath);
         var currentRelativePaths = files
-            .Select(file => ToRelativeProjectMapPath(targetDirectory, file.FullName))
+            .Select(file => ToRelativeProjectMapPath(cacheLocation.CacheRootDirectory, file.FullName))
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        if (PruneDeletedProjectMapEntries(cache, currentRelativePaths))
+        if (PruneDeletedProjectMapEntries(cache, currentRelativePaths, cacheLocation.CachePrunePathPrefix))
         {
-            SaveProjectMapCache(cachePath, cache);
+            SaveProjectMapCache(cacheLocation.CachePath, cache);
         }
 
         using (PotatoConsole.IProgressReporter progress =
@@ -186,15 +186,16 @@ public class PlanningService(IEnumerable<IAgentTask> agentTasks)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 FileInfo file = files[index];
-                string relativePath = ToRelativeProjectMapPath(targetDirectory, file.FullName);
+                string relativePath = ToRelativeProjectMapPath(cacheLocation.TargetDirectory, file.FullName);
+                string cacheRelativePath = ToRelativeProjectMapPath(cacheLocation.CacheRootDirectory, file.FullName);
                 string fileHash = await ComputeFileHashAsync(file.FullName, cancellationToken);
-                ProjectMapCacheEntry? cachedEntry = GetValidProjectMapCacheEntry(cache, relativePath, fileHash, promptHash);
+                ProjectMapCacheEntry? cachedEntry = GetValidProjectMapCacheEntry(cache, cacheRelativePath, fileHash, promptHash);
                 if (cachedEntry is not null)
                 {
                     progress.Update(BuildProjectMapProgressMessage(index + 1, files.Length, relativePath, cached: true));
-                    if (UpdateProjectMapCacheEntry(cache, relativePath, file, fileHash, promptHash, cachedEntry.Summary))
+                    if (UpdateProjectMapCacheEntry(cache, cacheRelativePath, file, fileHash, promptHash, cachedEntry.Summary))
                     {
-                        SaveProjectMapCache(cachePath, cache);
+                        SaveProjectMapCache(cacheLocation.CachePath, cache);
                     }
 
                     AppendProjectMapSummary(builder, relativePath, cachedEntry.Summary);
@@ -205,7 +206,7 @@ public class PlanningService(IEnumerable<IAgentTask> agentTasks)
                 string content = await File.ReadAllTextAsync(file.FullName, cancellationToken);
                 string summary = await SummarizeProjectFileAsync(relativePath, content, chatClient, cancellationToken);
 
-                cache.Entries[relativePath] = new ProjectMapCacheEntry
+                cache.Entries[cacheRelativePath] = new ProjectMapCacheEntry
                 {
                     LastWriteTimeUtcTicks = file.LastWriteTimeUtc.Ticks,
                     Length = file.Length,
@@ -213,7 +214,7 @@ public class PlanningService(IEnumerable<IAgentTask> agentTasks)
                     PromptHash = promptHash,
                     Summary = summary
                 };
-                SaveProjectMapCache(cachePath, cache);
+                SaveProjectMapCache(cacheLocation.CachePath, cache);
                 AppendProjectMapSummary(builder, relativePath, summary);
             }
         }
@@ -411,10 +412,13 @@ public class PlanningService(IEnumerable<IAgentTask> agentTasks)
         File.WriteAllText(cachePath, json);
     }
 
-    private static bool PruneDeletedProjectMapEntries(ProjectMapCache cache, IReadOnlySet<string> currentRelativePaths)
+    private static bool PruneDeletedProjectMapEntries(
+        ProjectMapCache cache,
+        IReadOnlySet<string> currentRelativePaths,
+        string? scopedPathPrefix)
     {
         string[] removedPaths = cache.Entries.Keys
-            .Where(path => !currentRelativePaths.Contains(path))
+            .Where(path => IsPathInCachePruneScope(path, scopedPathPrefix) && !currentRelativePaths.Contains(path))
             .ToArray();
 
         foreach (string removedPath in removedPaths)
@@ -425,8 +429,39 @@ public class PlanningService(IEnumerable<IAgentTask> agentTasks)
         return removedPaths.Length > 0;
     }
 
-    private static string GetProjectMapCachePath(string targetDirectory) =>
-        Path.Combine(targetDirectory, ProjectMapCacheDirectoryName, ProjectMapCacheFileName);
+    private static bool IsPathInCachePruneScope(string cacheRelativePath, string? scopedPathPrefix) =>
+        string.IsNullOrEmpty(scopedPathPrefix) ||
+        cacheRelativePath.Equals(scopedPathPrefix, StringComparison.OrdinalIgnoreCase) ||
+        cacheRelativePath.StartsWith(scopedPathPrefix + '/', StringComparison.OrdinalIgnoreCase);
+
+    private static ProjectMapCacheLocation GetProjectMapCacheLocation(string targetDirectory)
+    {
+        string fullTargetDirectory = Path.GetFullPath(targetDirectory);
+        string cacheRootDirectory = FindGitRepositoryRoot(fullTargetDirectory) ?? fullTargetDirectory;
+        string cachePrunePathPrefix = ToRelativeProjectMapPath(cacheRootDirectory, fullTargetDirectory);
+        return new ProjectMapCacheLocation(
+            fullTargetDirectory,
+            cacheRootDirectory,
+            Path.Combine(cacheRootDirectory, ProjectMapCacheDirectoryName, ProjectMapCacheFileName),
+            cachePrunePathPrefix == "." ? null : cachePrunePathPrefix);
+    }
+
+    private static string? FindGitRepositoryRoot(string directoryPath)
+    {
+        var directory = new DirectoryInfo(directoryPath);
+        while (directory is not null)
+        {
+            if (Directory.Exists(Path.Combine(directory.FullName, ".git")) ||
+                File.Exists(Path.Combine(directory.FullName, ".git")))
+            {
+                return directory.FullName;
+            }
+
+            directory = directory.Parent;
+        }
+
+        return null;
+    }
 
     private static string ToRelativeProjectMapPath(string targetDirectory, string filePath) =>
         Path.GetRelativePath(targetDirectory, filePath).Replace('\\', '/');
@@ -735,6 +770,12 @@ public class PlanningService(IEnumerable<IAgentTask> agentTasks)
         tasks.Select((task, index) => task with { Step = index + 1 }).ToList();
 
     private sealed record AttachedMentionPath(string Path, string FileName);
+
+    private sealed record ProjectMapCacheLocation(
+        string TargetDirectory,
+        string CacheRootDirectory,
+        string CachePath,
+        string? CachePrunePathPrefix);
     
     private static void ValidateTasks(
         IEnumerable<AgentTask> tasks,

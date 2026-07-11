@@ -481,6 +481,7 @@ internal static class PotatoConsole
         Console.WriteLine("  /mode           Show or change execution mode: status, pipeline, react");
         Console.WriteLine("  /prompts        Show or change prompt source: status, defaults, external");
         Console.WriteLine("  /sessions       List tracked sessions");
+        Console.WriteLine("  /continue       Continue the latest tracked session, or /continue <session>");
         Console.WriteLine("  /transcript     Show or save a tracked session transcript");
         Console.WriteLine("  /abort          Cancel the current task and return to the main prompt");
         Console.WriteLine("  Ctrl+C          Abort the in-flight task; exits normally at the idle prompt");

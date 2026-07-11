@@ -12,6 +12,7 @@ internal sealed class SlashCommandHandler(
     Action<string> setSelectedModel,
     Action<string> handleTranscriptCommand,
     Action writeSessions,
+    Action<string> continueSession,
     Func<string> getExecutionMode,
     Action<string> setExecutionMode,
     Func<IChatClient> getClient,
@@ -62,6 +63,10 @@ internal sealed class SlashCommandHandler(
 
             case "/sessions":
                 writeSessions();
+                return true;
+
+            case "/continue":
+                continueSession(arguments);
                 return true;
 
             case "/abort":
