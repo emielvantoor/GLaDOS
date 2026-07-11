@@ -31,6 +31,7 @@ class Program
         services.AddSingleton<IAgentTask, InspectProjectTask>();
         services.AddSingleton<IAgentTask, ReadFileTask>();
         services.AddSingleton<IAgentTask, WriteCodeTask>();
+        services.AddSingleton<IAgentTask, WriteDocumentationTask>();
         services.AddSingleton<IAgentTask, WriteReportTask>();
         services.AddSingleton<IAgentTask, ApplyPatchTask>();
         services.AddSingleton<IAgentTask, ArchitectRefactorTask>();

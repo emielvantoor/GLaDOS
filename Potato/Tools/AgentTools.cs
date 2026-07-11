@@ -952,6 +952,53 @@ public class AgentTools(ExecutionMemory memory, CurrentChatClientState chatClien
         return StoreAndReturn(nameof(CreateFileAsync), $"File created successfully at {resolvedPath}.");
     }
 
+    [Description("Creates or completely overwrites a text file after showing the full content to the user and asking for permission.")]
+    public async Task<string> OverwriteFileAsync(
+        [Description("The path for the file. Absolute paths are accepted; relative paths resolve from the current working directory.")] string filePath,
+        [Description("The full text content to write into the file.")] string content)
+    {
+        if (!TryReserveToolInvocation(nameof(OverwriteFileAsync), out string rejectionReason))
+        {
+            return RejectToolInvocation(nameof(OverwriteFileAsync), rejectionReason);
+        }
+
+        string? resolvedPath = ResolveCreatableFilePath(filePath);
+        WriteToolCall(nameof(OverwriteFileAsync),
+        [
+            ("filePath", filePath),
+            ("resolvedPath", resolvedPath ?? "(unresolved)"),
+            ("contentCharacters", content?.Length.ToString() ?? "0")
+        ]);
+
+        if (IsPlaceholderPath(filePath) || resolvedPath is null)
+        {
+            return StoreAndReturn(nameof(OverwriteFileAsync), "Error: The file path is a placeholder. Use a real path from the directory listing or attached file header.");
+        }
+
+        string? parentDirectory = Path.GetDirectoryName(resolvedPath);
+        if (string.IsNullOrWhiteSpace(parentDirectory) || !Directory.Exists(parentDirectory))
+        {
+            return StoreAndReturn(nameof(OverwriteFileAsync), $"Error: Parent directory '{parentDirectory}' does not exist. Create or choose an existing directory first.");
+        }
+
+        bool fileExisted = File.Exists(resolvedPath);
+        string action = fileExisted ? "Overwriting" : "Creating";
+        ToolPermissionChoice approval = RequestPermission(
+            PermissionKey(nameof(OverwriteFileAsync), resolvedPath),
+            $"WriteFile {action} {PathResolver.FormatPathForDisplay(resolvedPath)}",
+            FormatCreateFilePreview(content ?? string.Empty));
+        if (approval == ToolPermissionChoice.Deny)
+        {
+            WriteCompactToolResult(false, "WriteFile denied", resolvedPath);
+            return StoreAndReturn(nameof(OverwriteFileAsync), "File overwrite denied by user.");
+        }
+
+        await File.WriteAllTextAsync(resolvedPath, content, CurrentCancellationToken);
+        SuccessfulEditCount++;
+        WriteCompactToolResult(true, fileExisted ? "WriteFile wrote" : "WriteFile created", resolvedPath);
+        return StoreAndReturn(nameof(OverwriteFileAsync), $"File written successfully at {resolvedPath}.");
+    }
+
     private static bool IsPlaceholderPath(string? filePath)
     {
         if (string.IsNullOrWhiteSpace(filePath))
@@ -1409,12 +1456,14 @@ public class AgentTools(ExecutionMemory memory, CurrentChatClientState chatClien
             nameof(GetCollectedContext) => "Read context",
             nameof(ApplySearchReplaceAsync) => "WriteFile",
             nameof(CreateFileAsync) => "WriteFile",
+            nameof(OverwriteFileAsync) => "WriteFile",
             nameof(ApplyDiffPatchAsync) => "Apply patch",
             nameof(ExecuteShellCommandAsync) => "Execute command",
             _ => toolName
         };
         bool waitsForResult = toolName is nameof(ApplySearchReplaceAsync) or
             nameof(CreateFileAsync) or
+            nameof(OverwriteFileAsync) or
             nameof(ApplyDiffPatchAsync) or
             nameof(ExecuteShellCommandAsync);
         string prefix = waitsForResult ? "?" : "✓";

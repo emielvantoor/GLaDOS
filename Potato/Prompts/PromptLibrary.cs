@@ -41,6 +41,8 @@ internal static partial class PromptLibrary
         yield return ApplyPatchUser;
         yield return WriteCodeSystem;
         yield return WriteCodeUser;
+        yield return WriteDocumentationSystem;
+        yield return WriteDocumentationUser;
         yield return CreateFileSystem;
         yield return CreateFileUser;
         yield return UserTextSystem;
