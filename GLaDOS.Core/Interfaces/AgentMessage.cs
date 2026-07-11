@@ -9,4 +9,6 @@ public class ChatOptions
     public int? ContextSize { get; set; }
     
     public int? MaxTokenLength { get; set; }
+
+    public IReadOnlyList<string>? StopSequences { get; set; }
 }

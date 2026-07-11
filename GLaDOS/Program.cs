@@ -34,4 +34,5 @@ if (app.Environment.IsDevelopment())
 app.UseStaticFiles();
 
 app.MapOpenAiEndpoints();
+app.MapFimEndpoints();
 app.Run("http://localhost:11434");

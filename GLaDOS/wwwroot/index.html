@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>GLaDOS OpenAI Bridge Client</title>
-    <link rel="stylesheet" href="css/site.css?v=sidebar-scroll-1">
+    <link rel="stylesheet" href="css/site.css?v=fim-verification-1">
 </head>
 <body>
 
@@ -115,6 +115,35 @@
 
             <div class="panel collapsible-panel collapsed">
                 <button type="button" class="panel-collapse-button" aria-expanded="false">
+                    <span class="panel-title">FIM Verification</span>
+                    <span class="panel-collapse-icon" aria-hidden="true">v</span>
+                </button>
+                <div class="panel-content">
+                    <div class="form-group">
+                        <div class="setting-label-row">
+                            <label class="form-label" for="fimPrefix">Prefix</label>
+                            <button type="button" class="info-tooltip" aria-label="FIM prefix info" data-tooltip="Code before the cursor. The model fills the missing middle before the suffix.">?</button>
+                        </div>
+                        <textarea id="fimPrefix" class="fim-code-input" spellcheck="false">public int Add(int left, int right)
+{
+    return </textarea>
+                    </div>
+                    <div class="form-group">
+                        <div class="setting-label-row">
+                            <label class="form-label" for="fimSuffix">Suffix</label>
+                            <button type="button" class="info-tooltip" aria-label="FIM suffix info" data-tooltip="Code after the cursor. Keep this short for quick verification.">?</button>
+                        </div>
+                        <textarea id="fimSuffix" class="fim-code-input" spellcheck="false">;
+}</textarea>
+                    </div>
+                    <button type="button" id="fimRunBtn" class="fim-run-button">Run FIM</button>
+                    <div class="fim-status" id="fimStatus">Ready</div>
+                    <pre id="fimOutput" class="fim-output">No FIM request sent yet.</pre>
+                </div>
+            </div>
+
+            <div class="panel collapsible-panel collapsed">
+                <button type="button" class="panel-collapse-button" aria-expanded="false">
                     <span class="panel-title">Available Tools</span>
                     <span class="panel-collapse-icon" aria-hidden="true">v</span>
                 </button>
@@ -162,7 +191,8 @@
 <script src="js/app/composer.js"></script>
 <script src="js/app/tools.js"></script>
 <script src="js/app/stream.js"></script>
-<script src="js/site.js?v=code-block-actions-2"></script>
+<script src="js/app/fim.js?v=fim-verification-1"></script>
+<script src="js/site.js?v=fim-verification-1"></script>
 
 </body>
 </html>

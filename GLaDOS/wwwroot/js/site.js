@@ -19,6 +19,7 @@
         document.getElementById('maxCompletionTokens').addEventListener('input', updateMaxCompletionTokensValue);
         document.getElementById('inspectorToggle').addEventListener('click', toggleInspector);
         initializeTextFileComposer();
+        initializeFimVerification();
         initializeCollapsiblePanels();
         initializeCodeBlockActions();
         initializeChats();

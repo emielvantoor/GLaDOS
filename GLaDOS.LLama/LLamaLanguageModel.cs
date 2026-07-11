@@ -56,7 +56,9 @@ public class LLamaLanguageModel : LanguageModel, IDisposable
                 Seed = (uint)Random.Shared.Next(1, 100000),
                 Grammar = _grammer
             },
-            AntiPrompts = ["<|im_end|>"],
+            AntiPrompts = chatOptions.StopSequences?.Count > 0
+                ? chatOptions.StopSequences.ToArray()
+                : ["<|im_end|>"],
         };
 
         var executor = new StatelessExecutor(_weights!, _params);

@@ -653,6 +653,65 @@ button#submitBtn:disabled {
     font-size: 12px;
 }
 
+.fim-code-input {
+    width: 100%;
+    min-height: 118px;
+    max-height: 180px;
+    padding: 9px 10px;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    background: var(--surface-color);
+    color: var(--text-main);
+    font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+    font-size: 11px;
+    line-height: 1.45;
+    resize: vertical;
+}
+
+.fim-run-button {
+    width: 100%;
+    height: 34px;
+    border: 0;
+    border-radius: 999px;
+    background: var(--accent-color);
+    color: #ffffff;
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 750;
+}
+
+.fim-run-button:hover {
+    background: var(--accent-hover);
+}
+
+.fim-run-button:disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
+}
+
+.fim-status {
+    margin-top: 8px;
+    color: var(--text-muted);
+    font-size: 11px;
+    font-weight: 650;
+}
+
+.fim-output {
+    max-height: 190px;
+    margin: 8px 0 0;
+    overflow: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    background: var(--surface-color);
+    color: var(--text-main);
+    padding: 9px 10px;
+    font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+    font-size: 11px;
+    line-height: 1.45;
+}
+
 .range-header {
     display: flex;
     justify-content: space-between;
