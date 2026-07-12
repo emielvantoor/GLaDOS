@@ -152,7 +152,6 @@ public class PlanningService(IEnumerable<IAgentTask> agentTasks)
                 tasks = EnsureInstructionReadsBeforeImplementation(tasks, availablePaths);
                 tasks = ResolveUniqueIndexedPathReferences(tasks, availablePaths);
                 tasks = RewriteCreateFileForExistingDocumentation(tasks, availablePaths);
-                tasks = RemoveRedundantEditsForCreatedSourceFiles(tasks);
                 ValidateTasks(goal, tasks, supportedActions, availablePaths);
                 // await ValidatePlanCompletenessAsync(goal, planningSpec, draftPlan, workspaceFileIndex, tasks, chatClient, cancellationToken);
                 return tasks.OrderBy(task => task.Step).ToList();
@@ -974,7 +973,7 @@ public class PlanningService(IEnumerable<IAgentTask> agentTasks)
 
         int pathStart = targetIndex + targetPrefix.Length;
         int pathEnd = normalized.IndexOf('\n', pathStart);
-        string path = (pathEnd < 0 ? normalized[pathStart..] : normalized[pathStart..pathEnd]).Trim();
+        string path = CleanExtractedPath(pathEnd < 0 ? normalized[pathStart..] : normalized[pathStart..pathEnd]);
         if (string.IsNullOrWhiteSpace(path))
         {
             return false;
@@ -1161,52 +1160,6 @@ public class PlanningService(IEnumerable<IAgentTask> agentTasks)
         }
 
         return false;
-    }
-
-    private static List<AgentTask> RemoveRedundantEditsForCreatedSourceFiles(IReadOnlyList<AgentTask> tasks)
-    {
-        var createdSourcePaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var result = new List<AgentTask>();
-        foreach (AgentTask task in tasks.OrderBy(task => task.Step))
-        {
-            string action = StringHelper.NormalizeAction(task.Action);
-            if (action == "create-file")
-            {
-                string createdPath = NormalizeProjectPath(task.Argument);
-                if (IsSourceOrAssetPath(createdPath))
-                {
-                    createdSourcePaths.Add(createdPath);
-                }
-
-                result.Add(task);
-                continue;
-            }
-
-            if ((action == "apply-patch" || action == "write-code") &&
-                TryExtractTargetFile(task.Argument, out string? targetFilePath) &&
-                targetFilePath is not null &&
-                createdSourcePaths.Contains(NormalizeProjectPath(targetFilePath)))
-            {
-                continue;
-            }
-
-            result.Add(task);
-        }
-
-        return RenumberTasks(result);
-    }
-
-    private static bool IsSourceOrAssetPath(string path)
-    {
-        string extension = Path.GetExtension(path);
-        return extension.Equals(".html", StringComparison.OrdinalIgnoreCase) ||
-               extension.Equals(".css", StringComparison.OrdinalIgnoreCase) ||
-               extension.Equals(".js", StringComparison.OrdinalIgnoreCase) ||
-               extension.Equals(".ts", StringComparison.OrdinalIgnoreCase) ||
-               extension.Equals(".tsx", StringComparison.OrdinalIgnoreCase) ||
-               extension.Equals(".jsx", StringComparison.OrdinalIgnoreCase) ||
-               extension.Equals(".json", StringComparison.OrdinalIgnoreCase) ||
-               extension.Equals(".svg", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsDocumentationPath(string path) =>
@@ -1397,6 +1350,7 @@ public class PlanningService(IEnumerable<IAgentTask> agentTasks)
 
         ValidatePlanCompletesUserRequest(orderedTasks);
         ValidateWriteReportPlacement(orderedTasks);
+        ValidateCreatedFilesReceiveContent(orderedTasks);
         ValidateMentionedDocumentationTargets(goal, orderedTasks);
     }
 
@@ -1431,6 +1385,63 @@ public class PlanningService(IEnumerable<IAgentTask> agentTasks)
                     "Use write-report only as the final step, after all requested reads, creates, edits, and documentation writes.");
             }
         }
+    }
+
+    private static void ValidateCreatedFilesReceiveContent(IReadOnlyList<AgentTask> orderedTasks)
+    {
+        for (int index = 0; index < orderedTasks.Count; index++)
+        {
+            AgentTask task = orderedTasks[index];
+            if (StringHelper.NormalizeAction(task.Action) != "create-file")
+            {
+                continue;
+            }
+
+            string createdPath = NormalizeProjectPath(task.Argument);
+            if (IsDocumentationPath(createdPath))
+            {
+                if (HasLaterDocumentationWrite(orderedTasks, index, createdPath))
+                {
+                    continue;
+                }
+
+                throw new InvalidOperationException(
+                    $"Planner step {task.Step} creates documentation file '{createdPath}' but no later write-documentation step writes content to it.");
+            }
+
+            if (HasLaterWriteCodeTarget(orderedTasks, index, createdPath))
+            {
+                continue;
+            }
+
+            throw new InvalidOperationException(
+                $"Planner step {task.Step} creates file '{createdPath}' but no later write-code step writes content to it. " +
+                $"Insert a read step for '{createdPath}' and then write-code with Target file: {createdPath}.");
+        }
+    }
+
+    private static bool HasLaterWriteCodeTarget(
+        IReadOnlyList<AgentTask> orderedTasks,
+        int createFileIndex,
+        string createdPath)
+    {
+        for (int index = createFileIndex + 1; index < orderedTasks.Count; index++)
+        {
+            AgentTask laterTask = orderedTasks[index];
+            if (StringHelper.NormalizeAction(laterTask.Action) != "write-code")
+            {
+                continue;
+            }
+
+            if (TryExtractTargetFile(laterTask.Argument, out string? targetFilePath) &&
+                targetFilePath is not null &&
+                string.Equals(NormalizeProjectPath(targetFilePath), createdPath, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static void ValidateMentionedDocumentationTargets(string goal, IReadOnlyList<AgentTask> orderedTasks)
@@ -1584,7 +1595,8 @@ public class PlanningService(IEnumerable<IAgentTask> agentTasks)
         if (!lastReadPaths.Contains(normalizedTargetPath))
         {
             throw new InvalidOperationException(
-                $"Planner step {task.Step} targets '{normalizedTargetPath}' before a successful read step for that same file.");
+                $"Planner step {task.Step} targets '{normalizedTargetPath}' before a successful read step for that same file. " +
+                $"If this is a new file, create it first with create-file, then read '{normalizedTargetPath}', then run {action}.");
         }
     }
 
@@ -1600,7 +1612,29 @@ public class PlanningService(IEnumerable<IAgentTask> agentTasks)
 
         int pathStart = targetIndex + targetPrefix.Length;
         int pathEnd = normalized.IndexOf('\n', pathStart);
-        return (pathEnd < 0 ? normalized[pathStart..] : normalized[pathStart..pathEnd]).Trim();
+        return CleanExtractedPath(pathEnd < 0 ? normalized[pathStart..] : normalized[pathStart..pathEnd]);
+    }
+
+    private static string CleanExtractedPath(string path)
+    {
+        string trimmed = path.Trim();
+        int attachedMentionIndex = trimmed.IndexOf(" [@", StringComparison.Ordinal);
+        if (attachedMentionIndex >= 0)
+        {
+            trimmed = trimmed[..attachedMentionIndex].TrimEnd();
+        }
+
+        int markdownLinkIndex = trimmed.IndexOf("](", StringComparison.Ordinal);
+        if (markdownLinkIndex >= 0)
+        {
+            int linkStart = trimmed.LastIndexOf('[', markdownLinkIndex);
+            if (linkStart > 0 && char.IsWhiteSpace(trimmed[linkStart - 1]))
+            {
+                trimmed = trimmed[..linkStart].TrimEnd();
+            }
+        }
+
+        return trimmed;
     }
 
     private static string ExtractJsonArray(string text)

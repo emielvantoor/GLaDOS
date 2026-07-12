@@ -873,12 +873,31 @@ public class AgentTools(ExecutionMemory memory, CurrentChatClientState chatClien
             return StoreAndReturn(nameof(ApplySearchReplaceAsync), $"Error: File '{filePath}' does not exist. Current working directory: {Environment.CurrentDirectory}");
         }
 
+        string content = await File.ReadAllTextAsync(resolvedPath, CurrentCancellationToken);
         if (string.IsNullOrEmpty(search))
         {
-            return StoreAndReturn(nameof(ApplySearchReplaceAsync), "Error: SEARCH text cannot be empty.");
+            if (content.Length > 0)
+            {
+                return StoreAndReturn(nameof(ApplySearchReplaceAsync), "Error: SEARCH text cannot be empty unless the target file is empty.");
+            }
+
+            string emptyFileReplacement = replace ?? string.Empty;
+            ToolPermissionChoice emptyFileApproval = RequestPermission(
+                PermissionKey(nameof(ApplySearchReplaceAsync), resolvedPath),
+                $"WriteFile Writing to empty file {PathResolver.FormatPathForDisplay(resolvedPath)}",
+                FormatSearchReplacePreview(string.Empty, emptyFileReplacement));
+            if (emptyFileApproval == ToolPermissionChoice.Deny)
+            {
+                WriteCompactToolResult(false, "WriteFile denied", resolvedPath);
+                return StoreAndReturn(nameof(ApplySearchReplaceAsync), "SEARCH/REPLACE edit denied by user.");
+            }
+
+            await File.WriteAllTextAsync(resolvedPath, emptyFileReplacement, CurrentCancellationToken);
+            SuccessfulEditCount++;
+            WriteCompactToolResult(true, "WriteFile wrote", resolvedPath);
+            return StoreAndReturn(nameof(ApplySearchReplaceAsync), $"SEARCH/REPLACE edit applied successfully to {resolvedPath}.");
         }
 
-        string content = await File.ReadAllTextAsync(resolvedPath, CurrentCancellationToken);
         int matchCount = CountOccurrences(content, search);
         if (matchCount == 0)
         {

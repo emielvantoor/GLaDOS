@@ -87,7 +87,7 @@ public class WriteDocumentationTask(AgentTools agentTools) : AgentTaskBase, IAge
     {
         if (!TryExtractDocumentationTarget(task.Argument, out string? targetFilePath, out string requirements))
         {
-            return (task.Argument.Trim(), task.Reason);
+            return (CleanExtractedPath(task.Argument), task.Reason);
         }
 
         return (targetFilePath!, requirements);
@@ -108,7 +108,7 @@ public class WriteDocumentationTask(AgentTools agentTools) : AgentTaskBase, IAge
 
         int pathStart = targetIndex + targetPrefix.Length;
         int pathEnd = normalized.IndexOf('\n', pathStart);
-        string path = (pathEnd < 0 ? normalized[pathStart..] : normalized[pathStart..pathEnd]).Trim();
+        string path = CleanExtractedPath(pathEnd < 0 ? normalized[pathStart..] : normalized[pathStart..pathEnd]);
         if (string.IsNullOrWhiteSpace(path))
         {
             return false;
@@ -121,6 +121,28 @@ public class WriteDocumentationTask(AgentTools agentTools) : AgentTaskBase, IAge
             : normalized[(pathEnd < 0 ? normalized.Length : pathEnd)..].Trim();
         targetFilePath = path;
         return true;
+    }
+
+    private static string CleanExtractedPath(string path)
+    {
+        string trimmed = path.Trim();
+        int attachedMentionIndex = trimmed.IndexOf(" [@", StringComparison.Ordinal);
+        if (attachedMentionIndex >= 0)
+        {
+            trimmed = trimmed[..attachedMentionIndex].TrimEnd();
+        }
+
+        int markdownLinkIndex = trimmed.IndexOf("](", StringComparison.Ordinal);
+        if (markdownLinkIndex >= 0)
+        {
+            int linkStart = trimmed.LastIndexOf('[', markdownLinkIndex);
+            if (linkStart > 0 && char.IsWhiteSpace(trimmed[linkStart - 1]))
+            {
+                trimmed = trimmed[..linkStart].TrimEnd();
+            }
+        }
+
+        return trimmed;
     }
 
     private static bool IsDocumentationPath(string path) =>

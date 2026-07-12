@@ -13,9 +13,10 @@ public class WriteCodeTask(AgentTools agentTools) : AgentTaskBase, IAgentTask
     public override IReadOnlyList<string> PlanningGuidance =>
     [
         "Use write-code only after reading the existing file that should be fully implemented or completed.",
+        "For a missing source or asset file, first plan create-file for the exact path, then read that empty file, then write-code with the full implementation instructions.",
         "Use write-code for broad implementation work inside one existing file; use apply-patch for small localized edits.",
         "For write-code, put the edit target and instructions in Argument using this format: Target file: <exact path from Workspace context>\nInstructions: <concrete implementation instructions>.",
-        "Never use write-code to create a missing file; use create-file instead."
+        "Never use write-code before the target file exists; use create-file first for missing targets."
     ];
 
     public async Task<string> ExecuteTaskAsync(
