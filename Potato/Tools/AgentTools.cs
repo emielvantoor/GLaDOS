@@ -1116,7 +1116,7 @@ public class AgentTools(ExecutionMemory memory, CurrentChatClientState chatClien
 
         return Path.GetFullPath(Path.IsPathRooted(trimmed)
             ? trimmed
-            : Path.Combine(Environment.CurrentDirectory, trimmed));
+            : Path.Combine(PathResolver.WorkspaceRoot, trimmed));
     }
 
     private static string? ResolveCreatableFilePath(string? filePath)
@@ -1139,7 +1139,7 @@ public class AgentTools(ExecutionMemory memory, CurrentChatClientState chatClien
 
         return Path.GetFullPath(Path.IsPathRooted(trimmed)
             ? trimmed
-            : Path.Combine(Environment.CurrentDirectory, trimmed));
+            : Path.Combine(PathResolver.WorkspaceRoot, trimmed));
     }
 
     private static string? TryResolvePlaceholderFileName(string filePath)
@@ -1150,14 +1150,14 @@ public class AgentTools(ExecutionMemory memory, CurrentChatClientState chatClien
             return null;
         }
 
-        string candidate = Path.Combine(Environment.CurrentDirectory, fileName);
+        string candidate = Path.Combine(PathResolver.WorkspaceRoot, fileName);
         return File.Exists(candidate) ? Path.GetFullPath(candidate) : null;
     }
 
     private static string? ResolveReadableDirectoryPath(string? directoryPath)
     {
         string trimmed = string.IsNullOrWhiteSpace(directoryPath)
-            ? Environment.CurrentDirectory
+            ? PathResolver.WorkspaceRoot
             : directoryPath.Trim();
 
         if (Uri.TryCreate(trimmed, UriKind.Absolute, out Uri? uri) && uri.IsFile)
@@ -1172,7 +1172,7 @@ public class AgentTools(ExecutionMemory memory, CurrentChatClientState chatClien
 
         return Path.GetFullPath(Path.IsPathRooted(trimmed)
             ? trimmed
-            : Path.Combine(Environment.CurrentDirectory, trimmed));
+            : Path.Combine(PathResolver.WorkspaceRoot, trimmed));
     }
 
     private static IEnumerable<FileSystemInfo> EnumerateFileSystemEntries(string directoryPath, bool recursive)

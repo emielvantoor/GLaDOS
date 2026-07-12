@@ -368,16 +368,22 @@ public class PlanningService(IEnumerable<IAgentTask> agentTasks)
     private static bool IsSkippedProjectMapPath(string filePath)
     {
         string normalized = filePath.Replace("\\", "/", StringComparison.Ordinal);
-        return normalized.Contains("/bin/", StringComparison.OrdinalIgnoreCase) ||
-               normalized.Contains("/obj/", StringComparison.OrdinalIgnoreCase) ||
-               normalized.Contains("/.git/", StringComparison.OrdinalIgnoreCase) ||
-               normalized.Contains("/node_modules/", StringComparison.OrdinalIgnoreCase) ||
-               normalized.Contains("/dist/", StringComparison.OrdinalIgnoreCase) ||
-               normalized.Contains("/build/", StringComparison.OrdinalIgnoreCase) ||
-               normalized.Contains("/coverage/", StringComparison.OrdinalIgnoreCase) ||
-               normalized.Contains("/.next/", StringComparison.OrdinalIgnoreCase) ||
-               normalized.Contains("/vendor/", StringComparison.OrdinalIgnoreCase);
+        return ContainsPathSegment(normalized, "bin") ||
+               ContainsPathSegment(normalized, "obj") ||
+               ContainsPathSegment(normalized, ".git") ||
+               ContainsPathSegment(normalized, "node_modules") ||
+               ContainsPathSegment(normalized, "dist") ||
+               ContainsPathSegment(normalized, "build") ||
+               ContainsPathSegment(normalized, "coverage") ||
+               ContainsPathSegment(normalized, ".next") ||
+               ContainsPathSegment(normalized, "vendor");
     }
+
+    private static bool ContainsPathSegment(string path, string segment) =>
+        path.Equals(segment, StringComparison.OrdinalIgnoreCase) ||
+        path.StartsWith($"{segment}/", StringComparison.OrdinalIgnoreCase) ||
+        path.EndsWith($"/{segment}", StringComparison.OrdinalIgnoreCase) ||
+        path.Contains($"/{segment}/", StringComparison.OrdinalIgnoreCase);
 
     private static ProjectMapCacheEntry? GetValidProjectMapCacheEntry(
         ProjectMapCache cache,
@@ -488,9 +494,10 @@ public class PlanningService(IEnumerable<IAgentTask> agentTasks)
     {
         string fullTargetDirectory = Path.GetFullPath(targetDirectory);
         string cacheRootDirectory = FindGitRepositoryRoot(fullTargetDirectory) ?? fullTargetDirectory;
-        string cachePrunePathPrefix = ToRelativeProjectMapPath(cacheRootDirectory, fullTargetDirectory);
+        string projectMapRootDirectory = cacheRootDirectory;
+        string cachePrunePathPrefix = ToRelativeProjectMapPath(cacheRootDirectory, projectMapRootDirectory);
         return new ProjectMapCacheLocation(
-            fullTargetDirectory,
+            projectMapRootDirectory,
             cacheRootDirectory,
             Path.Combine(cacheRootDirectory, ProjectMapCacheDirectoryName, ProjectMapCacheFileName),
             cachePrunePathPrefix == "." ? null : cachePrunePathPrefix);
@@ -924,14 +931,20 @@ public class PlanningService(IEnumerable<IAgentTask> agentTasks)
         resolvedPath = string.Empty;
         string normalizedCandidate = NormalizeProjectPath(candidatePath);
         if (indexedPaths.Contains(normalizedCandidate) ||
-            normalizedCandidate.Contains('/', StringComparison.Ordinal) ||
             !Path.HasExtension(normalizedCandidate))
         {
             return false;
         }
 
+        if (normalizedCandidate.Contains('/', StringComparison.Ordinal) &&
+            !IsSkippedProjectMapPath(normalizedCandidate))
+        {
+            return false;
+        }
+
+        string candidateFileName = Path.GetFileName(normalizedCandidate);
         string[] matches = indexedPaths
-            .Where(path => string.Equals(Path.GetFileName(path), normalizedCandidate, StringComparison.OrdinalIgnoreCase))
+            .Where(path => string.Equals(Path.GetFileName(path), candidateFileName, StringComparison.OrdinalIgnoreCase))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
         if (matches.Length != 1)
@@ -991,7 +1004,7 @@ public class PlanningService(IEnumerable<IAgentTask> agentTasks)
         string normalized = path.Trim().Replace('\\', '/');
         if (Path.IsPathRooted(normalized))
         {
-            normalized = Path.GetRelativePath(Environment.CurrentDirectory, normalized).Replace('\\', '/');
+            normalized = Path.GetRelativePath(PathResolver.WorkspaceRoot, normalized).Replace('\\', '/');
         }
 
         return normalized.TrimStart('/');
