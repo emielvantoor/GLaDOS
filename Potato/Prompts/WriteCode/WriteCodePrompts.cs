@@ -5,7 +5,12 @@ internal static partial class PromptLibrary
     private static readonly PromptDefinition WriteCodeSystem = new(
         "code-refactor/write-code-system.md",
         "You are Potato's Write Code phase. Return the complete replacement file content only. " +
-        "Do not include markdown fences, explanations, patch blocks, or conversational text.");
+        "Do not include markdown fences, explanations, patch blocks, or conversational text." +
+        " CRITICAL DESIGN RULES:" +
+        " 1. You MUST use shadcn utility classes." +
+        " 2. Use a modern, dark-mode-first color palette (e.g., slate-900 background, emerald-500 for primary accents)." +
+        " 3. Always use generous spacing (padding/margin) and rounded corners (rounded-xl or rounded-2xl)." +
+        " 4. Never use raw, unstyled HTML elements. Everything must look premium and clean, like a modern SaaS dashboard.");
 
     private static readonly PromptDefinition WriteCodeUser = new(
         "code-refactor/write-code-user.md",

@@ -33,16 +33,15 @@ public class ApplyPatchTask(AgentTools agentTools) : AgentTaskBase, IAgentTask
 
         (string filePath, string fileContent, string instructions) = ResolvePatchTarget(task, context);
 
-        SearchReplacePatch patch = TryBuildDeterministicPatch(filePath, fileContent, instructions) ??
-                                    await GeneratePatchAsync(
-                                        goal,
-                                        task,
-                                        filePath,
-                                        fileContent,
-                                        instructions,
-                                        observations,
-                                        chatClient,
-                                        cancellationToken);
+        SearchReplacePatch patch = await GeneratePatchAsync(
+            goal,
+            task,
+            filePath,
+            fileContent,
+            instructions,
+            observations,
+            chatClient,
+            cancellationToken);
 
         return await agentTools.ApplySearchReplaceAsync(filePath, patch.Search, patch.Replace);
     }
@@ -146,7 +145,6 @@ public class ApplyPatchTask(AgentTools agentTools) : AgentTaskBase, IAgentTask
             throw new InvalidOperationException("Apply patch model did not return valid SEARCH/REPLACE blocks.");
         }
 
-        patch = NormalizePatchLineEndingsForFile(fileContent, patch);
         if (!fileContent.Contains(patch.Search, StringComparison.Ordinal))
         {
             throw new InvalidOperationException(
@@ -154,87 +152,5 @@ public class ApplyPatchTask(AgentTools agentTools) : AgentTaskBase, IAgentTask
         }
 
         return patch with { FilePath = filePath };
-    }
-
-    private static SearchReplacePatch? TryBuildDeterministicPatch(
-        string filePath,
-        string fileContent,
-        string instructions)
-    {
-        if (!IsMarkdownFenceRemovalRequest(instructions))
-        {
-            return null;
-        }
-
-        string replacement = RemoveMarkdownFenceLines(fileContent);
-        if (string.Equals(replacement, fileContent, StringComparison.Ordinal))
-        {
-            return null;
-        }
-
-        return new SearchReplacePatch
-        {
-            FilePath = filePath,
-            Search = fileContent,
-            Replace = replacement
-        };
-    }
-
-    private static bool IsMarkdownFenceRemovalRequest(string instructions)
-    {
-        return instructions.Contains("remove", StringComparison.OrdinalIgnoreCase) &&
-               instructions.Contains("markdown", StringComparison.OrdinalIgnoreCase) &&
-               instructions.Contains("fence", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static string RemoveMarkdownFenceLines(string content)
-    {
-        string lineEnding = content.Contains("\r\n", StringComparison.Ordinal) ? "\r\n" : "\n";
-        string normalized = content
-            .Replace("\r\n", "\n", StringComparison.Ordinal)
-            .Replace("\r", "\n", StringComparison.Ordinal);
-        string[] lines = normalized.Split('\n');
-        bool hadTrailingNewline = normalized.EndsWith('\n');
-
-        var keptLines = new List<string>(lines.Length);
-        int lineCount = hadTrailingNewline ? lines.Length - 1 : lines.Length;
-        for (int i = 0; i < lineCount; i++)
-        {
-            string trimmed = lines[i].Trim();
-            if (trimmed.StartsWith("```", StringComparison.Ordinal) ||
-                trimmed.Equals("---", StringComparison.Ordinal))
-            {
-                continue;
-            }
-
-            keptLines.Add(lines[i]);
-        }
-
-        string result = string.Join(lineEnding, keptLines);
-        return hadTrailingNewline ? result + lineEnding : result;
-    }
-
-    private static SearchReplacePatch NormalizePatchLineEndingsForFile(string fileContent, SearchReplacePatch patch)
-    {
-        if (fileContent.Contains(patch.Search, StringComparison.Ordinal))
-        {
-            return patch;
-        }
-
-        string lineEnding = fileContent.Contains("\r\n", StringComparison.Ordinal) ? "\r\n" : "\n";
-        string normalizedSearch = patch.Search.Replace("\r\n", "\n", StringComparison.Ordinal).Replace("\n", lineEnding, StringComparison.Ordinal);
-        if (!fileContent.Contains(normalizedSearch, StringComparison.Ordinal))
-        {
-            return patch;
-        }
-
-        string normalizedReplace = (patch.Replace ?? string.Empty)
-            .Replace("\r\n", "\n", StringComparison.Ordinal)
-            .Replace("\n", lineEnding, StringComparison.Ordinal);
-        return patch with
-        {
-            Search = normalizedSearch,
-            Replace = normalizedReplace
-        };
     }
 }
