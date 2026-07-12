@@ -13,7 +13,8 @@ namespace Potato.Session;
 
 public class PlanningService(IEnumerable<IAgentTask> agentTasks)
 {
-    private const int MaxPlannerValidationAttempts = 3;
+    private const int MaxPlannerValidationAttempts = 10;
+    private const int MaxDraftPlanAttempts = 5;
     private const int ProjectMapCacheSchemaVersion = 1;
     private const string ProjectMapCacheDirectoryName = ".potato";
     private const string ProjectMapCacheFileName = "project-map-cache.json";
@@ -105,10 +106,14 @@ public class PlanningService(IEnumerable<IAgentTask> agentTasks)
         CancellationToken cancellationToken)
     {
         string workspaceContext = await BuildProjectMapAsync(Environment.CurrentDirectory, chatClient, cancellationToken);
+        string workspaceFileIndex = BuildWorkspaceFileIndex(workspaceContext);
+        string planningSpec = await GeneratePlanningSpecAsync(goal, workspaceFileIndex, chatClient, cancellationToken);
+        string draftPlan = await GenerateApprovedDraftPlanAsync(goal, planningSpec, workspaceFileIndex, chatClient, cancellationToken);
         IReadOnlyList<string> supportedActions = GetSupportedActions();
         IReadOnlyList<string> planningGuidance = GetPlanningGuidance();
         string executionObservations = observations.FormatObservations();
         Exception? lastPlanningError = null;
+        var plannerValidationMessages = new List<string>();
 
         for (int attempt = 1; attempt <= MaxPlannerValidationAttempts; attempt++)
         {
@@ -117,7 +122,9 @@ public class PlanningService(IEnumerable<IAgentTask> agentTasks)
                 new(ChatRole.System, Prompts.PromptLibrary.PlannerSystemPrompt),
                 new(ChatRole.User, Prompts.PromptLibrary.BuildPlannerUserPrompt(
                     goal,
-                    workspaceContext,
+                    workspaceFileIndex,
+                    planningSpec,
+                    draftPlan,
                     supportedActions,
                     planningGuidance,
                     executionObservations))
@@ -145,19 +152,22 @@ public class PlanningService(IEnumerable<IAgentTask> agentTasks)
                 tasks = EnsureInstructionReadsBeforeImplementation(tasks, availablePaths);
                 tasks = ResolveUniqueIndexedPathReferences(tasks, availablePaths);
                 tasks = RewriteCreateFileForExistingDocumentation(tasks, availablePaths);
-                ValidateTasks(tasks, supportedActions, availablePaths);
+                tasks = RemoveRedundantEditsForCreatedSourceFiles(tasks);
+                ValidateTasks(goal, tasks, supportedActions, availablePaths);
+                // await ValidatePlanCompletenessAsync(goal, planningSpec, draftPlan, workspaceFileIndex, tasks, chatClient, cancellationToken);
                 return tasks.OrderBy(task => task.Step).ToList();
             }
             catch (InvalidOperationException ex)
             {
                 lastPlanningError = ex;
+                plannerValidationMessages.Add(ex.Message);
                 if (attempt == MaxPlannerValidationAttempts)
                 {
                     break;
                 }
 
                 PotatoConsole.WriteStatus($"Planner validation failed: {ex.Message}");
-                executionObservations = BuildPlannerRetryObservations(observations, ex.Message);
+                executionObservations = BuildPlannerRetryObservations(observations, plannerValidationMessages);
             }
         }
 
@@ -170,9 +180,189 @@ public class PlanningService(IEnumerable<IAgentTask> agentTasks)
             ? "Planning deterministic task list..."
             : $"Repairing planner task list ({attempt}/{MaxPlannerValidationAttempts})...";
 
+    private static async Task<string> GeneratePlanningSpecAsync(
+        string goal,
+        string workspaceFileIndex,
+        IChatClient chatClient,
+        CancellationToken cancellationToken)
+    {
+        var messages = new List<ChatMessage>
+        {
+            new(ChatRole.System, Prompts.PromptLibrary.PlanningSpecSystemPrompt),
+            new(ChatRole.User, Prompts.PromptLibrary.BuildPlanningSpecUserPrompt(goal, workspaceFileIndex))
+        };
+
+        ChatResponse response;
+        using (PotatoConsole.StartProgress("Generating implementation spec..."))
+        {
+            response = await chatClient.GetResponseAsync(
+                messages,
+                AgentTaskBase.CreateJsonChatOptions(0.0),
+                cancellationToken);
+        }
+
+        return ResolveSpecPathReferences(ExtractJsonObject(response.Text), workspaceFileIndex);
+    }
+
+    private static async Task<string> GenerateApprovedDraftPlanAsync(
+        string goal,
+        string planningSpec,
+        string workspaceContext,
+        IChatClient chatClient,
+        CancellationToken cancellationToken)
+    {
+        var draftFeedback = new List<string>();
+        string latestDraftPlan = string.Empty;
+        for (int attempt = 1; attempt <= MaxDraftPlanAttempts; attempt++)
+        {
+            latestDraftPlan = await GenerateDraftPlanAsync(
+                goal,
+                planningSpec,
+                workspaceContext,
+                FormatDraftFeedback(draftFeedback),
+                chatClient,
+                cancellationToken);
+
+            PlanCompletenessReview review = await ReviewDraftPlanAsync(
+                planningSpec,
+                latestDraftPlan,
+                chatClient,
+                cancellationToken);
+            if (review.IsComplete)
+            {
+                return latestDraftPlan;
+            }
+
+            string feedback = string.IsNullOrWhiteSpace(review.Feedback)
+                ? "Draft plan does not satisfy the derived implementation spec."
+                : review.Feedback.Trim();
+            draftFeedback.Add(feedback);
+            PotatoConsole.WriteStatus($"Draft plan review failed: {feedback}");
+        }
+
+        throw new InvalidOperationException(
+            $"Planner could not produce a complete draft plan after {MaxDraftPlanAttempts} attempts: {draftFeedback.LastOrDefault() ?? latestDraftPlan}");
+    }
+
+    private static async Task<string> GenerateDraftPlanAsync(
+        string goal,
+        string planningSpec,
+        string workspaceContext,
+        string draftFeedback,
+        IChatClient chatClient,
+        CancellationToken cancellationToken)
+    {
+        var messages = new List<ChatMessage>
+        {
+            new(ChatRole.System, Prompts.PromptLibrary.DraftPlanSystemPrompt),
+            new(
+                ChatRole.User,
+                Prompts.PromptLibrary.BuildDraftPlanUserPrompt(
+                    goal,
+                    planningSpec,
+                    workspaceContext,
+                    draftFeedback))
+        };
+
+        ChatResponse response;
+        using (PotatoConsole.StartProgress("Drafting implementation plan..."))
+        {
+            response = await chatClient.GetResponseAsync(
+                messages,
+                AgentTaskBase.CreateJsonChatOptions(0.0),
+                cancellationToken);
+        }
+
+        return ExtractJsonArray(response.Text);
+    }
+
+    private static string ResolveSpecPathReferences(string planningSpec, string workspaceContext)
+    {
+        IReadOnlySet<string> indexedPaths = ExtractIndexedPaths(workspaceContext);
+        string resolvedSpec = planningSpec;
+        foreach (string fileName in ExtractLikelyFileNames(planningSpec).Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            if (TryResolveUniqueIndexedBasename(fileName, indexedPaths, out string resolvedPath))
+            {
+                resolvedSpec = Regex.Replace(
+                    resolvedSpec,
+                    $@"(?<![\w./-]){Regex.Escape(fileName)}(?![\w./-])",
+                    resolvedPath,
+                    RegexOptions.IgnoreCase);
+            }
+        }
+
+        return resolvedSpec;
+    }
+
+    private static IEnumerable<string> ExtractLikelyFileNames(string text)
+    {
+        foreach (Match match in Regex.Matches(
+                     text,
+                     @"(?<![\w./-])(?<file>[\w.-]+\.[A-Za-z0-9]+)(?![\w./-])"))
+        {
+            yield return match.Groups["file"].Value;
+        }
+    }
+
+    private static async Task<PlanCompletenessReview> ReviewDraftPlanAsync(
+        string planningSpec,
+        string draftPlan,
+        IChatClient chatClient,
+        CancellationToken cancellationToken)
+    {
+        var messages = new List<ChatMessage>
+        {
+            new(ChatRole.System, Prompts.PromptLibrary.DraftPlanReviewSystemPrompt),
+            new(ChatRole.User, Prompts.PromptLibrary.BuildDraftPlanReviewUserPrompt(planningSpec, draftPlan))
+        };
+
+        ChatResponse response;
+        using (PotatoConsole.StartProgress("Reviewing draft plan..."))
+        {
+            response = await chatClient.GetResponseAsync(
+                messages,
+                AgentTaskBase.CreateJsonChatOptions(0.0),
+                cancellationToken);
+        }
+
+        return ParsePlanCompletenessReview(response.Text, "Draft plan reviewer returned no review.");
+    }
+
+    private static string FormatDraftFeedback(IReadOnlyList<string> draftFeedback)
+    {
+        if (draftFeedback.Count == 0)
+        {
+            return "(none)";
+        }
+
+        var builder = new StringBuilder();
+        for (int index = 0; index < draftFeedback.Count; index++)
+        {
+            builder.AppendLine($"{index + 1}. {draftFeedback[index]}");
+        }
+
+        return builder.ToString();
+    }
+
+    private static string BuildWorkspaceFileIndex(string workspaceContext)
+    {
+        var builder = new StringBuilder();
+        foreach (string line in workspaceContext.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n'))
+        {
+            if (line.StartsWith("ProjectMap root:", StringComparison.Ordinal) ||
+                line.StartsWith("File: ", StringComparison.Ordinal))
+            {
+                builder.AppendLine(line);
+            }
+        }
+
+        return builder.ToString();
+    }
+
     private static string BuildPlannerRetryObservations(
         IReadOnlyList<TaskObservation> observations,
-        string validationMessage)
+        IReadOnlyList<string> validationMessages)
     {
         var builder = new StringBuilder();
         string formattedObservations = observations.FormatObservations();
@@ -182,10 +372,96 @@ public class PlanningService(IEnumerable<IAgentTask> agentTasks)
             builder.AppendLine();
         }
 
-        builder.AppendLine("Planner validation feedback from previous attempt:");
-        builder.AppendLine(validationMessage);
-        builder.AppendLine("Return a corrected JSON array that completes the user request and satisfies this validation feedback.");
+        builder.AppendLine("Planner validation feedback from previous attempts:");
+        foreach ((string validationMessage, int index) in validationMessages.Select((message, index) => (message, index)))
+        {
+            builder.AppendLine($"{index + 1}. {validationMessage}");
+        }
+
+        builder.AppendLine("Return a corrected JSON array that completes the user request and satisfies all validation feedback above.");
         return builder.ToString();
+    }
+
+    private static async Task ValidatePlanCompletenessAsync(
+        string goal,
+        string planningSpec,
+        string draftPlan,
+        string workspaceContext,
+        IReadOnlyList<AgentTask> tasks,
+        IChatClient chatClient,
+        CancellationToken cancellationToken)
+    {
+        var messages = new List<ChatMessage>
+        {
+            new(ChatRole.System, Prompts.PromptLibrary.PlanCompletenessReviewSystemPrompt),
+            new(
+                ChatRole.User,
+                Prompts.PromptLibrary.BuildPlanCompletenessReviewUserPrompt(
+                    goal,
+                    planningSpec,
+                    draftPlan,
+                    workspaceContext,
+                    FormatPlanForReview(tasks)))
+        };
+
+        ChatResponse response;
+        using (PotatoConsole.StartProgress("Reviewing plan completeness..."))
+        {
+            response = await chatClient.GetResponseAsync(
+                messages,
+                AgentTaskBase.CreateJsonChatOptions(0.0),
+                cancellationToken);
+        }
+
+        PlanCompletenessReview review = ParsePlanCompletenessReview(
+            response.Text,
+            "Plan completeness reviewer returned no review.");
+        if (!review.IsComplete)
+        {
+            string feedback = string.IsNullOrWhiteSpace(review.Feedback)
+                ? "Plan completeness reviewer said the plan does not complete the user request."
+                : review.Feedback.Trim();
+            throw new InvalidOperationException($"Plan does not complete the user request: {feedback}");
+        }
+    }
+
+    private static string FormatPlanForReview(IEnumerable<AgentTask> tasks)
+    {
+        var builder = new StringBuilder();
+        foreach (AgentTask task in tasks.OrderBy(task => task.Step))
+        {
+            builder.AppendLine($"{task.Step}. {task.Action}: {task.Argument}");
+            builder.AppendLine($"   Reason: {task.Reason}");
+        }
+
+        return builder.ToString();
+    }
+
+    private static PlanCompletenessReview ParsePlanCompletenessReview(string text, string nullReviewMessage)
+    {
+        string json = ExtractJsonObject(text);
+        PlanCompletenessReview? review = JsonSerializer.Deserialize<PlanCompletenessReview>(
+            json,
+            AgentTaskBase.JsonOptions);
+        if (review is null)
+        {
+            throw new InvalidOperationException(nullReviewMessage);
+        }
+
+        return review;
+    }
+
+    private static string ExtractJsonObject(string text)
+    {
+        string trimmed = StringHelper.StripCodeFence(text).Trim();
+        int start = trimmed.IndexOf('{', StringComparison.Ordinal);
+        int end = trimmed.LastIndexOf('}');
+        if (start < 0 || end < start)
+        {
+            throw new InvalidOperationException("Model did not return a JSON object.");
+        }
+
+        return trimmed[start..(end + 1)];
     }
 
     private IReadOnlyList<string> GetSupportedActions() =>
@@ -887,6 +1163,52 @@ public class PlanningService(IEnumerable<IAgentTask> agentTasks)
         return false;
     }
 
+    private static List<AgentTask> RemoveRedundantEditsForCreatedSourceFiles(IReadOnlyList<AgentTask> tasks)
+    {
+        var createdSourcePaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var result = new List<AgentTask>();
+        foreach (AgentTask task in tasks.OrderBy(task => task.Step))
+        {
+            string action = StringHelper.NormalizeAction(task.Action);
+            if (action == "create-file")
+            {
+                string createdPath = NormalizeProjectPath(task.Argument);
+                if (IsSourceOrAssetPath(createdPath))
+                {
+                    createdSourcePaths.Add(createdPath);
+                }
+
+                result.Add(task);
+                continue;
+            }
+
+            if ((action == "apply-patch" || action == "write-code") &&
+                TryExtractTargetFile(task.Argument, out string? targetFilePath) &&
+                targetFilePath is not null &&
+                createdSourcePaths.Contains(NormalizeProjectPath(targetFilePath)))
+            {
+                continue;
+            }
+
+            result.Add(task);
+        }
+
+        return RenumberTasks(result);
+    }
+
+    private static bool IsSourceOrAssetPath(string path)
+    {
+        string extension = Path.GetExtension(path);
+        return extension.Equals(".html", StringComparison.OrdinalIgnoreCase) ||
+               extension.Equals(".css", StringComparison.OrdinalIgnoreCase) ||
+               extension.Equals(".js", StringComparison.OrdinalIgnoreCase) ||
+               extension.Equals(".ts", StringComparison.OrdinalIgnoreCase) ||
+               extension.Equals(".tsx", StringComparison.OrdinalIgnoreCase) ||
+               extension.Equals(".jsx", StringComparison.OrdinalIgnoreCase) ||
+               extension.Equals(".json", StringComparison.OrdinalIgnoreCase) ||
+               extension.Equals(".svg", StringComparison.OrdinalIgnoreCase);
+    }
+
     private static bool IsDocumentationPath(string path) =>
         path.EndsWith(".md", StringComparison.OrdinalIgnoreCase) ||
         path.EndsWith(".mdx", StringComparison.OrdinalIgnoreCase) ||
@@ -1020,8 +1342,16 @@ public class PlanningService(IEnumerable<IAgentTask> agentTasks)
         string CacheRootDirectory,
         string CachePath,
         string? CachePrunePathPrefix);
+
+    private sealed class PlanCompletenessReview
+    {
+        public bool IsComplete { get; init; }
+
+        public string Feedback { get; init; } = string.Empty;
+    }
     
     private static void ValidateTasks(
+        string goal,
         IEnumerable<AgentTask> tasks,
         IReadOnlyCollection<string> supportedActions,
         IReadOnlySet<string> indexedPaths)
@@ -1066,6 +1396,8 @@ public class PlanningService(IEnumerable<IAgentTask> agentTasks)
         }
 
         ValidatePlanCompletesUserRequest(orderedTasks);
+        ValidateWriteReportPlacement(orderedTasks);
+        ValidateMentionedDocumentationTargets(goal, orderedTasks);
     }
 
     private static void ValidatePlanCompletesUserRequest(IReadOnlyList<AgentTask> orderedTasks)
@@ -1085,6 +1417,81 @@ public class PlanningService(IEnumerable<IAgentTask> agentTasks)
         throw new InvalidOperationException(
             $"Planner step {lastTask.Step} ends with context-gathering action '{lastTask.Action}'. " +
             "Add an implementation, review, documentation, shell, or write-report step that completes the user request.");
+    }
+
+    private static void ValidateWriteReportPlacement(IReadOnlyList<AgentTask> orderedTasks)
+    {
+        for (int index = 0; index < orderedTasks.Count - 1; index++)
+        {
+            AgentTask task = orderedTasks[index];
+            if (StringHelper.NormalizeAction(task.Action) == "write-report")
+            {
+                throw new InvalidOperationException(
+                    $"Planner step {task.Step} uses write-report before the plan is complete. " +
+                    "Use write-report only as the final step, after all requested reads, creates, edits, and documentation writes.");
+            }
+        }
+    }
+
+    private static void ValidateMentionedDocumentationTargets(string goal, IReadOnlyList<AgentTask> orderedTasks)
+    {
+        if (!HasDocumentationWriteIntent(goal))
+        {
+            return;
+        }
+
+        string[] requestedDocumentationFiles = ExtractMentionedDocumentationFileNames(goal).ToArray();
+        if (requestedDocumentationFiles.Length == 0)
+        {
+            return;
+        }
+
+        var plannedDocumentationFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (AgentTask task in orderedTasks)
+        {
+            string action = StringHelper.NormalizeAction(task.Action);
+            string? targetPath = action switch
+            {
+                "create-file" => task.Argument,
+                "write-documentation" => ExtractDocumentationTargetPath(task.Argument),
+                _ => null
+            };
+
+            if (!string.IsNullOrWhiteSpace(targetPath))
+            {
+                plannedDocumentationFiles.Add(Path.GetFileName(NormalizeProjectPath(targetPath)));
+            }
+        }
+
+        foreach (string requestedFile in requestedDocumentationFiles)
+        {
+            if (!plannedDocumentationFiles.Contains(requestedFile))
+            {
+                throw new InvalidOperationException(
+                    $"User request names documentation file '{requestedFile}', but the plan has no create-file or write-documentation step for it.");
+            }
+        }
+    }
+
+    private static bool HasDocumentationWriteIntent(string goal) =>
+        Regex.IsMatch(
+            goal,
+            @"\b(add|create|describe|document|edit|expand|generate|improve|rewrite|update|write)\b",
+            RegexOptions.IgnoreCase);
+
+    private static IEnumerable<string> ExtractMentionedDocumentationFileNames(string goal)
+    {
+        foreach (Match match in Regex.Matches(
+                     goal,
+                     @"(?<![\w./-])(?<path>(?:[\w.-]+/)*[\w.-]+\.(?:md|mdx))(?![\w./-])",
+                     RegexOptions.IgnoreCase))
+        {
+            string fileName = Path.GetFileName(NormalizeProjectPath(match.Groups["path"].Value));
+            if (!string.IsNullOrWhiteSpace(fileName))
+            {
+                yield return fileName;
+            }
+        }
     }
 
     private static void ValidateTaskPathContract(
@@ -1146,7 +1553,8 @@ public class PlanningService(IEnumerable<IAgentTask> agentTasks)
                 if (!availablePaths.Contains(documentationPath))
                 {
                     throw new InvalidOperationException(
-                        $"Planner step {task.Step} writes documentation to '{documentationPath}', but that file is neither indexed nor created earlier in the plan.");
+                        $"Planner step {task.Step} writes documentation to '{documentationPath}', but that file is neither indexed nor created earlier in the plan. " +
+                        $"Insert an earlier create-file step with Argument '{documentationPath}' before this write-documentation step.");
                 }
                 return;
             }

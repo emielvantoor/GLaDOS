@@ -907,7 +907,7 @@ public class AgentTools(ExecutionMemory memory, CurrentChatClientState chatClien
         return StoreAndReturn(nameof(ApplySearchReplaceAsync), $"SEARCH/REPLACE edit applied successfully to {resolvedPath}.");
     }
 
-    [Description("Creates a new text file after showing the full content to the user and asking for permission. Fails if the file already exists.")]
+    [Description("Creates a new text file after showing the full content to the user and asking for permission. Creates missing parent directories after approval. Fails if the file already exists.")]
     public async Task<string> CreateFileAsync(
         [Description("The path for the new file. Absolute paths are accepted; relative paths resolve from the current working directory.")] string filePath,
         [Description("The full text content to write into the new file. Do not wrap it in Markdown code fences, even when the file extension matches the fence language such as .html and ```html.")] string content)
@@ -936,22 +936,24 @@ public class AgentTools(ExecutionMemory memory, CurrentChatClientState chatClien
         }
 
         string? parentDirectory = Path.GetDirectoryName(resolvedPath);
-        if (string.IsNullOrWhiteSpace(parentDirectory) || !Directory.Exists(parentDirectory))
+        if (string.IsNullOrWhiteSpace(parentDirectory))
         {
-            return StoreAndReturn(nameof(CreateFileAsync), $"Error: Parent directory '{parentDirectory}' does not exist. Create or choose an existing directory first.");
+            return StoreAndReturn(nameof(CreateFileAsync), $"Error: Parent directory '{parentDirectory}' could not be resolved.");
         }
 
         string sanitizedContent = SanitizeGeneratedFileContent(resolvedPath, content);
+        bool parentDirectoryExists = Directory.Exists(parentDirectory);
         ToolPermissionChoice approval = RequestPermission(
             PermissionKey(nameof(CreateFileAsync), resolvedPath),
             $"WriteFile Creating {PathResolver.FormatPathForDisplay(resolvedPath)}",
-            FormatCreateFilePreview(sanitizedContent));
+            FormatCreateFilePreview(sanitizedContent, parentDirectoryExists ? null : parentDirectory));
         if (approval == ToolPermissionChoice.Deny)
         {
             WriteCompactToolResult(false, "WriteFile denied", resolvedPath);
             return StoreAndReturn(nameof(CreateFileAsync), "File creation denied by user.");
         }
 
+        Directory.CreateDirectory(parentDirectory);
         await File.WriteAllTextAsync(resolvedPath, sanitizedContent, CurrentCancellationToken);
         SuccessfulEditCount++;
         WriteCompactToolResult(true, "WriteFile created", resolvedPath);
@@ -1739,10 +1741,15 @@ public class AgentTools(ExecutionMemory memory, CurrentChatClientState chatClien
         return lines;
     }
 
-    private static IReadOnlyList<string> FormatCreateFilePreview(string content)
+    private static IReadOnlyList<string> FormatCreateFilePreview(string content, string? createdParentDirectory = null)
     {
         string[] lines = NormalizeLines(content);
         var preview = new List<string>();
+        if (!string.IsNullOrWhiteSpace(createdParentDirectory))
+        {
+            preview.Add($"Creates directory: {PathResolver.FormatPathForDisplay(createdParentDirectory)}");
+        }
+
         int visibleLines = Math.Min(lines.Length, 20);
         for (int i = 0; i < visibleLines; i++)
         {

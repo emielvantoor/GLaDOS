@@ -12,9 +12,10 @@ public class WriteDocumentationTask(AgentTools agentTools) : AgentTaskBase, IAge
 
     public override IReadOnlyList<string> PlanningGuidance =>
     [
-        "Use write-documentation to create or completely overwrite Markdown files like README.md, agents.md, or architecture specs.",
-        "Never use write-documentation for source files such as .html, .css, .js, .ts, .cs, .json, or .xml; use apply-patch or write-code for those files.",
-        "For simple requests, set Argument to the exact destination file path (e.g., 'README.md').",
+        "Use write-documentation only for Markdown files that already appear in Workspace context or were created by an earlier create-file step in the same plan.",
+        "Never use write-documentation as the first step for a missing Markdown file; first plan create-file with that exact Markdown path, then plan write-documentation if a dedicated documentation pass is needed.",
+        "Never use write-documentation for source or asset files such as .html, .css, .js, .ts, .cs, .json, .xml, .svg, or .png; use create-file for new source files, or apply-patch/write-code for existing source files.",
+        "For simple requests against an existing or earlier-created Markdown file, set Argument to the exact destination file path (e.g., 'README.md').",
         "For detailed requests, put the edit target and requirements in Argument using this format: Target file: <exact path>\nRequirements: <target audience, scope, and layout requirements>."
     ];
 

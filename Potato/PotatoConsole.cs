@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text;
 using Microsoft.Extensions.AI;
 
@@ -1535,6 +1536,7 @@ internal static class PotatoConsole
         private bool disposed;
         private string message;
         private string joke;
+        private readonly Stopwatch stopwatch = Stopwatch.StartNew();
         private readonly int progressTop;
         private readonly int reservedLines = 2;
 
@@ -1628,7 +1630,7 @@ internal static class PotatoConsole
                             ticksSinceJoke = 0;
                         }
 
-                        string actionLine = $"{Frames[frameIndex % Frames.Length]} {message}";
+                        string actionLine = $"{Frames[frameIndex % Frames.Length]} {message} ({FormatElapsed(stopwatch.Elapsed)})";
                         string jokeLine = $"  {joke}";
                         Console.ForegroundColor = ConsoleColor.DarkGray;
                         WriteProgressLine(0, actionLine);
@@ -1667,6 +1669,11 @@ internal static class PotatoConsole
             Console.SetCursorPosition(0, top);
             Console.Write(clipped.PadRight(width));
         }
+
+        private static string FormatElapsed(TimeSpan elapsed) =>
+            elapsed.TotalHours >= 1
+                ? elapsed.ToString(@"h\:mm\:ss")
+                : elapsed.ToString(@"m\:ss");
     }
 
     private sealed class ProgressSuspension(ProgressSpinner spinner) : IDisposable
@@ -1694,5 +1701,6 @@ internal static class PotatoConsole
         public void Dispose()
         {
         }
+
     }
 }

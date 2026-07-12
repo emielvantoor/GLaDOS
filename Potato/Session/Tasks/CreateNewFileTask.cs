@@ -15,6 +15,8 @@ public class CreateNewFileTask(AgentTools agentTools): AgentTaskBase, IAgentTask
     [
         "Use create-file only when the user asks to create a new file or to write documentation for a missing target file.",
         "For create-file, the Argument must be the concrete file path to create, not a description of the implementation.",
+        "If a requested Markdown target such as FEATURE.md is absent from Workspace context, plan create-file for that exact path before any write-documentation step targets it.",
+        "Use create-file for new source and asset files such as .html, .css, .js, .json, .svg, or .png; do not use write-documentation for those files.",
         "For repository-level README requests where README.md is absent from Workspace context, use create-file with Argument \"README.md\" after inspect-project."
     ];
 

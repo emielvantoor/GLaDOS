@@ -35,6 +35,14 @@ internal static partial class PromptLibrary
     {
         yield return PlannerSystem;
         yield return PlannerUser;
+        yield return PlanningSpecSystem;
+        yield return PlanningSpecUser;
+        yield return DraftPlanSystem;
+        yield return DraftPlanUser;
+        yield return DraftPlanReviewSystem;
+        yield return DraftPlanReviewUser;
+        yield return PlanCompletenessReviewSystem;
+        yield return PlanCompletenessReviewUser;
         yield return ArchitectRefactorSystem;
         yield return ArchitectRefactorUser;
         yield return DesignSystem;

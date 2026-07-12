@@ -6,7 +6,7 @@ internal static partial class PromptLibrary
         "planner-system-v3.md",
         """
         You are Potato's deterministic planner. Return valid JSON only.
-        The Workspace context is the complete indexed file set available for read planning.
+        The Workspace context is the indexed file set available for read planning.
         Only paths printed after "File:" are indexed file paths.
         Never produce a read task for a file path that is absent from Workspace context.
         When a requested target file is absent, plan discovery or creation instead of reading a guessed path.
@@ -24,21 +24,41 @@ internal static partial class PromptLibrary
         Execution observations so far:
         {{ExecutionObservations}}
 
-        Workspace context:
+        Workspace file index:
         {{WorkspaceContext}}
 
         Supported actions:
         {{SupportedActions}}
 
+        Derived implementation spec:
+        {{PlanningSpec}}
+
+        Approved draft plan:
+        {{DraftPlan}}
+
         Rules:
+        - Translate the Approved draft plan into supported Potato agent tasks. Do not drop draft plan steps unless Execution observations show they are already complete.
         - Treat Workspace context as the indexed file set and static source of truth for files and repository layout.
         - Only paths printed after "File:" in Workspace context are indexed file paths; ProjectMap root is not a file path prefix to combine with guesses.
         - If a file path is not listed as a "File:" entry in Workspace context, assume it is not available to read during planning.
         - Never invent files, folders, types, methods, tests, or project structure.
         - A read task argument must exactly match a "File:" path shown in Workspace context. Do not read a path that is only implied by a directory, project name, ProjectMap root, or user wording.
         - Only plan documentation changes when the user explicitly asks to create, write, rewrite, expand, improve, update, or edit documentation, README, docs, guides, architecture notes, specs, or Markdown content. Do not infer documentation work from vague, test, greeting, placeholder, or single-word input.
-        - write-documentation is only for Markdown documentation targets such as README, .md, or .mdx files. Never use write-documentation when the requested target is a source file such as .html, .css, .js, .ts, .cs, .json, or .xml, even if the user asks for a design, redesign, style update, or visual overview. For source files, read the target and use apply-patch or write-code.
+        - write-documentation is only for Markdown documentation targets such as README, .md, or .mdx files that are already listed in Workspace context or were created by an earlier create-file step in this same plan.
+        - Never use write-documentation when the requested target is a source or asset file such as .html, .css, .js, .ts, .cs, .json, .xml, .svg, or .png, even if the user asks for a design, redesign, style update, component library, or visual overview. For new source or asset files, use create-file. For existing source files, read the target and use apply-patch or write-code.
         - If the user request is not an actionable repository task, return a single write-report task that asks what they want help with. Do not inspect the project or edit files.
+        - Use write-report only as the final step, except for the single-step non-actionable response. Never use write-report to claim requested files were created, edited, extracted, documented, or implemented before those concrete tasks appear earlier in the plan.
+        - If the user names a Markdown documentation file such as FEATURE.md, README.md, or docs/*.md, the plan must include a concrete create-file or write-documentation step for that named Markdown file. If that Markdown file is not listed in Workspace context, create it with create-file before any write-documentation step targets it.
+        - For requested new files, create-file is the task that writes the initial file content. Add one create-file step for each new source, asset, or documentation file the request requires. Do not use write-documentation to create CSS, JavaScript, HTML, JSON, or other source files.
+        - Valid missing Markdown sequence: create-file "GLaDOS/wwwroot/FEATURE.md", then optionally write-documentation "GLaDOS/wwwroot/FEATURE.md". Invalid sequence: write-documentation "GLaDOS/wwwroot/FEATURE.md" without an earlier create-file for that exact path.
+        - Valid new CSS sequence: create-file "GLaDOS/wwwroot/css/components.css". Invalid sequence: write-documentation "GLaDOS/wwwroot/css/components.css".
+        - For a newly created source or asset file, the create-file step is responsible for complete initial content. Do not add write-code or apply-patch for that same new file unless a later read step reads it first and the user specifically requires a second edit pass.
+        - If the approved draft asks to verify or validate generated CSS/HTML/JS component functionality, map that to code-review of the relevant created/read file or a shell-script running one existing project validation command. Do not invent a read step for a newly created file just to satisfy write-code validation.
+        - If the approved draft asks to document component usage in FEATURE.md, map that to create-file for missing FEATURE.md and write-documentation for existing or earlier-created FEATURE.md, not to source-file actions.
+        - When translating extraction/refactor work, there is no separate "extract" action. Use read for the source file, then create-file for missing destination files or apply-patch/write-code for existing destination files. The create/edit task reason should state that it extracts or adapts the source into the destination.
+        - If the approved draft or spec asks to extract, modularize, or provide HTML component markup, include a concrete .html destination task chosen from the repository context and requested deliverables. For a missing HTML artifact, use create-file with a concrete path; for an existing HTML artifact, read it and then use apply-patch or write-code.
+        - A reusable component library for a static web UI may be represented by CSS/JS plus an HTML component examples/snippets file and FEATURE.md documentation. Do not satisfy HTML component markup requirements with CSS-only tasks.
+        - When the user asks for implementation work, the plan must include concrete create-file, apply-patch, write-code, write-documentation, shell-script, code-review, or design steps that directly produce the requested artifact or answer. Documentation and write-report steps may accompany implementation work, but they must not replace it.
         - For explicit repository-wide documentation requests, such as creating, expanding, improving, or updating a root README, first use inspect-project with "." to gather the repository structure before choosing specific files to read.
         - For explicit repository-wide documentation requests, read the existing target documentation file when it appears in Workspace context. Also read the most relevant repository guidance, manifests, and feature documentation that appear in Workspace context, such as agents.md, README.md, *.sln, *.csproj, package.json, pyproject.toml, Cargo.toml, go.mod, FEATURE.md, or docs/*.md. Prefer a small representative set over every source file.
         - For explicit repository-wide documentation requests, the documentation-changing step must be write-documentation when that action is supported. Use apply-patch only for a narrow localized documentation edit. Do not use write-report as the only documentation-producing action.
@@ -86,11 +106,153 @@ internal static partial class PromptLibrary
         ]
         """);
 
+    private static readonly PromptDefinition PlanningSpecSystem = new(
+        "planner-spec-system.md",
+        """
+        You are Potato's specification writer. Return valid JSON only.
+        Convert the user's request into explicit implementation specs the planner can satisfy.
+        Do not invent repository files that are not supported by the Workspace file index, but do identify requested deliverables and acceptance criteria.
+        If the user names a source file, include the exact indexed path for that source file in referenceFilesToRead.
+        """);
+
+    private static readonly PromptDefinition PlanningSpecUser = new(
+        "planner-spec-user.md",
+        """
+        Return exactly one strict JSON object and nothing else.
+
+        JSON shape:
+        {
+          "objective": "",
+          "referenceFilesToRead": [],
+          "deliverables": [],
+          "documentationDeliverables": [],
+          "constraints": [],
+          "acceptanceCriteria": []
+        }
+
+        User request:
+        {{UserRequest}}
+
+        Workspace file index:
+        {{WorkspaceContext}}
+        """);
+
+    private static readonly PromptDefinition DraftPlanSystem = new(
+        "planner-draft-system.md",
+        """
+        You are Potato's implementation planner. Return valid JSON only.
+        Draft human-level implementation steps from the derived spec before any agent-task mapping.
+        Steps should describe concrete work products and verification, not Potato action names.
+        Include a step to inspect each reference file from the spec before steps that derive new artifacts from it.
+        """);
+
+    private static readonly PromptDefinition DraftPlanUser = new(
+        "planner-draft-user.md",
+        """
+        Return exactly one strict JSON array and nothing else.
+        Each item must have exactly these properties: step, work, satisfies.
+
+        User request:
+        {{UserRequest}}
+
+        Derived implementation spec:
+        {{PlanningSpec}}
+
+        Workspace file index:
+        {{WorkspaceContext}}
+
+        Previous draft feedback:
+        {{DraftFeedback}}
+        """);
+
+    private static readonly PromptDefinition DraftPlanReviewSystem = new(
+        "planner-draft-review-system.md",
+        """
+        You are Potato's draft-plan reviewer. Return valid JSON only.
+        Decide whether the human-level draft steps satisfy the derived implementation spec.
+        """);
+
+    private static readonly PromptDefinition DraftPlanReviewUser = new(
+        "planner-draft-review-user.md",
+        """
+        Return exactly one strict JSON object and nothing else.
+
+        JSON shape:
+        {
+          "isComplete": true,
+          "feedback": ""
+        }
+
+        Set isComplete to false if any deliverable, referenced source inspection, constraint, documentation requirement, or acceptance criterion from the spec is not covered by the draft steps.
+        Treat a draft step that inspects a referenced source file plus later steps that create or update destination artifacts as sufficient coverage for extraction/refactor work; do not require a separate parsing algorithm step.
+        Feedback must be one concise sentence naming the missing concrete work.
+
+        Derived implementation spec:
+        {{PlanningSpec}}
+
+        Draft plan:
+        {{DraftPlan}}
+        """);
+
+    private static readonly PromptDefinition PlanCompletenessReviewSystem = new(
+        "planner-completeness-review-system.md",
+        """
+        You are Potato's plan completeness reviewer. Return valid JSON only.
+        Judge whether the proposed task list would actually complete the user's request if executed.
+        Do not require implementation details inside planner steps, but require concrete actions for every requested artifact or behavior.
+        Treat create-file as capable of generating complete initial content for a new file, write-documentation as capable of documenting Markdown content, code-review as capable of validating a file's structure/quality, and shell-script as capable of running one existing validation command.
+        For extraction/refactor requests, treat read of the source file plus create-file/apply-patch/write-code for the destination artifacts as concrete extraction implementation. There is no separate extract action.
+        If the approved draft or spec requires HTML component markup, a create-file/apply-patch/write-code task targeting a .html file is the concrete modularization step. Do not ask for an additional abstract modularization step.
+        """);
+
+    private static readonly PromptDefinition PlanCompletenessReviewUser = new(
+        "planner-completeness-review-user.md",
+        """
+        Return exactly one strict JSON object and nothing else.
+
+        JSON shape:
+        {
+          "isComplete": true,
+          "feedback": ""
+        }
+
+        Set isComplete to false when the agent task list does not execute the approved draft plan, omits necessary work, only describes or reports success, creates documentation when implementation was requested, skips a referenced source file that must be read, or lacks concrete create/edit/test/review steps needed by the user request.
+        Do not require low-level algorithm details inside task arguments when a create-file, apply-patch, write-code, write-documentation, code-review, or shell-script task delegates that work to the execution phase.
+        Do not fail a plan for lacking a separate "extract actual components" step when it already reads the referenced source file and creates or edits the component library destination files. The create/edit tasks are the extraction work.
+        Do not fail a plan for lacking separate HTML modularization when it has a concrete create-file/apply-patch/write-code task for a .html component artifact. If there is no .html task and the approved draft/spec requires HTML markup, ask for one concrete .html create/edit task.
+        Feedback must be one concise sentence explaining what concrete agent task is missing. Do not mention internal validation unless it matters to the fix.
+
+        User request:
+        {{UserRequest}}
+
+        Derived implementation spec:
+        {{PlanningSpec}}
+
+        Approved draft plan:
+        {{DraftPlan}}
+
+        Workspace file index:
+        {{WorkspaceContext}}
+
+        Proposed plan:
+        {{Plan}}
+        """);
+
     public static string PlannerSystemPrompt => Load(PlannerSystem);
+
+    public static string PlanningSpecSystemPrompt => Load(PlanningSpecSystem);
+
+    public static string DraftPlanSystemPrompt => Load(DraftPlanSystem);
+
+    public static string DraftPlanReviewSystemPrompt => Load(DraftPlanReviewSystem);
+
+    public static string PlanCompletenessReviewSystemPrompt => Load(PlanCompletenessReviewSystem);
 
     public static string BuildPlannerUserPrompt(
         string userRequest,
         string workspaceContext,
+        string planningSpec,
+        string draftPlan,
         IReadOnlyCollection<string> supportedActions,
         IReadOnlyCollection<string> planningGuidance,
         string executionObservations) =>
@@ -99,8 +261,56 @@ internal static partial class PromptLibrary
             ["UserRequest"] = userRequest,
             ["ExecutionObservations"] = executionObservations,
             ["WorkspaceContext"] = workspaceContext,
+            ["PlanningSpec"] = planningSpec,
+            ["DraftPlan"] = draftPlan,
             ["SupportedActions"] = BuildSupportedActionList(supportedActions),
             ["PlanningGuidance"] = BuildPlanningGuidance(planningGuidance)
+        });
+
+    public static string BuildPlanningSpecUserPrompt(
+        string userRequest,
+        string workspaceContext) =>
+        Render(PlanningSpecUser, new Dictionary<string, string>
+        {
+            ["UserRequest"] = userRequest,
+            ["WorkspaceContext"] = workspaceContext
+        });
+
+    public static string BuildDraftPlanUserPrompt(
+        string userRequest,
+        string planningSpec,
+        string workspaceContext,
+        string draftFeedback) =>
+        Render(DraftPlanUser, new Dictionary<string, string>
+        {
+            ["UserRequest"] = userRequest,
+            ["PlanningSpec"] = planningSpec,
+            ["WorkspaceContext"] = workspaceContext,
+            ["DraftFeedback"] = draftFeedback
+        });
+
+    public static string BuildDraftPlanReviewUserPrompt(
+        string planningSpec,
+        string draftPlan) =>
+        Render(DraftPlanReviewUser, new Dictionary<string, string>
+        {
+            ["PlanningSpec"] = planningSpec,
+            ["DraftPlan"] = draftPlan
+        });
+
+    public static string BuildPlanCompletenessReviewUserPrompt(
+        string userRequest,
+        string planningSpec,
+        string draftPlan,
+        string workspaceContext,
+        string plan) =>
+        Render(PlanCompletenessReviewUser, new Dictionary<string, string>
+        {
+            ["UserRequest"] = userRequest,
+            ["PlanningSpec"] = planningSpec,
+            ["DraftPlan"] = draftPlan,
+            ["WorkspaceContext"] = workspaceContext,
+            ["Plan"] = plan
         });
 
     private static string BuildSupportedActionList(IReadOnlyCollection<string> supportedActions) =>

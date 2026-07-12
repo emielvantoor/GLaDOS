@@ -78,6 +78,7 @@ public class ExecutionService(
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
+                PotatoConsole.WriteError($"Step {task.Step} threw an exception: {ex.Message}");
                 observations.Add(new TaskObservation(observations.Count + 1, task.Action, task.Argument, $"Error: {ex.Message}"));
                 return ExecutionResult.Failed(observations, $"Step {task.Step} threw an exception: {ex.Message}");
             }
