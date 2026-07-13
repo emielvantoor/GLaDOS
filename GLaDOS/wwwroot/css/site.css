@@ -828,6 +828,21 @@ button#agentSubmitBtn:disabled {
     background: var(--code-bg);
 }
 
+.potato-permission-prompt {
+    width: min(90%, 780px);
+}
+
+.potato-permission-content {
+    max-height: 280px;
+    margin: 0 0 10px;
+    border-radius: 5px;
+    font-size: 12px;
+}
+
+.permission-choice-submitted {
+    opacity: 0.78;
+}
+
 .chat-list-item {
     width: 100%;
     min-width: 0;

@@ -107,6 +107,7 @@
             chatBox.dataset.lastSequence = '0';
             chatBox.dataset.sessionId = '';
             chatBox.appendChild(createMessageElement('assistant', 'Active Potato sessions will appear in the left pane.', { actions: false }));
+            updatePotatoThinkingIndicator(null);
             return;
         }
 
@@ -116,6 +117,7 @@
         const session = await response.json();
         setPotatoHeader(session);
         renderPotatoEvents(session.events || []);
+        updatePotatoThinkingIndicator(session);
     }
 
     function setPotatoHeader(session) {
@@ -134,8 +136,8 @@
 
         if (title) title.textContent = session.displayName || 'Potato session';
         if (path) path.textContent = session.workingDirectory;
-        if (status) status.textContent = session.status || 'active';
-        setAgentComposerState(true, 'Status: Ready');
+        if (status) status.textContent = session.isProcessing ? 'thinking' : (session.status || 'active');
+        setAgentComposerState(true, session.isProcessing ? 'Status: Potato is thinking' : 'Status: Ready');
         scheduleAgentCompletions();
     }
 
@@ -195,7 +197,50 @@
         return element.scrollHeight - element.scrollTop - element.clientHeight < 80;
     }
 
+    function updatePotatoThinkingIndicator(session) {
+        const chatBox = document.getElementById('agentChatBox');
+        if (!chatBox) return;
+
+        const existing = chatBox.querySelector('.potato-thinking-indicator');
+        if (!session?.isProcessing) {
+            existing?.remove();
+            return;
+        }
+
+        const progressText = session.currentProgress || 'Potato is thinking';
+        const shouldStickToBottom = isScrolledNearBottom(chatBox);
+        const indicator = existing || createPotatoThinkingIndicator();
+        indicator.querySelector('.loading-text').textContent = progressText;
+
+        if (!existing) {
+            chatBox.appendChild(indicator);
+        }
+
+        if (shouldStickToBottom) {
+            chatBox.scrollTop = chatBox.scrollHeight;
+        }
+    }
+
+    function createPotatoThinkingIndicator() {
+        const div = document.createElement('div');
+        div.className = 'message assistant loading potato-thinking-indicator';
+        div.setAttribute('aria-live', 'polite');
+
+        const contentDiv = document.createElement('div');
+        contentDiv.className = 'message-content';
+        contentDiv.innerHTML = `
+            <span class="loading-spinner" aria-hidden="true"></span>
+            <span class="loading-text">Potato is thinking</span>
+        `;
+        div.appendChild(contentDiv);
+        return div;
+    }
+
     function createPotatoEventElement(event) {
+        if (event.kind === 'permission') {
+            return createPotatoPermissionElement(event);
+        }
+
         if (event.collapsed) {
             const details = document.createElement('details');
             details.className = 'potato-event-details';
@@ -219,6 +264,65 @@
             html: event.role === 'assistant',
             actions: false
         });
+    }
+
+    function createPotatoPermissionElement(event) {
+        const permDiv = document.createElement('div');
+        permDiv.className = 'message tool-call permission-prompt potato-permission-prompt';
+
+        const title = document.createElement('p');
+        title.className = 'permission-text permission-title';
+        title.textContent = 'Permission required';
+
+        const content = document.createElement('pre');
+        content.className = 'potato-permission-content';
+        content.textContent = event.content || 'Potato requested permission.';
+
+        const actions = document.createElement('div');
+        actions.className = 'permission-actions';
+
+        [
+            { label: 'Once', value: 'once', className: 'yes' },
+            { label: 'Always', value: 'always', className: 'always' },
+            { label: 'Deny', value: 'deny', className: 'no' }
+        ].forEach((choice) => {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = `permission-button ${choice.className}`;
+            button.textContent = choice.label;
+            button.addEventListener('click', () => sendPotatoPermissionChoice(choice.value, permDiv));
+            actions.appendChild(button);
+        });
+
+        permDiv.append(title, content, actions);
+        return permDiv;
+    }
+
+    async function sendPotatoPermissionChoice(choice, promptElement) {
+        if (!activePotatoSessionId) return;
+
+        promptElement.querySelectorAll('button').forEach((button) => {
+            button.disabled = true;
+        });
+        setAgentComposerState(false, `Status: Sending permission choice (${choice})...`);
+
+        try {
+            const response = await fetch(`${baseEndpoint}/v1/potato/sessions/${encodeURIComponent(activePotatoSessionId)}/input`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ content: choice })
+            });
+
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            promptElement.classList.add('permission-choice-submitted');
+            setAgentComposerState(true, `Status: Permission choice sent (${choice})`);
+            await refreshActivePotatoSession();
+        } catch (error) {
+            promptElement.querySelectorAll('button').forEach((button) => {
+                button.disabled = false;
+            });
+            setAgentComposerState(true, `Status: Could not send permission choice: ${error.message}`);
+        }
     }
 
     function formatPotatoEventTime(value) {

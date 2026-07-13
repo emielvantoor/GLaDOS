@@ -38,6 +38,8 @@ public sealed class PotatoSessionStore
             session.Model = request.Model;
             session.DisplayName = BuildDisplayName(request, workingDirectory);
             session.Status = "active";
+            session.IsProcessing = false;
+            session.CurrentProgress = null;
             session.StartedAt = now;
             session.LastActivityAt = now;
             session.Events.Clear();
@@ -62,6 +64,11 @@ public sealed class PotatoSessionStore
 
             session.Status = request.Kind.Equals("stopped", StringComparison.OrdinalIgnoreCase) ? "stopped" : "active";
             session.LastActivityAt = now;
+            if (TryApplyProcessingEvent(session, request.Kind, request.Content))
+            {
+                return ToSummary(session);
+            }
+
             AddEvent(session, now, request.Kind, request.Role, request.Content, request.Collapsed);
             return ToSummary(session);
         }
@@ -212,6 +219,8 @@ public sealed class PotatoSessionStore
             session.DisplayName,
             session.Model,
             session.Status,
+            session.IsProcessing,
+            session.CurrentProgress,
             session.StartedAt,
             session.LastActivityAt,
             session.Events.Count);
@@ -223,9 +232,31 @@ public sealed class PotatoSessionStore
             session.DisplayName,
             session.Model,
             session.Status,
+            session.IsProcessing,
+            session.CurrentProgress,
             session.StartedAt,
             session.LastActivityAt,
             session.Events.ToArray());
+
+    private static bool TryApplyProcessingEvent(StoredPotatoSession session, string kind, string content)
+    {
+        if (kind.Equals("progress-start", StringComparison.OrdinalIgnoreCase) ||
+            kind.Equals("progress-update", StringComparison.OrdinalIgnoreCase))
+        {
+            session.IsProcessing = true;
+            session.CurrentProgress = string.IsNullOrWhiteSpace(content) ? "Potato is thinking" : content.Trim();
+            return true;
+        }
+
+        if (kind.Equals("progress-end", StringComparison.OrdinalIgnoreCase))
+        {
+            session.IsProcessing = false;
+            session.CurrentProgress = null;
+            return true;
+        }
+
+        return false;
+    }
 
     private static string NormalizeWorkingDirectory(string workingDirectory) =>
         Path.GetFullPath(string.IsNullOrWhiteSpace(workingDirectory) ? "." : workingDirectory);
@@ -428,6 +459,8 @@ public sealed class PotatoSessionStore
         public string DisplayName { get; set; } = displayName;
         public string Model { get; set; } = model;
         public string Status { get; set; } = "active";
+        public bool IsProcessing { get; set; }
+        public string? CurrentProgress { get; set; }
         public DateTimeOffset StartedAt { get; set; } = startedAt;
         public DateTimeOffset LastActivityAt { get; set; } = startedAt;
         public List<PotatoSessionEvent> Events { get; } = [];

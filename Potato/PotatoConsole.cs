@@ -587,6 +587,7 @@ internal static class PotatoConsole
     public static IProgressReporter StartProgress(string message)
     {
         string? previousProgressMessage = activeProgressMessage;
+        RecordProgressEvent("progress-start", message);
         if (Console.IsOutputRedirected)
         {
             activeProgressMessage = message;
@@ -599,8 +600,13 @@ internal static class PotatoConsole
             activeProgressMessage = message;
             ActiveProgress = new ProgressSpinner(message, ProgressLock, NextProgressJoke, previousProgressMessage);
             ActiveProgress.Start();
-            return ActiveProgress;
+            return new ProgressScope(ActiveProgress, previousProgressMessage);
         }
+    }
+
+    private static void RecordProgressEvent(string kind, string? message = null)
+    {
+        EventSink?.Record(kind, "status", string.IsNullOrWhiteSpace(message) ? kind : message, collapsed: true);
     }
 
     internal interface IPotatoConsoleEventSink
@@ -652,6 +658,7 @@ internal static class PotatoConsole
         Console.WriteLine();
         Console.WriteLine(prompt);
         Console.WriteLine();
+        EventSink?.Record("permission", "status", FormatPermissionEventContent(title, details, prompt), collapsed: false);
 
         string[] choices =
         [
@@ -668,6 +675,20 @@ internal static class PotatoConsole
 
         while (true)
         {
+            if (TryReadWebInput(out string? webInput) &&
+                webInput is not null &&
+                TryParseWebPermissionChoice(webInput, out ToolPermissionChoice webChoice))
+            {
+                Console.WriteLine(webInput);
+                return webChoice;
+            }
+
+            if (!Console.KeyAvailable)
+            {
+                Thread.Sleep(50);
+                continue;
+            }
+
             ConsoleKeyInfo key = Console.ReadKey(intercept: true);
             switch (key.Key)
             {
@@ -704,6 +725,37 @@ internal static class PotatoConsole
                     return PermissionChoiceForIndex(selectedIndex);
             }
         }
+    }
+
+    private static string FormatPermissionEventContent(string title, IReadOnlyList<string> details, string prompt)
+    {
+        var builder = new StringBuilder();
+        builder.AppendLine(title);
+        foreach (string detail in details)
+        {
+            builder.AppendLine(detail);
+        }
+
+        builder.AppendLine();
+        builder.AppendLine(prompt);
+        return builder.ToString().TrimEnd();
+    }
+
+    private static bool TryParseWebPermissionChoice(string input, out ToolPermissionChoice choice)
+    {
+        string normalized = input.Trim().ToLowerInvariant();
+        choice = normalized switch
+        {
+            "1" or "once" or "yes" or "y" or "approve" or "approved" or "ok" or "okay" =>
+                ToolPermissionChoice.AllowOnce,
+            "2" or "always" or "allow always" or "approve always" =>
+                ToolPermissionChoice.AllowAlways,
+            "3" or "deny" or "denied" or "no" or "n" or "reject" or "rejected" or "esc" or "escape" =>
+                ToolPermissionChoice.Deny,
+            _ => (ToolPermissionChoice)(-1)
+        };
+
+        return Enum.IsDefined(choice);
     }
 
     private static ToolPermissionChoice PermissionChoiceForIndex(int selectedIndex) =>
@@ -1611,6 +1663,7 @@ internal static class PotatoConsole
                 {
                     this.message = message;
                     activeProgressMessage = message;
+                    RecordProgressEvent("progress-update", message);
                 }
             }
         }
@@ -1746,6 +1799,7 @@ internal static class PotatoConsole
         public void Update(string message)
         {
             activeProgressMessage = message;
+            RecordProgressEvent("progress-update", message);
         }
 
         public void Dispose()
@@ -1762,6 +1816,7 @@ internal static class PotatoConsole
         {
             inner.Dispose();
             activeProgressMessage = previousProgressMessage;
+            RecordProgressEvent("progress-end");
         }
     }
 }
