@@ -2,16 +2,20 @@
     let agentCompletionIndex = 0;
     let agentCompletionRequestId = 0;
     let agentCompletionTimer = null;
+    let showPotatoSystemActions = true;
+    const defaultAgentPromptPlaceholder = 'Send input to the selected Potato session... (Shift+Enter for a new line)';
 
     function initializeAgentsView() {
         document.getElementById('chatTab')?.addEventListener('click', () => switchPrimaryView('chat'));
         document.getElementById('agentsTab')?.addEventListener('click', () => switchPrimaryView('agents'));
         document.getElementById('refreshAgentsBtn')?.addEventListener('click', () => refreshPotatoSessions({ forceDetail: true }));
+        document.getElementById('agentSystemActionsToggle')?.addEventListener('click', togglePotatoSystemActions);
         document.getElementById('agentSubmitBtn')?.addEventListener('click', sendPotatoInput);
         document.getElementById('agentPrompt')?.addEventListener('keydown', handleAgentPromptKeyPress);
         document.getElementById('agentPrompt')?.addEventListener('input', scheduleAgentCompletions);
         document.getElementById('agentPrompt')?.addEventListener('click', scheduleAgentCompletions);
         setAgentComposerState(false, 'Status: Select a Potato session');
+        updatePotatoSystemActionsToggle();
 
         refreshPotatoSessions();
         potatoSessionsPollId = window.setInterval(refreshPotatoSessions, 2000);
@@ -96,7 +100,7 @@
         });
     }
 
-    async function refreshActivePotatoSession() {
+    async function refreshActivePotatoSession(options = {}) {
         const chatBox = document.getElementById('agentChatBox');
         if (!chatBox) return;
 
@@ -116,7 +120,7 @@
 
         const session = await response.json();
         setPotatoHeader(session);
-        renderPotatoEvents(session.events || []);
+        renderPotatoEvents(session.events || [], { force: options.forceRender });
         updatePotatoThinkingIndicator(session);
     }
 
@@ -130,6 +134,7 @@
             if (path) path.textContent = 'Start Potato from a working directory to mirror it here.';
             if (status) status.textContent = 'Idle';
             setAgentComposerState(false, 'Status: Select a Potato session');
+            updateAgentPromptPlaceholder(null);
             hideAgentCompletions();
             return;
         }
@@ -137,15 +142,31 @@
         if (title) title.textContent = session.displayName || 'Potato session';
         if (path) path.textContent = session.workingDirectory;
         if (status) status.textContent = session.isProcessing ? 'thinking' : (session.status || 'active');
-        setAgentComposerState(true, session.isProcessing ? 'Status: Potato is thinking' : 'Status: Ready');
+        setAgentComposerState(true, getAgentStatusText(session));
+        updateAgentPromptPlaceholder(session);
         scheduleAgentCompletions();
     }
 
-    function renderPotatoEvents(events) {
+    function getAgentStatusText(session) {
+        if (session.currentInputPrompt) {
+            return `Status: Waiting for input (${session.currentInputPrompt})`;
+        }
+
+        return session.isProcessing ? 'Status: Potato is thinking' : 'Status: Ready';
+    }
+
+    function updateAgentPromptPlaceholder(session) {
+        const promptInput = document.getElementById('agentPrompt');
+        if (!promptInput) return;
+
+        promptInput.placeholder = session?.currentInputPrompt || defaultAgentPromptPlaceholder;
+    }
+
+    function renderPotatoEvents(events, options = {}) {
         const chatBox = document.getElementById('agentChatBox');
         if (!chatBox) return;
 
-        if (chatBox.dataset.sessionId !== activePotatoSessionId) {
+        if (chatBox.dataset.sessionId !== activePotatoSessionId || options.force) {
             chatBox.dataset.eventCount = '0';
             chatBox.dataset.lastSequence = '0';
             chatBox.dataset.sessionId = activePotatoSessionId || '';
@@ -172,7 +193,7 @@
             chatBox.innerHTML = '';
             chatBox.dataset.lastSequence = '0';
             events.forEach((event) => {
-                chatBox.appendChild(createPotatoEventElement(event));
+                appendPotatoEventElement(chatBox, event);
             });
             chatBox.dataset.lastSequence = String(Math.max(...events.map((event) => Number(event.sequence || 0))));
             chatBox.scrollTop = chatBox.scrollHeight;
@@ -182,7 +203,7 @@
 
         const shouldStickToBottom = isScrolledNearBottom(chatBox);
         newEvents.forEach((event) => {
-            chatBox.appendChild(createPotatoEventElement(event));
+            appendPotatoEventElement(chatBox, event);
         });
 
         chatBox.dataset.lastSequence = String(Math.max(lastSequence, ...events.map((event) => Number(event.sequence || 0))));
@@ -191,6 +212,39 @@
         }
 
         initializeCodeBlockActions();
+    }
+
+    function appendPotatoEventElement(chatBox, event) {
+        if (!shouldShowPotatoEvent(event)) return;
+        chatBox.appendChild(createPotatoEventElement(event));
+    }
+
+    function shouldShowPotatoEvent(event) {
+        return showPotatoSystemActions || !event.collapsed;
+    }
+
+    function togglePotatoSystemActions() {
+        showPotatoSystemActions = !showPotatoSystemActions;
+        updatePotatoSystemActionsToggle();
+        forceRefreshPotatoTranscript();
+    }
+
+    function updatePotatoSystemActionsToggle() {
+        const button = document.getElementById('agentSystemActionsToggle');
+        if (!button) return;
+
+        button.setAttribute('aria-pressed', String(showPotatoSystemActions));
+        button.textContent = showPotatoSystemActions ? 'Hide System Actions' : 'Show System Actions';
+    }
+
+    async function forceRefreshPotatoTranscript() {
+        const chatBox = document.getElementById('agentChatBox');
+        if (chatBox) {
+            chatBox.dataset.eventCount = '0';
+            chatBox.dataset.lastSequence = '0';
+        }
+
+        await refreshActivePotatoSession({ forceRender: true });
     }
 
     function isScrolledNearBottom(element) {
@@ -459,15 +513,23 @@
         if (cursorIndex !== content.length) return false;
         const text = content.slice(0, cursorIndex);
         if (text.startsWith('/') && !text.includes('\n')) return true;
-        return /(^|\s)@\S*$/.test(text);
+        const mentionStart = text.lastIndexOf('@');
+        return mentionStart >= 0 && (mentionStart === 0 || /\s/.test(text[mentionStart - 1]));
     }
 
     function renderAgentCompletions(completions) {
         const container = document.getElementById('agentCompletions');
         if (!container) return;
 
+        const selectedCompletionKey = getAgentCompletionKey(agentCompletionItems[agentCompletionIndex]);
+        const fallbackIndex = Math.min(agentCompletionIndex, Math.max(0, completions.length - 1));
         agentCompletionItems = completions;
-        agentCompletionIndex = 0;
+        agentCompletionIndex = selectedCompletionKey
+            ? completions.findIndex((completion) => getAgentCompletionKey(completion) === selectedCompletionKey)
+            : fallbackIndex;
+        if (agentCompletionIndex < 0) {
+            agentCompletionIndex = fallbackIndex;
+        }
         container.innerHTML = '';
 
         if (completions.length === 0) {
@@ -497,6 +559,16 @@
         });
 
         container.classList.remove('hidden');
+    }
+
+    function getAgentCompletionKey(completion) {
+        if (!completion) return '';
+        return [
+            completion.kind || '',
+            completion.replacementStart ?? '',
+            completion.replacementText || '',
+            completion.displayText || ''
+        ].join('\u001f');
     }
 
     function selectAgentCompletion(index) {

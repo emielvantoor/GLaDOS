@@ -40,6 +40,7 @@ public sealed class PotatoSessionStore
             session.Status = "active";
             session.IsProcessing = false;
             session.CurrentProgress = null;
+            session.CurrentInputPrompt = null;
             session.StartedAt = now;
             session.LastActivityAt = now;
             session.Events.Clear();
@@ -64,7 +65,7 @@ public sealed class PotatoSessionStore
 
             session.Status = request.Kind.Equals("stopped", StringComparison.OrdinalIgnoreCase) ? "stopped" : "active";
             session.LastActivityAt = now;
-            if (TryApplyProcessingEvent(session, request.Kind, request.Content))
+            if (TryApplySessionStateEvent(session, request.Kind, request.Content))
             {
                 return ToSummary(session);
             }
@@ -131,13 +132,24 @@ public sealed class PotatoSessionStore
     {
         string normalizedWorkingDirectory = NormalizeWorkingDirectory(workingDirectory);
         string id = CreateSessionId(normalizedWorkingDirectory);
+        DateTimeOffset now = DateTimeOffset.UtcNow;
 
         lock (sync)
         {
-            return sessions.TryGetValue(id, out StoredPotatoSession? session) &&
-                   session.PendingInputs.TryDequeue(out string? input)
-                ? input
-                : null;
+            if (!sessions.TryGetValue(id, out StoredPotatoSession? session))
+            {
+                session = new StoredPotatoSession(
+                    id,
+                    normalizedWorkingDirectory,
+                    Path.GetFileName(normalizedWorkingDirectory),
+                    string.Empty,
+                    now);
+                sessions[id] = session;
+            }
+
+            session.Status = "active";
+            session.LastActivityAt = now;
+            return session.PendingInputs.TryDequeue(out string? input) ? input : null;
         }
     }
 
@@ -221,6 +233,7 @@ public sealed class PotatoSessionStore
             session.Status,
             session.IsProcessing,
             session.CurrentProgress,
+            session.CurrentInputPrompt,
             session.StartedAt,
             session.LastActivityAt,
             session.Events.Count);
@@ -234,11 +247,12 @@ public sealed class PotatoSessionStore
             session.Status,
             session.IsProcessing,
             session.CurrentProgress,
+            session.CurrentInputPrompt,
             session.StartedAt,
             session.LastActivityAt,
             session.Events.ToArray());
 
-    private static bool TryApplyProcessingEvent(StoredPotatoSession session, string kind, string content)
+    private static bool TryApplySessionStateEvent(StoredPotatoSession session, string kind, string content)
     {
         if (kind.Equals("progress-start", StringComparison.OrdinalIgnoreCase) ||
             kind.Equals("progress-update", StringComparison.OrdinalIgnoreCase))
@@ -252,6 +266,20 @@ public sealed class PotatoSessionStore
         {
             session.IsProcessing = false;
             session.CurrentProgress = null;
+            return true;
+        }
+
+        if (kind.Equals("input-prompt", StringComparison.OrdinalIgnoreCase))
+        {
+            session.CurrentInputPrompt = string.IsNullOrWhiteSpace(content)
+                ? null
+                : content.Trim();
+            return true;
+        }
+
+        if (kind.Equals("input-prompt-clear", StringComparison.OrdinalIgnoreCase))
+        {
+            session.CurrentInputPrompt = null;
             return true;
         }
 
@@ -320,15 +348,15 @@ public sealed class PotatoSessionStore
     {
         argumentStartIndex = 0;
         argument = string.Empty;
-        int tokenStart = text.LastIndexOfAny([' ', '\t', '\r', '\n']);
-        tokenStart = tokenStart < 0 ? 0 : tokenStart + 1;
-        if (tokenStart >= text.Length || text[tokenStart] != '@')
+        int mentionStart = text.LastIndexOf('@');
+        if (mentionStart < 0 ||
+            (mentionStart > 0 && !char.IsWhiteSpace(text[mentionStart - 1])))
         {
             return false;
         }
 
-        argumentStartIndex = tokenStart + 1;
-        argument = text[(tokenStart + 1)..].Trim('"', '\'');
+        argumentStartIndex = mentionStart + 1;
+        argument = text[(mentionStart + 1)..].Trim('"', '\'');
         return true;
     }
 
@@ -461,6 +489,7 @@ public sealed class PotatoSessionStore
         public string Status { get; set; } = "active";
         public bool IsProcessing { get; set; }
         public string? CurrentProgress { get; set; }
+        public string? CurrentInputPrompt { get; set; }
         public DateTimeOffset StartedAt { get; set; } = startedAt;
         public DateTimeOffset LastActivityAt { get; set; } = startedAt;
         public List<PotatoSessionEvent> Events { get; } = [];

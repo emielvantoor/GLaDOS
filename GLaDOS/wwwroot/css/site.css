@@ -289,6 +289,18 @@ h1 {
     overflow-wrap: anywhere;
 }
 
+.agent-session-controls {
+    display: flex;
+    flex: 0 0 auto;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 8px;
+}
+
+.agent-system-toggle {
+    white-space: nowrap;
+}
+
 .agent-session-status {
     flex: 0 0 auto;
     border: 1px solid color-mix(in srgb, var(--portal-blue) 40%, var(--border-color));

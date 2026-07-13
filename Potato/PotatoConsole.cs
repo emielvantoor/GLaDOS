@@ -203,6 +203,7 @@ internal static class PotatoConsole
         CancellationToken cancellationToken = default)
     {
         placeholder = string.IsNullOrWhiteSpace(placeholder) ? DefaultPromptPlaceholder : placeholder;
+        RecordInputPromptEvent("input-prompt", placeholder);
         (int inputLeft, int inputTop, int placeholderLength) = WritePrompt(placeholder);
 
         var buffer = new List<char>();
@@ -391,6 +392,7 @@ internal static class PotatoConsole
         finally
         {
             DisableBracketedPaste();
+            RecordInputPromptEvent("input-prompt-clear");
         }
     }
 
@@ -605,6 +607,11 @@ internal static class PotatoConsole
     }
 
     private static void RecordProgressEvent(string kind, string? message = null)
+    {
+        EventSink?.Record(kind, "status", string.IsNullOrWhiteSpace(message) ? kind : message, collapsed: true);
+    }
+
+    private static void RecordInputPromptEvent(string kind, string? message = null)
     {
         EventSink?.Record(kind, "status", string.IsNullOrWhiteSpace(message) ? kind : message, collapsed: true);
     }

@@ -14,7 +14,6 @@ internal sealed class PotatoWebUiReporter(Uri gladosEndpoint, string model) : Po
     private readonly Uri nextInputUri = new(gladosEndpoint, $"potato/sessions/input/next?workingDirectory={Uri.EscapeDataString(Environment.CurrentDirectory)}");
     private readonly CancellationTokenSource inputPollingCancellation = new();
     private Task? inputPollingTask;
-    private volatile bool disabled;
 
     public async Task StartAsync()
     {
@@ -27,7 +26,7 @@ internal sealed class PotatoWebUiReporter(Uri gladosEndpoint, string model) : Po
 
     public void Record(string kind, string role, string content, bool collapsed)
     {
-        if (disabled || string.IsNullOrWhiteSpace(content))
+        if (string.IsNullOrWhiteSpace(content))
         {
             return;
         }
@@ -57,15 +56,12 @@ internal sealed class PotatoWebUiReporter(Uri gladosEndpoint, string model) : Po
             }
         }
 
-        if (!disabled)
-        {
-            await TryPostAsync(eventUri, new PotatoSessionEventPayload(
-                workingDirectory,
-                "stopped",
-                "status",
-                "Potato session stopped.",
-                Collapsed: true));
-        }
+        await TryPostAsync(eventUri, new PotatoSessionEventPayload(
+            workingDirectory,
+            "stopped",
+            "status",
+            "Potato session stopped.",
+            Collapsed: true));
 
         inputPollingCancellation.Dispose();
         httpClient.Dispose();
@@ -103,22 +99,13 @@ internal sealed class PotatoWebUiReporter(Uri gladosEndpoint, string model) : Po
 
     private async Task TryPostAsync<TPayload>(Uri uri, TPayload payload)
     {
-        if (disabled)
-        {
-            return;
-        }
-
         try
         {
-            using HttpResponseMessage response = await httpClient.PostAsJsonAsync(uri, payload);
-            if (!response.IsSuccessStatusCode)
-            {
-                disabled = true;
-            }
+            using HttpResponseMessage _ = await httpClient.PostAsJsonAsync(uri, payload);
         }
         catch
         {
-            disabled = true;
+            // Transient Web UI disconnects should not permanently detach this Potato session.
         }
     }
 

@@ -8,6 +8,7 @@ public sealed record PotatoSessionSummary(
     string Status,
     bool IsProcessing,
     string? CurrentProgress,
+    string? CurrentInputPrompt,
     DateTimeOffset StartedAt,
     DateTimeOffset LastActivityAt,
     int MessageCount);
@@ -20,6 +21,7 @@ public sealed record PotatoSessionDetail(
     string Status,
     bool IsProcessing,
     string? CurrentProgress,
+    string? CurrentInputPrompt,
     DateTimeOffset StartedAt,
     DateTimeOffset LastActivityAt,
     IReadOnlyList<PotatoSessionEvent> Events);
