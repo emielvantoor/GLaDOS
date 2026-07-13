@@ -12,14 +12,14 @@ public sealed class PlanningArtifactGenerator
 
     public async Task<string> GeneratePlanningSpecAsync(
         string goal,
-        string workspaceFileIndex,
+        string workspacePlanningContext,
         IChatClient chatClient,
         CancellationToken cancellationToken)
     {
         var messages = new List<ChatMessage>
         {
             new(ChatRole.System, Prompts.PromptLibrary.PlanningSpecSystemPrompt),
-            new(ChatRole.User, Prompts.PromptLibrary.BuildPlanningSpecUserPrompt(goal, workspaceFileIndex))
+            new(ChatRole.User, Prompts.PromptLibrary.BuildPlanningSpecUserPrompt(goal, workspacePlanningContext))
         };
 
         ChatResponse response;
@@ -31,7 +31,7 @@ public sealed class PlanningArtifactGenerator
                 cancellationToken);
         }
 
-        return ResolveSpecPathReferences(PlanningJsonExtractor.ExtractJsonObject(response.Text), workspaceFileIndex);
+        return ResolveSpecPathReferences(PlanningJsonExtractor.ExtractJsonObject(response.Text), workspacePlanningContext);
     }
 
     public async Task<string> GenerateApprovedDraftPlanAsync(

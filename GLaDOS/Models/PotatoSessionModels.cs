@@ -41,6 +41,7 @@ public sealed record PotatoSessionStartRequest(
 
 public sealed record PotatoSessionEventRequest(
     string WorkingDirectory,
+    string? CurrentWorkingDirectory,
     string Kind,
     string Role,
     string Content,

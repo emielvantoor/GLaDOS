@@ -18,7 +18,7 @@ public sealed class PlannerTaskGenerator(
         string goal,
         IReadOnlyList<TaskObservation> observations,
         string workspaceContext,
-        string workspaceFileIndex,
+        string workspacePlanningContext,
         string planningSpec,
         string draftPlan,
         IChatClient chatClient,
@@ -37,7 +37,7 @@ public sealed class PlannerTaskGenerator(
                 new(ChatRole.System, Prompts.PromptLibrary.PlannerSystemPrompt),
                 new(ChatRole.User, Prompts.PromptLibrary.BuildPlannerUserPrompt(
                     goal,
-                    workspaceFileIndex,
+                    workspacePlanningContext,
                     planningSpec,
                     draftPlan,
                     supportedActions,

@@ -63,6 +63,7 @@ public sealed class PotatoSessionStore
                 sessions[id] = session;
             }
 
+            UpdateWorkingDirectory(session, request.CurrentWorkingDirectory);
             session.Status = request.Kind.Equals("stopped", StringComparison.OrdinalIgnoreCase) ? "stopped" : "active";
             session.LastActivityAt = now;
             if (TryApplySessionStateEvent(session, request.Kind, request.Content))
@@ -222,6 +223,36 @@ public sealed class PotatoSessionStore
             string.IsNullOrWhiteSpace(role) ? "status" : role,
             content,
             collapsed));
+    }
+
+    private static void UpdateWorkingDirectory(StoredPotatoSession session, string? workingDirectory)
+    {
+        if (string.IsNullOrWhiteSpace(workingDirectory))
+        {
+            return;
+        }
+
+        string normalizedWorkingDirectory = NormalizeWorkingDirectory(workingDirectory);
+        if (string.Equals(session.WorkingDirectory, normalizedWorkingDirectory, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        string oldDisplayName = Path.GetFileName(session.WorkingDirectory.TrimEnd(
+            Path.DirectorySeparatorChar,
+            Path.AltDirectorySeparatorChar));
+        bool hasAutomaticDisplayName = string.IsNullOrWhiteSpace(session.DisplayName) ||
+                                       string.Equals(session.DisplayName, oldDisplayName, StringComparison.Ordinal);
+
+        session.WorkingDirectory = normalizedWorkingDirectory;
+        if (!hasAutomaticDisplayName)
+        {
+            return;
+        }
+
+        session.DisplayName = Path.GetFileName(normalizedWorkingDirectory.TrimEnd(
+            Path.DirectorySeparatorChar,
+            Path.AltDirectorySeparatorChar));
     }
 
     private static PotatoSessionSummary ToSummary(StoredPotatoSession session) =>
@@ -536,7 +567,7 @@ public sealed class PotatoSessionStore
         DateTimeOffset startedAt)
     {
         public string Id { get; } = id;
-        public string WorkingDirectory { get; } = workingDirectory;
+        public string WorkingDirectory { get; set; } = workingDirectory;
         public string DisplayName { get; set; } = displayName;
         public string Model { get; set; } = model;
         public string Status { get; set; } = "active";

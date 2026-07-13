@@ -364,7 +364,7 @@ public sealed class ProjectMapBuilder
     {
         string fullTargetDirectory = Path.GetFullPath(targetDirectory);
         string cacheRootDirectory = FindGitRepositoryRoot(fullTargetDirectory) ?? fullTargetDirectory;
-        string projectMapRootDirectory = cacheRootDirectory;
+        string projectMapRootDirectory = fullTargetDirectory;
         string cachePrunePathPrefix = ToRelativeProjectMapPath(cacheRootDirectory, projectMapRootDirectory);
         return new ProjectMapCacheLocation(
             projectMapRootDirectory,

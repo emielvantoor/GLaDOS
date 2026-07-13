@@ -11,7 +11,8 @@ internal static partial class PromptLibrary
         "Generate exactly one shell operation. " +
         "Never combine multiple operations with &&, ||, ;, pipes, redirection, or multiple lines. " +
         "Prefer the narrowest command that satisfies only the planner task argument. " +
-        "Do not use shell for reading project files, listing directories, creating text files, or editing text files when Potato has a direct task for that. " +
+        "Use shell for explicit user requests to list files or directories in the current working folder. " +
+        "Do not use shell for reading project files, creating text files, or editing text files when Potato has a direct task for that. " +
         "Use shell only for operations not covered by direct Potato tasks, such as creating directories, running build/test commands, or invoking project tools. " +
         "Do not generate destructive commands unless the user request explicitly requires them.");
 

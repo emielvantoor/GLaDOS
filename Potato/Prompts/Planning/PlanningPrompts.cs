@@ -24,7 +24,7 @@ internal static partial class PromptLibrary
         Execution observations so far:
         {{ExecutionObservations}}
 
-        Workspace file index:
+        Workspace ProjectMap context:
         {{WorkspaceContext}}
 
         Supported actions:
@@ -41,7 +41,7 @@ internal static partial class PromptLibrary
         - Treat Workspace context as the indexed file set and static source of truth for files and repository layout.
         - The "Current working folder:" line is the user's current folder relative to ProjectMap root.
         - Only paths printed after "File:" in Workspace context are indexed file paths; ProjectMap root is not a file path prefix to combine with guesses.
-        - For a request to list files or directories in the current working folder, answer from Workspace context with a single write-report task. Filter indexed "File:" paths to immediate children of Current working folder; infer immediate directories from the first path segment below that folder. Do not use shell-script or inspect-project for this simple listing.
+        - For a request to list files or directories in the current working folder, use one shell-script task with Argument "ls". Do not answer from Workspace context, because ProjectMap is an indexed subset and may omit ordinary files.
         - If a file path is not listed as a "File:" entry in Workspace context, assume it is not available to read unless an earlier create-file step in this same plan creates that exact path.
         - Never invent files, folders, types, methods, tests, or project structure.
         - A read task argument must exactly match either a "File:" path shown in Workspace context or a path created by an earlier create-file step in this same plan. Do not read a path that is only implied by a directory, project name, ProjectMap root, or user wording.
@@ -113,7 +113,7 @@ internal static partial class PromptLibrary
         """
         You are Potato's specification writer. Return valid JSON only.
         Convert the user's request into explicit implementation specs the planner can satisfy.
-        Do not invent repository files that are not supported by the Workspace file index, but do identify requested deliverables and acceptance criteria.
+        Do not invent repository files that are not supported by the Workspace ProjectMap context, but do identify requested deliverables and acceptance criteria.
         If the user names a source file, include the exact indexed path for that source file in referenceFilesToRead.
         """);
 
@@ -135,7 +135,7 @@ internal static partial class PromptLibrary
         User request:
         {{UserRequest}}
 
-        Workspace file index:
+        Workspace ProjectMap context:
         {{WorkspaceContext}}
         """);
 
@@ -160,7 +160,7 @@ internal static partial class PromptLibrary
         Derived implementation spec:
         {{PlanningSpec}}
 
-        Workspace file index:
+        Workspace ProjectMap context:
         {{WorkspaceContext}}
 
         Previous draft feedback:
@@ -202,7 +202,7 @@ internal static partial class PromptLibrary
         You are Potato's plan completeness reviewer. Return valid JSON only.
         Judge whether the proposed task list would actually complete the user's request if executed.
         Do not require implementation details inside planner steps, but require concrete actions for every requested artifact or behavior.
-        Treat create-file as structural only: it creates an empty new file path and missing folders. Treat write-code as capable of generating source or asset file content, write-documentation as capable of documenting Markdown content, code-review as capable of validating a file's structure/quality, and shell-script as capable of running one existing validation command.
+        Treat create-file as structural only: it creates an empty new file path and missing folders. Treat write-code as capable of generating source or asset file content, write-documentation as capable of documenting Markdown content, code-review as capable of validating a file's structure/quality, and shell-script as capable of running one existing validation command or listing the current folder when the user explicitly asks for a file or directory listing.
         For extraction/refactor requests, treat read of the source file plus create-file/apply-patch/write-code for the destination artifacts as concrete extraction implementation. There is no separate extract action.
         If the approved draft or spec requires HTML component markup, a create-file/apply-patch/write-code task targeting a .html file is the concrete modularization step. Do not ask for an additional abstract modularization step.
         """);
@@ -233,7 +233,7 @@ internal static partial class PromptLibrary
         Approved draft plan:
         {{DraftPlan}}
 
-        Workspace file index:
+        Workspace ProjectMap context:
         {{WorkspaceContext}}
 
         Proposed plan:

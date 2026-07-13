@@ -14,9 +14,10 @@ public class ShellScriptTask(AgentTools agentTools) : AgentTaskBase, IAgentTask
 
     public override IReadOnlyList<string> PlanningGuidance =>
     [
+        "Use shell-script for user requests to list files or directories in the current working folder.",
         "Use shell-script only as a fallback when no direct action can complete the requested work.",
         "Use shell-script for one shell-level operation at a time, such as creating one or more directories with mkdir -p, or running one project command.",
-        "Do not use shell-script for reading files, listing directories, creating text files, editing text files, writing documentation, code review, or project inspection when a direct action exists.",
+        "Do not use shell-script for reading files, creating text files, editing text files, writing documentation, code review, or project inspection when a direct action exists.",
         "For shell-script, the Argument must be either the exact single shell command to run or a narrow description of exactly one shell-level operation.",
         "Never combine multiple shell operations in one shell-script step with &&, ||, ;, pipes, redirection, or multiple lines. Plan a separate later task for the next operation."
     ];
@@ -109,7 +110,9 @@ public class ShellScriptTask(AgentTools agentTools) : AgentTaskBase, IAgentTask
             .FirstOrDefault() ?? string.Empty;
         executable = Path.GetFileName(executable);
 
-        return executable.Equals("mkdir", StringComparison.OrdinalIgnoreCase) ||
+        return executable.Equals("ls", StringComparison.OrdinalIgnoreCase) ||
+               executable.Equals("dir", StringComparison.OrdinalIgnoreCase) ||
+               executable.Equals("mkdir", StringComparison.OrdinalIgnoreCase) ||
                executable.Equals("dotnet", StringComparison.OrdinalIgnoreCase) ||
                executable.Equals("npm", StringComparison.OrdinalIgnoreCase) ||
                executable.Equals("pnpm", StringComparison.OrdinalIgnoreCase) ||

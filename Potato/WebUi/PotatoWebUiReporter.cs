@@ -8,7 +8,7 @@ internal sealed class PotatoWebUiReporter(Uri gladosEndpoint, string model) : Po
 {
     private readonly HttpClient httpClient = new();
     private readonly Channel<string> inputChannel = Channel.CreateUnbounded<string>();
-    private readonly string workingDirectory = Environment.CurrentDirectory;
+    private readonly string sessionWorkingDirectory = Environment.CurrentDirectory;
     private readonly Uri startSessionUri = new(gladosEndpoint, "potato/sessions");
     private readonly Uri eventUri = new(gladosEndpoint, "potato/sessions/events");
     private readonly Uri nextInputUri = new(gladosEndpoint, $"potato/sessions/input/next?workingDirectory={Uri.EscapeDataString(Environment.CurrentDirectory)}");
@@ -18,9 +18,9 @@ internal sealed class PotatoWebUiReporter(Uri gladosEndpoint, string model) : Po
     public async Task StartAsync()
     {
         await TryPostAsync(startSessionUri, new PotatoSessionStartPayload(
-            workingDirectory,
+            sessionWorkingDirectory,
             model,
-            Path.GetFileName(workingDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar))));
+            Path.GetFileName(sessionWorkingDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar))));
         inputPollingTask = PollInputAsync(inputPollingCancellation.Token);
     }
 
@@ -31,8 +31,10 @@ internal sealed class PotatoWebUiReporter(Uri gladosEndpoint, string model) : Po
             return;
         }
 
+        string currentWorkingDirectory = Environment.CurrentDirectory;
         _ = Task.Run(() => TryPostAsync(eventUri, new PotatoSessionEventPayload(
-            workingDirectory,
+            sessionWorkingDirectory,
+            currentWorkingDirectory,
             kind,
             role,
             content,
@@ -57,7 +59,8 @@ internal sealed class PotatoWebUiReporter(Uri gladosEndpoint, string model) : Po
         }
 
         await TryPostAsync(eventUri, new PotatoSessionEventPayload(
-            workingDirectory,
+            sessionWorkingDirectory,
+            Environment.CurrentDirectory,
             "stopped",
             "status",
             "Potato session stopped.",
@@ -113,6 +116,7 @@ internal sealed class PotatoWebUiReporter(Uri gladosEndpoint, string model) : Po
 
     private sealed record PotatoSessionEventPayload(
         string WorkingDirectory,
+        string CurrentWorkingDirectory,
         string Kind,
         string Role,
         string Content,

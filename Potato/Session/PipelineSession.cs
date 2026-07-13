@@ -399,10 +399,37 @@ internal sealed class PipelineSession
         builder.AppendLine("Execution completed.");
         foreach (TaskObservation observation in result.Observations)
         {
-            builder.AppendLine($"- Step {observation.Step} {observation.Action}: {StringHelper.FirstLine(observation.Result)}");
+            AppendObservationSummary(builder, observation);
         }
 
         return builder.ToString().TrimEnd();
+    }
+
+    private static void AppendObservationSummary(StringBuilder builder, TaskObservation observation)
+    {
+        if (StringHelper.NormalizeAction(observation.Action) == "shell-script")
+        {
+            builder.AppendLine($"- Step {observation.Step} {observation.Action}:");
+            foreach (string line in TrimObservationResult(observation.Result)
+                         .Replace("\r\n", "\n", StringComparison.Ordinal)
+                         .Split('\n'))
+            {
+                builder.AppendLine($"  {line}");
+            }
+
+            return;
+        }
+
+        builder.AppendLine($"- Step {observation.Step} {observation.Action}: {StringHelper.FirstLine(observation.Result)}");
+    }
+
+    private static string TrimObservationResult(string result)
+    {
+        const int maxCharacters = 4000;
+        string trimmed = result.TrimEnd();
+        return trimmed.Length <= maxCharacters
+            ? trimmed
+            : trimmed[..maxCharacters] + "\n...(truncated)";
     }
 
     private static string BuildFailureSummary(ExecutionResult result)

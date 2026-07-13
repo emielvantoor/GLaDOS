@@ -3,7 +3,7 @@ namespace Potato;
 internal static class PathResolver
 {
     public static string WorkspaceRoot =>
-        FindGitRepositoryRoot(Environment.CurrentDirectory) ?? Environment.CurrentDirectory;
+        Environment.CurrentDirectory;
 
     public static string FormatPathForDisplay(string path)
     {
@@ -32,25 +32,11 @@ internal static class PathResolver
             ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), rawPath[2..])
             : rawPath;
 
-        return Path.GetFullPath(Path.IsPathRooted(expandedPath)
-            ? expandedPath
-            : Path.Combine(WorkspaceRoot, expandedPath));
-    }
-
-    private static string? FindGitRepositoryRoot(string directoryPath)
-    {
-        var directory = new DirectoryInfo(directoryPath);
-        while (directory is not null)
+        if (Path.IsPathRooted(expandedPath))
         {
-            if (Directory.Exists(Path.Combine(directory.FullName, ".git")) ||
-                File.Exists(Path.Combine(directory.FullName, ".git")))
-            {
-                return directory.FullName;
-            }
-
-            directory = directory.Parent;
+            return Path.GetFullPath(expandedPath);
         }
 
-        return null;
+        return Path.GetFullPath(Path.Combine(Environment.CurrentDirectory, expandedPath));
     }
 }

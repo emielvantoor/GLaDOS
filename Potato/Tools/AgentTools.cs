@@ -626,11 +626,6 @@ public class AgentTools(ExecutionMemory memory, CurrentChatClientState chatClien
             return StoreAndReturn(nameof(ExecuteShellCommandAsync), "Error: No command was provided.");
         }
 
-        if (LooksLikeDirectoryListingCommand(command))
-        {
-            return StoreAndReturn($"{nameof(ExecuteShellCommandAsync)} {command}", "Rejected shell directory listing. Use the ListFiles tool instead.");
-        }
-
         if (LooksLikeCompoundShellCommand(command))
         {
             return StoreAndReturn($"{nameof(ExecuteShellCommandAsync)} {command}", "Rejected compound shell command. Run exactly one shell operation at a time; do not combine commands with &&, ||, ;, pipes, redirection, or multiple lines.");
@@ -1137,7 +1132,7 @@ public class AgentTools(ExecutionMemory memory, CurrentChatClientState chatClien
 
         return Path.GetFullPath(Path.IsPathRooted(trimmed)
             ? trimmed
-            : Path.Combine(PathResolver.WorkspaceRoot, trimmed));
+            : Path.Combine(Environment.CurrentDirectory, trimmed));
     }
 
     private static string? ResolveCreatableFilePath(string? filePath)
@@ -1160,7 +1155,7 @@ public class AgentTools(ExecutionMemory memory, CurrentChatClientState chatClien
 
         return Path.GetFullPath(Path.IsPathRooted(trimmed)
             ? trimmed
-            : Path.Combine(PathResolver.WorkspaceRoot, trimmed));
+            : Path.Combine(Environment.CurrentDirectory, trimmed));
     }
 
     private static string? TryResolvePlaceholderFileName(string filePath)
@@ -1171,14 +1166,14 @@ public class AgentTools(ExecutionMemory memory, CurrentChatClientState chatClien
             return null;
         }
 
-        string candidate = Path.Combine(PathResolver.WorkspaceRoot, fileName);
+        string candidate = Path.Combine(Environment.CurrentDirectory, fileName);
         return File.Exists(candidate) ? Path.GetFullPath(candidate) : null;
     }
 
     private static string? ResolveReadableDirectoryPath(string? directoryPath)
     {
         string trimmed = string.IsNullOrWhiteSpace(directoryPath)
-            ? PathResolver.WorkspaceRoot
+            ? Environment.CurrentDirectory
             : directoryPath.Trim();
 
         if (Uri.TryCreate(trimmed, UriKind.Absolute, out Uri? uri) && uri.IsFile)
@@ -1193,7 +1188,7 @@ public class AgentTools(ExecutionMemory memory, CurrentChatClientState chatClien
 
         return Path.GetFullPath(Path.IsPathRooted(trimmed)
             ? trimmed
-            : Path.Combine(PathResolver.WorkspaceRoot, trimmed));
+            : Path.Combine(Environment.CurrentDirectory, trimmed));
     }
 
     private static IEnumerable<FileSystemInfo> EnumerateFileSystemEntries(string directoryPath, bool recursive)
@@ -1499,14 +1494,6 @@ public class AgentTools(ExecutionMemory memory, CurrentChatClientState chatClien
         }
 
         return count;
-    }
-
-    private static bool LooksLikeDirectoryListingCommand(string command)
-    {
-        string normalized = command.TrimStart().ToLowerInvariant();
-        return normalized.StartsWith("ls", StringComparison.Ordinal) ||
-               normalized.StartsWith("dir", StringComparison.Ordinal) ||
-               normalized.StartsWith("tree", StringComparison.Ordinal);
     }
 
     private static bool LooksLikeShellFileEditCommand(string command)
