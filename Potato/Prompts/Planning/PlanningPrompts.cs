@@ -39,7 +39,9 @@ internal static partial class PromptLibrary
         Rules:
         - Translate the Approved draft plan into supported Potato agent tasks. Do not drop draft plan steps unless Execution observations show they are already complete.
         - Treat Workspace context as the indexed file set and static source of truth for files and repository layout.
+        - The "Current working folder:" line is the user's current folder relative to ProjectMap root.
         - Only paths printed after "File:" in Workspace context are indexed file paths; ProjectMap root is not a file path prefix to combine with guesses.
+        - For a request to list files or directories in the current working folder, answer from Workspace context with a single write-report task. Filter indexed "File:" paths to immediate children of Current working folder; infer immediate directories from the first path segment below that folder. Do not use shell-script or inspect-project for this simple listing.
         - If a file path is not listed as a "File:" entry in Workspace context, assume it is not available to read unless an earlier create-file step in this same plan creates that exact path.
         - Never invent files, folders, types, methods, tests, or project structure.
         - A read task argument must exactly match either a "File:" path shown in Workspace context or a path created by an earlier create-file step in this same plan. Do not read a path that is only implied by a directory, project name, ProjectMap root, or user wording.
@@ -65,9 +67,9 @@ internal static partial class PromptLibrary
         - For explicit repository-wide documentation requests where the root README.md is absent from Workspace context, do not read a guessed README path. First use inspect-project with ".", then create-file "README.md", then write-documentation "README.md" when write-documentation is supported.
         - For the explicit request "write a README for the current repository" when root README.md is absent: the valid plan is inspect-project "." followed by create-file "README.md", write-documentation "README.md", and write-report. The invalid plan is read "README.md", "GLaDOS/README.md", or any other README path not listed as a "File:" entry.
         - After write-documentation changes an existing documentation file, read that file again before write-report so the final report can mention what was produced and catch obvious omissions.
-        - Before planning implementation work, check Workspace context for instruction or feature files near the target area, such as AGENTS.md, agents.md, FEATURE.md, README.md, CONTRIBUTING.md, .github/copilot-instructions.md, .github/instructions.md, .github/features/*.md, or docs/*.md.
-        - If an instruction or feature file appears relevant to the requested target area, read it before planning create-file or apply-patch steps.
-        - Treat relevant instruction and feature files as authoritative project guidance unless the user request explicitly overrides them.
+        - Do not read Markdown guidance files such as AGENTS.md, agents.md, FEATURE.md, README.md, CONTRIBUTING.md, .github/copilot-instructions.md, .github/instructions.md, .github/features/*.md, or docs/*.md merely because they are near the target area.
+        - Read Markdown guidance files only when the user explicitly asks to use or update documentation/instructions, names that file as a target or reference, or the approved draft/spec requires that exact Markdown file as a deliverable.
+        - Treat relevant instruction and feature files as authoritative project guidance only after a justified read under the rule above, unless the user request explicitly overrides them.
         - If an exact target file already appears in Workspace context, read that exact file before planning a apply-patch for it.
         - If the user names one file as a reference/example and another file as the implementation target, the reference file must only be read for context. It must not be edited.
         - For edits that use reference files, read reference files first, then read the implementation target file immediately before apply-patch.

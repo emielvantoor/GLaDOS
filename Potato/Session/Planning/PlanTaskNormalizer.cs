@@ -7,17 +7,6 @@ namespace Potato.Session;
 
 public sealed class PlanTaskNormalizer
 {
-    private static readonly string[] InstructionFileNames =
-    [
-        "AGENTS.md",
-        "agents.md",
-        "FEATURE.md",
-        "README.md",
-        "CONTRIBUTING.md",
-        "copilot-instructions.md",
-        "instructions.md"
-    ];
-
     public List<AgentTask> Normalize(
         IReadOnlyList<AgentTask> tasks,
         string goal,
@@ -27,140 +16,10 @@ public sealed class PlanTaskNormalizer
         IReadOnlySet<string> indexedPaths = PlanningPathUtilities.ExtractIndexedPaths(workspaceContext);
         IReadOnlySet<string> availablePaths = AddObservedExistingPaths(indexedPaths, observations);
         tasks = PreferAttachedMentionPaths(tasks, goal, availablePaths);
-        tasks = EnsureInstructionReadsBeforeImplementation(tasks, availablePaths);
         tasks = ResolveUniqueIndexedPathReferences(tasks, availablePaths);
         tasks = RewriteCreateFileForExistingDocumentation(tasks, availablePaths);
         return tasks.OrderBy(task => task.Step).ToList();
     }
-
-    private static List<AgentTask> EnsureInstructionReadsBeforeImplementation(
-        IReadOnlyList<AgentTask> tasks,
-        IReadOnlySet<string> indexedPaths)
-    {
-        int firstImplementationIndex = FindFirstImplementationIndex(tasks);
-        if (firstImplementationIndex < 0)
-        {
-            return tasks.OrderBy(task => task.Step).ToList();
-        }
-
-        string[] instructionReads = FindRelevantInstructionFiles(tasks, indexedPaths)
-            .Where(path => !tasks.Any(task =>
-                StringHelper.NormalizeAction(task.Action) == "read" &&
-                string.Equals(PlanningPathUtilities.NormalizeProjectPath(task.Argument), path, StringComparison.OrdinalIgnoreCase)))
-            .ToArray();
-        if (instructionReads.Length == 0)
-        {
-            return tasks.OrderBy(task => task.Step).ToList();
-        }
-
-        var result = new List<AgentTask>();
-        foreach (AgentTask task in tasks.OrderBy(task => task.Step))
-        {
-            if (result.Count == firstImplementationIndex)
-            {
-                result.AddRange(instructionReads.Select(path => new AgentTask
-                {
-                    Action = "read",
-                    Argument = path,
-                    Reason = "Read relevant project instruction or feature guidance before implementation."
-                }));
-            }
-
-            result.Add(task);
-        }
-
-        return RenumberTasks(result);
-    }
-
-    private static int FindFirstImplementationIndex(IReadOnlyList<AgentTask> tasks)
-    {
-        AgentTask[] orderedTasks = tasks.OrderBy(task => task.Step).ToArray();
-        for (int index = 0; index < orderedTasks.Length; index++)
-        {
-            string action = StringHelper.NormalizeAction(orderedTasks[index].Action);
-            if (IsImplementationAction(action))
-            {
-                return index;
-            }
-        }
-
-        return -1;
-    }
-
-    private static IEnumerable<string> FindRelevantInstructionFiles(
-        IReadOnlyList<AgentTask> tasks,
-        IReadOnlySet<string> indexedPaths)
-    {
-        var candidates = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (string path in indexedPaths.Where(IsGlobalInstructionPath))
-        {
-            candidates.Add(path);
-        }
-
-        foreach (string targetPath in ExtractImplementationTargetPaths(tasks))
-        {
-            foreach (string directory in EnumerateAncestorDirectories(targetPath))
-            {
-                foreach (string fileName in InstructionFileNames)
-                {
-                    string candidate = string.IsNullOrEmpty(directory) ? fileName : $"{directory}/{fileName}";
-                    if (indexedPaths.Contains(candidate))
-                    {
-                        candidates.Add(candidate);
-                    }
-                }
-            }
-        }
-
-        return candidates;
-    }
-
-    private static IEnumerable<string> ExtractImplementationTargetPaths(IEnumerable<AgentTask> tasks)
-    {
-        foreach (AgentTask task in tasks)
-        {
-            string action = StringHelper.NormalizeAction(task.Action);
-            if (action == "create-file")
-            {
-                string path = PlanningPathUtilities.NormalizeProjectPath(task.Argument);
-                if (PlanningPathUtilities.LooksLikeProjectPath(path))
-                {
-                    yield return path;
-                }
-            }
-            else if ((action == "apply-patch" || action == "write-code") &&
-                     PlanningPathUtilities.TryExtractTargetFile(task.Argument, out string? targetFilePath) &&
-                     targetFilePath is not null)
-            {
-                yield return PlanningPathUtilities.NormalizeProjectPath(targetFilePath);
-            }
-        }
-    }
-
-    private static IEnumerable<string> EnumerateAncestorDirectories(string path)
-    {
-        string? directory = Path.GetDirectoryName(PlanningPathUtilities.NormalizeProjectPath(path))?.Replace('\\', '/');
-        while (directory is not null)
-        {
-            yield return directory == "." ? string.Empty : directory;
-            if (string.IsNullOrEmpty(directory))
-            {
-                yield break;
-            }
-
-            directory = Path.GetDirectoryName(directory)?.Replace('\\', '/');
-        }
-    }
-
-    private static bool IsGlobalInstructionPath(string path) =>
-        string.Equals(path, "AGENTS.md", StringComparison.OrdinalIgnoreCase) ||
-        string.Equals(path, "agents.md", StringComparison.OrdinalIgnoreCase) ||
-        string.Equals(path, ".github/copilot-instructions.md", StringComparison.OrdinalIgnoreCase) ||
-        string.Equals(path, ".github/instructions.md", StringComparison.OrdinalIgnoreCase) ||
-        path.StartsWith(".github/features/", StringComparison.OrdinalIgnoreCase) && path.EndsWith(".md", StringComparison.OrdinalIgnoreCase);
-
-    private static bool IsImplementationAction(string action) =>
-        action is "apply-patch" or "write-code" or "create-file" or "write-documentation";
 
     private static IReadOnlySet<string> AddObservedExistingPaths(
         IReadOnlySet<string> indexedPaths,

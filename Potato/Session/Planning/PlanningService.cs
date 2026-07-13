@@ -19,7 +19,9 @@ public class PlanningService(
         CancellationToken cancellationToken)
     {
         string workspaceContext = await BuildProjectMapAsync(Environment.CurrentDirectory, chatClient, cancellationToken);
-        string workspaceFileIndex = ProjectMapIndexFormatter.BuildWorkspaceFileIndex(workspaceContext);
+        string workspaceFileIndex = ProjectMapIndexFormatter.BuildWorkspaceFileIndex(
+            workspaceContext,
+            Environment.CurrentDirectory);
         string planningSpec = await artifactGenerator.GeneratePlanningSpecAsync(
             goal,
             workspaceFileIndex,
