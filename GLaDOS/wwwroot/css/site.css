@@ -1,28 +1,28 @@
 :root {
     color-scheme: light;
-    --bg-color: #edf0ec;
-    --surface-color: #faf8f1;
-    --panel-color: #d8ddd8;
-    --composer-color: #f7f5ec;
-    --text-main: #242826;
-    --text-muted: #66706b;
-    --border-color: #aeb8b0;
-    --title-color: #171a18;
-    --status-color: #66706b;
-    --portal-orange: #f47c20;
-    --portal-orange-hover: #d95f0a;
+    --bg-color: #eef1f2;
+    --surface-color: #f9faf8;
+    --panel-color: #dfe4e3;
+    --composer-color: #f8faf9;
+    --text-main: #202625;
+    --text-muted: #5f6b69;
+    --border-color: #aab6b4;
+    --title-color: #151a19;
+    --status-color: #5f6b69;
+    --portal-orange: #e86f1c;
+    --portal-orange-hover: #c95a13;
     --portal-blue: #00a1e4;
     --portal-blue-hover: #087fb4;
-    --accent-color: #f47c20;
-    --accent-hover: #d95f0a;
-    --accent-secondary: #00a1e4;
-    --accent-secondary-hover: #087fb4;
+    --accent-color: #00a1e4;
+    --accent-hover: #087fb4;
+    --accent-secondary: #e86f1c;
+    --accent-secondary-hover: #c95a13;
     --danger-color: #b72f24;
-    --warning-color: #d3a025;
-    --chat-user-bg: #fff1dc;
-    --chat-user-text: #342416;
+    --warning-color: #b98718;
+    --chat-user-bg: #e7f6fc;
+    --chat-user-text: #17303a;
     --chat-assistant-bg: transparent;
-    --chat-assistant-text: #242826;
+    --chat-assistant-text: #202625;
     --code-bg: #101412;
     --code-text: #d9f3ff;
     --shadow-soft: 0 14px 34px rgba(29, 35, 31, 0.16);
@@ -30,66 +30,67 @@
 
 [data-theme="dark"] {
     color-scheme: dark;
-    --bg-color: #0f1412;
-    --surface-color: #1d2421;
-    --panel-color: #121816;
-    --composer-color: #1c231f;
-    --text-main: #e6ebe4;
-    --text-muted: #96a29b;
-    --border-color: #3c4740;
-    --title-color: #fbf7ea;
-    --status-color: #aab4ad;
-    --portal-orange: #ff7f1f;
-    --portal-orange-hover: #ffa348;
+    --bg-color: #0c1112;
+    --surface-color: #172022;
+    --panel-color: #101719;
+    --composer-color: #182123;
+    --text-main: #e5eceb;
+    --text-muted: #97a5a4;
+    --border-color: #344448;
+    --title-color: #f2f7f5;
+    --status-color: #a7b4b2;
+    --portal-orange: #f07a22;
+    --portal-orange-hover: #ff9a3c;
     --portal-blue: #00a7e1;
     --portal-blue-hover: #33c2f3;
-    --accent-color: #ff7f1f;
-    --accent-hover: #ffa348;
-    --accent-secondary: #00a7e1;
-    --accent-secondary-hover: #33c2f3;
+    --accent-color: #00a7e1;
+    --accent-hover: #33c2f3;
+    --accent-secondary: #f07a22;
+    --accent-secondary-hover: #ff9a3c;
     --danger-color: #ff604f;
-    --warning-color: #e6b84c;
-    --chat-user-bg: #372719;
-    --chat-user-text: #fff2df;
+    --warning-color: #d7a93e;
+    --chat-user-bg: #102e39;
+    --chat-user-text: #d8f5ff;
     --chat-assistant-bg: transparent;
-    --chat-assistant-text: #e6ebe4;
+    --chat-assistant-text: #e5eceb;
     --code-bg: #080b0a;
     --code-text: #c7f0ff;
     --shadow-soft: 0 18px 50px rgba(0, 0, 0, 0.45);
 }
 
 body:not([data-theme="dark"])[data-time-tone="morning"] {
-    --bg-color: #f2f4ef;
-    --surface-color: #fffaf0;
-    --panel-color: #dfe5df;
-    --composer-color: #fffaf0;
+    --bg-color: #f0f4f4;
+    --surface-color: #fbfcfb;
+    --panel-color: #e2e8e7;
+    --composer-color: #fbfcfb;
     --accent-color: #00a1e4;
     --accent-hover: #087fb4;
-    --accent-secondary: #f47c20;
+    --accent-secondary: #e86f1c;
 }
 
 body:not([data-theme="dark"])[data-time-tone="day"] {
-    --bg-color: #edf0ec;
-    --surface-color: #faf8f1;
-    --panel-color: #d8ddd8;
-    --composer-color: #f7f5ec;
+    --bg-color: #eef1f2;
+    --surface-color: #f9faf8;
+    --panel-color: #dfe4e3;
+    --composer-color: #f8faf9;
 }
 
 body:not([data-theme="dark"])[data-time-tone="evening"] {
-    --bg-color: #ebe7dd;
-    --surface-color: #fff4e0;
-    --panel-color: #d8d1c3;
-    --composer-color: #fff4e0;
-    --accent-color: #f47c20;
-    --accent-hover: #c85108;
+    --bg-color: #e8eded;
+    --surface-color: #f7f9f8;
+    --panel-color: #d7dfdf;
+    --composer-color: #f7f9f8;
+    --accent-color: #00a1e4;
+    --accent-hover: #087fb4;
+    --accent-secondary: #e86f1c;
 }
 
 [data-theme="dark"][data-time-tone="evening"] {
-    --bg-color: #17120f;
-    --surface-color: #2a211a;
-    --panel-color: #14100d;
-    --composer-color: #2a211a;
-    --border-color: #5a493d;
+    --bg-color: #0f1516;
+    --surface-color: #1a2325;
+    --panel-color: #11191b;
+    --composer-color: #1a2325;
+    --border-color: #3b4b4f;
 }
 
 [data-theme="dark"][data-time-tone="night"] {
@@ -139,8 +140,8 @@ textarea {
     display: grid;
     grid-template-rows: auto 1fr auto;
     background:
-        radial-gradient(circle at top right, color-mix(in srgb, var(--accent-secondary) 10%, transparent), transparent 34%),
-        radial-gradient(circle at bottom left, color-mix(in srgb, var(--accent-color) 8%, transparent), transparent 32%),
+        radial-gradient(circle at top right, color-mix(in srgb, var(--portal-blue) 8%, transparent), transparent 34%),
+        radial-gradient(circle at bottom left, color-mix(in srgb, var(--portal-orange) 3%, transparent), transparent 32%),
         transparent;
     overflow: hidden;
 }
@@ -208,14 +209,14 @@ h1 {
 }
 
 .top-tab.active {
-    box-shadow: inset 0 -2px 0 var(--accent-secondary);
+    box-shadow: inset 0 -2px 0 var(--portal-blue);
 }
 
 .aperture-logo {
     width: 22px;
     height: 22px;
     flex: 0 0 auto;
-    background: var(--accent-color);
+    background: var(--portal-orange);
     -webkit-mask: url("../img/aperture-logo.svg") center / contain no-repeat;
     mask: url("../img/aperture-logo.svg") center / contain no-repeat;
 }
@@ -233,8 +234,8 @@ h1 {
 }
 
 .theme-toggle:hover {
-    border-color: var(--accent-secondary);
-    background-color: color-mix(in srgb, var(--accent-secondary) 12%, var(--surface-color));
+    border-color: var(--portal-blue);
+    background-color: color-mix(in srgb, var(--portal-blue) 10%, var(--surface-color));
 }
 
 .layout-grid {
@@ -290,10 +291,10 @@ h1 {
 
 .agent-session-status {
     flex: 0 0 auto;
-    border: 1px solid color-mix(in srgb, var(--accent-secondary) 40%, var(--border-color));
+    border: 1px solid color-mix(in srgb, var(--portal-blue) 40%, var(--border-color));
     border-radius: 999px;
-    background: color-mix(in srgb, var(--accent-secondary) 10%, transparent);
-    color: var(--accent-secondary);
+    background: color-mix(in srgb, var(--portal-blue) 10%, transparent);
+    color: var(--portal-blue);
     padding: 5px 9px;
     font-size: 11px;
     font-weight: 800;
@@ -332,7 +333,7 @@ h1 {
     color: var(--chat-user-text);
     align-self: flex-end;
     padding: 10px 16px;
-    border: 1px solid color-mix(in srgb, var(--accent-color) 40%, transparent);
+    border: 1px solid color-mix(in srgb, var(--portal-blue) 38%, transparent);
     border-radius: 6px;
     font-family: inherit;
 }
@@ -483,7 +484,7 @@ h1 {
     width: 16px;
     height: 16px;
     border: 2px solid color-mix(in srgb, var(--text-muted) 30%, transparent);
-    border-top-color: var(--accent-color);
+    border-top-color: var(--portal-blue);
     border-radius: 50%;
     animation: glados-spin 0.8s linear infinite;
 }
@@ -548,8 +549,8 @@ h1 {
 }
 
 .input-area.drag-over {
-    border-color: var(--accent-color);
-    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-color) 18%, transparent), var(--shadow-soft);
+    border-color: var(--portal-blue);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--portal-blue) 16%, transparent), var(--shadow-soft);
 }
 
 .file-input {
@@ -571,9 +572,9 @@ h1 {
 }
 
 .attach-text-button:hover {
-    border-color: var(--accent-color);
-    color: var(--accent-color);
-    background: color-mix(in srgb, var(--accent-color) 10%, transparent);
+    border-color: var(--portal-blue);
+    color: var(--portal-blue);
+    background: color-mix(in srgb, var(--portal-blue) 10%, transparent);
 }
 
 textarea {
@@ -787,10 +788,10 @@ button#submitBtn:disabled {
     border-color: color-mix(in srgb, var(--portal-blue) 55%, transparent);
     background:
         linear-gradient(90deg, color-mix(in srgb, var(--portal-blue) 18%, transparent), transparent 66%),
-        color-mix(in srgb, var(--portal-orange) 7%, transparent);
+        color-mix(in srgb, var(--surface-color) 86%, transparent);
     box-shadow:
         inset 3px 0 0 var(--portal-blue),
-        inset 0 1px 0 color-mix(in srgb, var(--portal-orange) 44%, transparent);
+        inset 0 1px 0 color-mix(in srgb, var(--portal-blue) 24%, transparent);
 }
 
 .chat-list-item.active .chat-list-title {
@@ -985,8 +986,8 @@ button#submitBtn:disabled {
 
 .info-tooltip:hover,
 .info-tooltip:focus-visible {
-    border-color: var(--accent-color);
-    color: var(--accent-color);
+    border-color: var(--portal-blue);
+    color: var(--portal-blue);
 }
 
 .info-tooltip:hover::before,
@@ -1087,9 +1088,9 @@ button#submitBtn:disabled {
     display: inline-flex;
     align-items: center;
     gap: 5px;
-    background: color-mix(in srgb, var(--accent-color) 14%, transparent);
-    color: var(--accent-color);
-    border: 1px solid color-mix(in srgb, var(--accent-color) 30%, transparent);
+    background: color-mix(in srgb, var(--portal-blue) 12%, transparent);
+    color: var(--portal-blue);
+    border: 1px solid color-mix(in srgb, var(--portal-blue) 30%, transparent);
     padding: 5px 8px;
     border-radius: 6px;
     font-size: 11px;
@@ -1223,7 +1224,7 @@ pre {
     width: 100%;
     margin: 14px 0;
     overflow: hidden;
-    border: 2px solid var(--accent-color);
+    border: 2px solid var(--portal-blue);
     border-radius: 6px;
     background: var(--code-bg);
     box-shadow: 0 14px 34px rgba(0, 0, 0, 0.22);
@@ -1237,8 +1238,8 @@ pre {
     gap: 10px;
     min-height: 38px;
     padding: 7px 9px 7px 12px;
-    background: linear-gradient(90deg, color-mix(in srgb, var(--accent-secondary) 18%, #111714), #111714 62%);
-    border-bottom: 1px solid color-mix(in srgb, var(--accent-color) 55%, #30363d);
+    background: linear-gradient(90deg, color-mix(in srgb, var(--portal-blue) 16%, #111714), #111714 62%);
+    border-bottom: 1px solid color-mix(in srgb, var(--portal-blue) 46%, #30363d);
 }
 
 .code-block-language {
@@ -1261,7 +1262,7 @@ pre {
 
 .code-block-button {
     height: 28px;
-    border: 1px solid color-mix(in srgb, var(--accent-color) 50%, #3b4552);
+    border: 1px solid color-mix(in srgb, var(--portal-blue) 42%, #3b4552);
     border-radius: 5px;
     background: color-mix(in srgb, var(--surface-color) 16%, #111714);
     color: #f0f6fc;
@@ -1275,8 +1276,8 @@ pre {
 
 .code-block-button:hover,
 .code-block-button:focus-visible {
-    background: var(--accent-color);
-    border-color: var(--accent-color);
+    background: var(--portal-blue);
+    border-color: var(--portal-blue);
     color: white;
     outline: none;
 }
