@@ -103,6 +103,9 @@
         if (!activePotatoSessionId) {
             setPotatoHeader(null);
             chatBox.innerHTML = '';
+            chatBox.dataset.eventCount = '0';
+            chatBox.dataset.lastSequence = '0';
+            chatBox.dataset.sessionId = '';
             chatBox.appendChild(createMessageElement('assistant', 'Active Potato sessions will appear in the left pane.', { actions: false }));
             return;
         }
@@ -140,26 +143,56 @@
         const chatBox = document.getElementById('agentChatBox');
         if (!chatBox) return;
 
+        if (chatBox.dataset.sessionId !== activePotatoSessionId) {
+            chatBox.dataset.eventCount = '0';
+            chatBox.dataset.lastSequence = '0';
+            chatBox.dataset.sessionId = activePotatoSessionId || '';
+            chatBox.innerHTML = '';
+        }
+
         const previousCount = Number(chatBox.dataset.eventCount || '0');
-        if (previousCount === events.length && chatBox.dataset.sessionId === activePotatoSessionId) {
+        const lastSequence = Number(chatBox.dataset.lastSequence || '0');
+        if (previousCount === events.length) {
             return;
         }
 
         chatBox.dataset.eventCount = String(events.length);
-        chatBox.dataset.sessionId = activePotatoSessionId || '';
-        chatBox.innerHTML = '';
 
         if (events.length === 0) {
+            chatBox.dataset.lastSequence = '0';
+            chatBox.innerHTML = '';
             chatBox.appendChild(createMessageElement('assistant', 'Potato has not sent any events yet.', { actions: false }));
             return;
         }
 
-        events.forEach((event) => {
+        const newEvents = events.filter((event) => Number(event.sequence || 0) > lastSequence);
+        if (events.length < previousCount || (events.length > previousCount && newEvents.length === 0)) {
+            chatBox.innerHTML = '';
+            chatBox.dataset.lastSequence = '0';
+            events.forEach((event) => {
+                chatBox.appendChild(createPotatoEventElement(event));
+            });
+            chatBox.dataset.lastSequence = String(Math.max(...events.map((event) => Number(event.sequence || 0))));
+            chatBox.scrollTop = chatBox.scrollHeight;
+            initializeCodeBlockActions();
+            return;
+        }
+
+        const shouldStickToBottom = isScrolledNearBottom(chatBox);
+        newEvents.forEach((event) => {
             chatBox.appendChild(createPotatoEventElement(event));
         });
 
-        chatBox.scrollTop = chatBox.scrollHeight;
+        chatBox.dataset.lastSequence = String(Math.max(lastSequence, ...events.map((event) => Number(event.sequence || 0))));
+        if (shouldStickToBottom) {
+            chatBox.scrollTop = chatBox.scrollHeight;
+        }
+
         initializeCodeBlockActions();
+    }
+
+    function isScrolledNearBottom(element) {
+        return element.scrollHeight - element.scrollTop - element.clientHeight < 80;
     }
 
     function createPotatoEventElement(event) {
