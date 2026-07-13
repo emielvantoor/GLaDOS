@@ -2,6 +2,7 @@ using System.ClientModel;
 using Microsoft.Extensions.AI;
 using OpenAI;
 using OpenAI.Chat;
+using Potato.WebUi;
 
 namespace Potato;
 
@@ -17,7 +18,7 @@ internal sealed class GladosChatClientFactory
                 Endpoint = gladosEndpoint
             }).AsIChatClient();
 
-        return new ChatClientBuilder(openAiClient)
+        return new ChatClientBuilder(new PotatoModelCommunicationLogger(openAiClient))
             .UseFunctionInvocation()
             .Build();
     }

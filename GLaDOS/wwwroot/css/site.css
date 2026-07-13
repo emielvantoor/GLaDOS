@@ -755,6 +755,10 @@ button#submitBtn:disabled {
     letter-spacing: 0.04em;
 }
 
+.potato-event-details summary::marker {
+    color: var(--portal-blue);
+}
+
 .potato-event-details pre {
     max-height: 360px;
     border-width: 1px 0 0;

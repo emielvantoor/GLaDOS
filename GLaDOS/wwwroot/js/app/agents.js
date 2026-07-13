@@ -154,7 +154,7 @@
             details.className = 'potato-event-details';
 
             const summary = document.createElement('summary');
-            summary.textContent = `${event.kind || 'event'} · ${formatPotatoEventTime(event.timestamp)}`;
+            summary.textContent = `${formatPotatoEventSummary(event)} · ${formatPotatoEventTime(event.timestamp)}`;
 
             const content = document.createElement('pre');
             content.textContent = event.content || '';
@@ -178,4 +178,11 @@
         const date = new Date(value);
         if (Number.isNaN(date.getTime())) return '';
         return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    }
+
+    function formatPotatoEventSummary(event) {
+        const kind = event.kind || 'event';
+        if (kind === 'model-request') return 'Potato model request';
+        if (kind === 'model-response') return 'Potato model response';
+        return kind;
     }

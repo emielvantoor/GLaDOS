@@ -46,11 +46,6 @@ public sealed class PlannerTaskGenerator(
             };
 
             ChatResponse response;
-            PotatoConsole.EventSink?.Record(
-                "model-request",
-                "system",
-                FormatModelRequest("Planner task generation request", messages),
-                collapsed: true);
             using (PotatoConsole.StartProgress(FormatPlanningProgress(attempt)))
             {
                 response = await chatClient.GetResponseAsync(messages, AgentTaskBase.CreateJsonChatOptions(0.0),
@@ -90,23 +85,6 @@ public sealed class PlannerTaskGenerator(
         attempt == 1
             ? "Planning deterministic task list..."
             : $"Repairing planner task list ({attempt}/{MaxPlannerRepairAttempts})...";
-
-    private static string FormatModelRequest(string title, IReadOnlyList<ChatMessage> messages)
-    {
-        var builder = new StringBuilder();
-        builder.AppendLine(title);
-        builder.AppendLine();
-
-        for (int i = 0; i < messages.Count; i++)
-        {
-            ChatMessage message = messages[i];
-            builder.AppendLine($"## {i + 1}. {message.Role}");
-            builder.AppendLine(string.IsNullOrWhiteSpace(message.Text) ? "(empty)" : message.Text);
-            builder.AppendLine();
-        }
-
-        return builder.ToString().TrimEnd();
-    }
 
     private static string BuildPlannerRetryObservations(
         IReadOnlyList<TaskObservation> observations,
