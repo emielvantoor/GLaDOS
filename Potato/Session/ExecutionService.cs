@@ -52,9 +52,14 @@ public class ExecutionService(
                     }
 
                     replanCount++;
-                    PotatoConsole.WriteStatus($"Adaptive replan {replanCount}/{MaxAdaptiveReplans} after step {task.Step} failed.");
-                    activeTasks = await planningService.PlanAsync(goal, observations, chatClient, cancellationToken);
-                    taskIndex = 0;
+                    PotatoConsole.WriteStatus($"Adaptive repair {replanCount}/{MaxAdaptiveReplans} after step {task.Step} failed.");
+                    activeTasks = await RepairTaskListAsync(
+                        goal,
+                        activeTasks,
+                        taskIndex,
+                        observations,
+                        chatClient,
+                        cancellationToken);
                     continue;
                 }
 
@@ -68,9 +73,14 @@ public class ExecutionService(
                     }
 
                     replanCount++;
-                    PotatoConsole.WriteStatus($"Adaptive replan {replanCount}/{MaxAdaptiveReplans} requested by step {task.Step}.");
-                    activeTasks = await planningService.PlanAsync(goal, observations, chatClient, cancellationToken);
-                    taskIndex = 0;
+                    PotatoConsole.WriteStatus($"Adaptive repair {replanCount}/{MaxAdaptiveReplans} requested by step {task.Step}.");
+                    activeTasks = await RepairTaskListAsync(
+                        goal,
+                        activeTasks,
+                        taskIndex,
+                        observations,
+                        chatClient,
+                        cancellationToken);
                     continue;
                 }
 
@@ -85,6 +95,56 @@ public class ExecutionService(
         }
 
         return ExecutionResult.Succeeded(observations);
+    }
+
+    private async Task<IReadOnlyList<AgentTask>> RepairTaskListAsync(
+        string goal,
+        IReadOnlyList<AgentTask> activeTasks,
+        int failedTaskIndex,
+        IReadOnlyList<TaskObservation> observations,
+        IChatClient chatClient,
+        CancellationToken cancellationToken)
+    {
+        List<AgentTask> repairTasks = await planningService.PlanAsync(goal, observations, chatClient, cancellationToken);
+        List<AgentTask> replacementTasks = SelectReplacementTasks(repairTasks, activeTasks, failedTaskIndex);
+
+        List<AgentTask> repairedTasks = activeTasks
+            .Take(failedTaskIndex)
+            .Concat(replacementTasks)
+            .Concat(activeTasks.Skip(failedTaskIndex + 1))
+            .Select((task, index) => task with { Step = index + 1 })
+            .ToList();
+
+        string replacementSummary = string.Join(
+            ", ",
+            replacementTasks.Select(task => $"{task.Action} {StringHelper.FirstLine(task.Argument)}"));
+        PotatoConsole.WriteStatus(
+            replacementTasks.Count == 0
+                ? "Adaptive repair produced no replacement tasks; continuing with remaining original tasks."
+                : $"Replaced failed step {failedTaskIndex + 1} with {replacementTasks.Count} task(s): {replacementSummary}");
+
+        return repairedTasks;
+    }
+
+    private static List<AgentTask> SelectReplacementTasks(
+        IReadOnlyList<AgentTask> repairTasks,
+        IReadOnlyList<AgentTask> activeTasks,
+        int failedTaskIndex)
+    {
+        AgentTask[] orderedRepairTasks = repairTasks.OrderBy(task => task.Step).ToArray();
+        bool hasOriginalTail = failedTaskIndex + 1 < activeTasks.Count;
+        if (!hasOriginalTail)
+        {
+            return orderedRepairTasks.ToList();
+        }
+
+        AgentTask[] nonFinalReportTasks = orderedRepairTasks
+            .Where(task => StringHelper.NormalizeAction(task.Action) != "write-report")
+            .ToArray();
+
+        return nonFinalReportTasks.Length == 0
+            ? orderedRepairTasks.ToList()
+            : nonFinalReportTasks.ToList();
     }
 
     private async Task<string> ExecuteTaskAsync(
