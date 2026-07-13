@@ -21,6 +21,10 @@ class Program
         services.AddSingleton(options);
         services.AddSingleton<CurrentChatClientState>();
         services.AddSingleton<ExecutionService>();
+        services.AddSingleton<ProjectMapBuilder>();
+        services.AddSingleton<PlanningArtifactGenerator>();
+        services.AddSingleton<PlanTaskNormalizer>();
+        services.AddSingleton<PlannerTaskGenerator>();
         services.AddSingleton<PlanningService>();
         services.AddSingleton<ReActSession>();
         services.AddSingleton<AgentTools>();
