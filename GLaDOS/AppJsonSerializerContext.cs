@@ -18,6 +18,13 @@ using GLaDOS.Models;
 [JsonSerializable(typeof(FimCompletionRequest))]
 [JsonSerializable(typeof(FimCompletionResponse))]
 [JsonSerializable(typeof(RuntimeMemoryUsageResponse))]
+[JsonSerializable(typeof(PotatoSessionSummary))]
+[JsonSerializable(typeof(PotatoSessionSummary[]))]
+[JsonSerializable(typeof(PotatoSessionDetail))]
+[JsonSerializable(typeof(PotatoSessionEvent))]
+[JsonSerializable(typeof(PotatoSessionEvent[]))]
+[JsonSerializable(typeof(PotatoSessionStartRequest))]
+[JsonSerializable(typeof(PotatoSessionEventRequest))]
 internal partial class AppJsonSerializerContext : JsonSerializerContext
 {
 }

@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Potato.Session;
 using Potato.Session.Tasks;
 using Potato.Tools;
+using Potato.WebUi;
 
 namespace Potato;
 
@@ -53,8 +54,11 @@ class Program
         IChatClient openAiClient = clientFactory.CreateOpenAiClient(gladosEndpoint, model);
         provider.GetRequiredService<CurrentChatClientState>().SetOpenAiClient(openAiClient);
 
-        PotatoConsole.WriteStartupBanner(gladosEndpoint, model);
+        await using var webUiReporter = new PotatoWebUiReporter(gladosEndpoint, model);
+        await webUiReporter.StartAsync();
+        PotatoConsole.EventSink = webUiReporter;
 
+        PotatoConsole.WriteStartupBanner(gladosEndpoint, model);
 
         var session = new PipelineSession(
             gladosEndpoint,
@@ -71,6 +75,13 @@ class Program
             provider.GetRequiredService<ReActSession>()
         );
 
-        await session.RunAsync();
+        try
+        {
+            await session.RunAsync();
+        }
+        finally
+        {
+            PotatoConsole.EventSink = null;
+        }
     }
 }

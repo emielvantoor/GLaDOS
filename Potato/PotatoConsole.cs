@@ -115,6 +115,8 @@ internal static class PotatoConsole
     ];
     private static int ProgressJokeIndex;
 
+    public static IPotatoConsoleEventSink? EventSink { get; set; }
+
     public static void WriteStartupBanner(Uri gladosEndpoint, string model)
     {
         Console.Clear();
@@ -496,6 +498,7 @@ internal static class PotatoConsole
 
     public static void WriteAgentResponse(string text)
     {
+        EventSink?.Record("message", "assistant", text, collapsed: false);
         Console.ForegroundColor = ConsoleColor.Yellow;
         Console.Write("Agent > ");
         Console.ResetColor();
@@ -535,6 +538,7 @@ internal static class PotatoConsole
 
     public static void WriteError(string message)
     {
+        EventSink?.Record("error", "status", message, collapsed: true);
         Console.ForegroundColor = ConsoleColor.Red;
         Console.WriteLine(message);
         Console.ResetColor();
@@ -542,6 +546,7 @@ internal static class PotatoConsole
 
     public static void WriteSuccess(string message)
     {
+        EventSink?.Record("success", "status", message, collapsed: true);
         Console.ForegroundColor = ConsoleColor.Green;
         Console.WriteLine(message);
         Console.ResetColor();
@@ -549,6 +554,7 @@ internal static class PotatoConsole
 
     public static void WriteStatus(string message)
     {
+        EventSink?.Record("status", "status", message, collapsed: true);
         Console.ForegroundColor = ConsoleColor.DarkGray;
         Console.WriteLine(message);
         Console.ResetColor();
@@ -556,6 +562,7 @@ internal static class PotatoConsole
 
     public static IProgressReporter StartProgress(string message)
     {
+        EventSink?.Record("progress", "status", message, collapsed: true);
         if (Console.IsOutputRedirected)
         {
             return new NoopDisposable();
@@ -568,6 +575,11 @@ internal static class PotatoConsole
             ActiveProgress.Start();
             return ActiveProgress;
         }
+    }
+
+    internal interface IPotatoConsoleEventSink
+    {
+        void Record(string kind, string role, string content, bool collapsed);
     }
 
     public static IDisposable SuspendProgress()

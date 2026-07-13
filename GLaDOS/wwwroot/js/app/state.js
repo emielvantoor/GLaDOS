@@ -8,6 +8,10 @@
     const welcomeMessage = "Hello Emiel! I'm ready to assist you through your local hardware. Feel free to ask me anything!";
     let chats = [];
     let activeChatId = null;
+    let activePrimaryView = "chat";
+    let potatoSessions = [];
+    let activePotatoSessionId = null;
+    let potatoSessionsPollId = null;
 
     let currentAiBubbleElement = null;
     let currentAiHistoryId = null;

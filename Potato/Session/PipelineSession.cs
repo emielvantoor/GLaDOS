@@ -147,6 +147,7 @@ internal sealed class PipelineSession
 
         EnsureCurrentSession(userInput);
         chatHistory.Add(new ChatMessage(ChatRole.User, expandedGoal));
+        PotatoConsole.EventSink?.Record("message", "user", expandedGoal, collapsed: false);
         string contextualGoal = BuildContextualGoal(expandedGoal);
 
         try
@@ -246,6 +247,7 @@ internal sealed class PipelineSession
 
             planningGoal = BuildReplanGoal(expandedGoal, formattedPlan, trimmed);
             chatHistory.Add(new ChatMessage(ChatRole.User, $"Plan correction: {trimmed}"));
+            PotatoConsole.EventSink?.Record("message", "user", $"Plan correction: {trimmed}", collapsed: false);
         }
     }
 

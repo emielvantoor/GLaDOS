@@ -159,6 +159,10 @@ textarea {
     z-index: 5;
 }
 
+.hidden {
+    display: none !important;
+}
+
 h1 {
     display: inline-flex;
     align-items: center;
@@ -168,6 +172,43 @@ h1 {
     font-size: 16px;
     font-weight: 800;
     letter-spacing: 0.02em;
+}
+
+.header-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.top-tabs {
+    display: inline-flex;
+    gap: 4px;
+    padding: 3px;
+    border: 1px solid var(--border-color);
+    border-radius: 7px;
+    background: color-mix(in srgb, var(--panel-color) 64%, transparent);
+}
+
+.top-tab {
+    min-width: 72px;
+    height: 32px;
+    border: 0;
+    border-radius: 5px;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 750;
+}
+
+.top-tab:hover,
+.top-tab.active {
+    background: var(--surface-color);
+    color: var(--text-main);
+}
+
+.top-tab.active {
+    box-shadow: inset 0 -2px 0 var(--accent-secondary);
 }
 
 .aperture-logo {
@@ -211,6 +252,56 @@ h1 {
     display: grid;
     grid-template-rows: minmax(0, 1fr) auto;
     overflow: hidden;
+}
+
+.agent-main {
+    grid-area: chat;
+    min-width: 0;
+    min-height: 0;
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr);
+    overflow: hidden;
+}
+
+.agent-session-header {
+    min-height: 74px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 18px;
+    padding: 14px max(20px, calc((100vw - 1180px) / 2));
+    border-bottom: 1px solid var(--border-color);
+    background: color-mix(in srgb, var(--surface-color) 64%, transparent);
+}
+
+.agent-session-title {
+    color: var(--title-color);
+    font-size: 15px;
+    font-weight: 800;
+}
+
+.agent-session-path {
+    margin-top: 3px;
+    color: var(--text-muted);
+    font-size: 12px;
+    line-height: 1.35;
+    overflow-wrap: anywhere;
+}
+
+.agent-session-status {
+    flex: 0 0 auto;
+    border: 1px solid color-mix(in srgb, var(--accent-secondary) 40%, var(--border-color));
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--accent-secondary) 10%, transparent);
+    color: var(--accent-secondary);
+    padding: 5px 9px;
+    font-size: 11px;
+    font-weight: 800;
+    text-transform: uppercase;
+}
+
+.agent-chat-box {
+    padding-top: 22px;
 }
 
 .chat-box {
@@ -636,6 +727,38 @@ button#submitBtn:disabled {
     gap: 6px;
     max-height: 240px;
     overflow-y: auto;
+}
+
+.agents-empty {
+    color: var(--text-muted);
+    font-size: 12px;
+    line-height: 1.4;
+}
+
+.potato-event-details {
+    width: min(100%, 780px);
+    align-self: center;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--surface-color) 78%, transparent);
+    color: var(--text-muted);
+    overflow: hidden;
+}
+
+.potato-event-details summary {
+    cursor: pointer;
+    padding: 8px 11px;
+    font-size: 12px;
+    font-weight: 750;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.potato-event-details pre {
+    max-height: 360px;
+    border-width: 1px 0 0;
+    border-radius: 0;
+    background: var(--code-bg);
 }
 
 .chat-list-item {

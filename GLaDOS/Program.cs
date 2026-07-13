@@ -2,6 +2,7 @@ using GLaDOS.Endpoints;
 using GLaDOS.Core.Bootstrapper;
 using GLaDOS.LLama;
 using GLaDOS.LLama.Bootstrapper;
+using GLaDOS.Services;
 
 // Environment.SetEnvironmentVariable("GGML_VK_DISABLE_COOPMAT", "1");
 // Environment.SetEnvironmentVariable("GGML_VK_DISABLE_GRAPH_OPTIMIZE", "1");
@@ -15,6 +16,7 @@ LLamaHardwareConfigurator.Configure(builder.Configuration);
 
 builder.Services.AddCoreServices();
 builder.Services.AddLLamaModels(builder.Configuration);
+builder.Services.AddSingleton<PotatoSessionStore>();
 
 builder.Services.ConfigureHttpJsonOptions(options =>
 {
@@ -35,4 +37,5 @@ app.UseStaticFiles();
 
 app.MapOpenAiEndpoints();
 app.MapFimEndpoints();
+app.MapPotatoEndpoints();
 app.Run("http://localhost:11434");

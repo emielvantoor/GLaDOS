@@ -11,7 +11,13 @@
 <div class="container">
     <div class="header-wrapper">
         <h1><span class="aperture-logo" aria-hidden="true"></span> GLaDOS Client</h1>
-        <button class="theme-toggle" id="themeBtn">🌓 Auto Theme</button>
+        <div class="header-actions">
+            <div class="top-tabs" role="tablist" aria-label="Primary views">
+                <button type="button" class="top-tab active" id="chatTab" aria-selected="true">Chat</button>
+                <button type="button" class="top-tab" id="agentsTab" aria-selected="false">Agents</button>
+            </div>
+            <button class="theme-toggle" id="themeBtn">🌓 Auto Theme</button>
+        </div>
     </div>
 
     <div class="layout-grid">
@@ -33,7 +39,22 @@
             </div>
         </main>
 
-        <div class="sidebar">
+        <main class="agent-main hidden" id="agentMain">
+            <div class="agent-session-header">
+                <div>
+                    <div class="agent-session-title" id="agentSessionTitle">No Potato session selected</div>
+                    <div class="agent-session-path" id="agentSessionPath">Start Potato from a working directory to mirror it here.</div>
+                </div>
+                <div class="agent-session-status" id="agentSessionStatus">Idle</div>
+            </div>
+            <div class="chat-box agent-chat-box" id="agentChatBox">
+                <div class="message assistant">
+                    <div class="message-content">Active Potato sessions will appear in the left pane.</div>
+                </div>
+            </div>
+        </main>
+
+        <div class="sidebar" id="chatSidebar">
             <div class="panel chats-panel">
                 <div class="panel-title-row">
                     <div class="panel-title">Chats</div>
@@ -156,6 +177,17 @@
                 </div>
             </div>
         </div>
+
+        <div class="sidebar agents-sidebar hidden" id="agentsSidebar">
+            <div class="panel agents-panel">
+                <div class="panel-title-row">
+                    <div class="panel-title">Potato Sessions</div>
+                    <button type="button" class="small-action-button" id="refreshAgentsBtn">Refresh</button>
+                </div>
+                <div class="chat-list" id="potatoSessionList"></div>
+                <div class="agents-empty" id="potatoSessionsEmpty">No active Potato sessions.</div>
+            </div>
+        </div>
     </div>
 
     <button class="inspector-toggle" id="inspectorToggle">
@@ -192,6 +224,7 @@
 <script src="js/app/tools.js"></script>
 <script src="js/app/stream.js"></script>
 <script src="js/app/fim.js?v=fim-verification-1"></script>
+<script src="js/app/agents.js?v=potato-sessions-1"></script>
 <script src="js/site.js?v=fim-verification-1"></script>
 
 </body>

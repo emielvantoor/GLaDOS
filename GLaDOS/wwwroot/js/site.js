@@ -20,6 +20,7 @@
         document.getElementById('inspectorToggle').addEventListener('click', toggleInspector);
         initializeTextFileComposer();
         initializeFimVerification();
+        initializeAgentsView();
         initializeCollapsiblePanels();
         initializeCodeBlockActions();
         initializeChats();
