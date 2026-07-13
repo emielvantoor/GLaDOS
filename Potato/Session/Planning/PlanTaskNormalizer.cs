@@ -50,6 +50,18 @@ public sealed class PlanTaskNormalizer
                 yield return path;
             }
         }
+
+        foreach (Match match in Regex.Matches(
+                     observationResult,
+                     @"File created successfully at (?<path>.+?)\.",
+                     RegexOptions.IgnoreCase))
+        {
+            string path = PlanningPathUtilities.NormalizeProjectPath(match.Groups["path"].Value);
+            if (PlanningPathUtilities.LooksLikeProjectPath(path))
+            {
+                yield return path;
+            }
+        }
     }
 
     private static List<AgentTask> PreferAttachedMentionPaths(

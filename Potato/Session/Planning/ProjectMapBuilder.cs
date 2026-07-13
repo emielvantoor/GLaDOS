@@ -162,14 +162,14 @@ public sealed class ProjectMapBuilder
         return builder.ToString();
     }
 
-    private static string BuildProjectMapProgressMessage(int currentFile, int totalFiles, string relativePath, bool cached)
+    private static string BuildProjectMapProgressMessage(int currentFileIndex, int totalFiles, string relativePath, bool cached)
     {
         int percentage = totalFiles == 0
             ? 100
-            : (int)Math.Round(currentFile * 100.0 / totalFiles);
+            : (int)Math.Round(currentFileIndex * 100.0 / totalFiles);
 
         int fileNumberWidth = Math.Max(1, totalFiles.ToString().Length);
-        string current = currentFile.ToString().PadLeft(fileNumberWidth);
+        string current = currentFileIndex.ToString().PadLeft(fileNumberWidth);
         string source = cached ? "cached  " : "indexing";
         return $"Building ProjectMap {current}/{totalFiles} ({percentage,3}%, {source}): {relativePath}";
     }
@@ -364,7 +364,7 @@ public sealed class ProjectMapBuilder
     {
         string fullTargetDirectory = Path.GetFullPath(targetDirectory);
         string cacheRootDirectory = FindGitRepositoryRoot(fullTargetDirectory) ?? fullTargetDirectory;
-        string projectMapRootDirectory = fullTargetDirectory;
+        string projectMapRootDirectory = cacheRootDirectory;
         string cachePrunePathPrefix = ToRelativeProjectMapPath(cacheRootDirectory, projectMapRootDirectory);
         return new ProjectMapCacheLocation(
             projectMapRootDirectory,

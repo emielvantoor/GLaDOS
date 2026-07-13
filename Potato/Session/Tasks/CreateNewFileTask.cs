@@ -1,5 +1,6 @@
 using Microsoft.Extensions.AI;
 using Potato.Models;
+using Potato.Session.extensions;
 using Potato.Session.Models;
 using Potato.Tools;
 
@@ -33,6 +34,13 @@ public class CreateNewFileTask(AgentTools agentTools): AgentTaskBase, IAgentTask
             return "Error: create-file requires a concrete file path in the Argument property.";
         }
 
-        return await agentTools.CreateFileAsync(filePath, string.Empty);
+        string result = await agentTools.CreateFileAsync(filePath, string.Empty);
+        if (!StringHelper.IsFailureResult(result))
+        {
+            context.LastReadFilePath = PathResolver.ResolveMentionedPath(filePath) ?? filePath;
+            context.LastReadFileContent = string.Empty;
+        }
+
+        return result;
     }
 }
