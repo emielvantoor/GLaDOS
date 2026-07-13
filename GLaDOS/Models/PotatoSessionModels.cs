@@ -41,3 +41,13 @@ public sealed record PotatoSessionEventRequest(
     bool Collapsed);
 
 public sealed record PotatoSessionInputRequest(string Content);
+
+public sealed record PotatoSessionCompletionRequest(
+    string Content,
+    int CursorIndex);
+
+public sealed record PotatoSessionCompletion(
+    string ReplacementText,
+    int ReplacementStart,
+    string DisplayText,
+    string Kind);

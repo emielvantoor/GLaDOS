@@ -38,7 +38,7 @@ internal sealed class SlashCommandHandler(
         switch (command.ToLowerInvariant())
         {
             case "/model":
-                await HandleModelCommandAsync();
+                await HandleModelCommandAsync(arguments);
                 return true;
 
             case "/cd":
@@ -149,9 +149,29 @@ internal sealed class SlashCommandHandler(
         PotatoConsole.WriteStatus($"Prompt mode: {mode}.");
     }
 
-    private async Task HandleModelCommandAsync()
+    private async Task HandleModelCommandAsync(string arguments)
     {
-        string selectedModel = await modelSelector.PromptForModelAsync(gladosEndpoint);
+        string selectedModel = arguments.Trim();
+        if (string.IsNullOrWhiteSpace(selectedModel))
+        {
+            selectedModel = await modelSelector.PromptForModelAsync(gladosEndpoint);
+        }
+        else
+        {
+            List<string> models = await ModelSelector.GetAvailableModelsAsync(gladosEndpoint);
+            string? matchingModel = models.FirstOrDefault(model =>
+                string.Equals(model, selectedModel, StringComparison.OrdinalIgnoreCase));
+            if (matchingModel is not null)
+            {
+                selectedModel = matchingModel;
+            }
+            else if (models.Count > 0)
+            {
+                PotatoConsole.WriteError($"Unknown model: {selectedModel}");
+                return;
+            }
+        }
+
         IChatClient selectedOpenAiClient = clientFactory.CreateOpenAiClient(gladosEndpoint, selectedModel);
 
         switchModel(selectedOpenAiClient);

@@ -490,24 +490,30 @@ internal static class PotatoConsole
 
     public static void WriteShortcuts()
     {
+        string shortcuts = string.Join(Environment.NewLine,
+        [
+            "Shortcuts:",
+            "  @path/to/file   Attach a file; Left/Right cycle path completions",
+            "  /model [name]   Show model selection or switch directly by model name",
+            "  /cd path        Change directory; Left/Right cycle completions, Enter accepts",
+            "  /ask question   Ask a side question without changing chat history",
+            "  /mode           Show or change execution mode: status, pipeline, react",
+            "  /prompts        Show or change prompt source: status, defaults, external",
+            "  /sessions       List tracked sessions",
+            "  /continue       Continue the latest tracked session, or /continue <session>",
+            "  /transcript     Show or save a tracked session transcript",
+            "  /abort          Cancel the current task and return to the main prompt",
+            "  Ctrl+C          Abort the in-flight task; exits normally at the idle prompt",
+            "  Up/Down         Cycle through commands entered in this session",
+            "  exit, quit      Close Potato Code",
+            "  y, yes, ok      Approve the current specification",
+            "  execute         Approve a reviewed plan for execution",
+            "  abort           Cancel a reviewed plan before execution"
+        ]);
+
+        EventSink?.Record("shortcuts", "status", shortcuts, collapsed: false);
         Console.ForegroundColor = ConsoleColor.DarkGray;
-        Console.WriteLine("Shortcuts:");
-        Console.WriteLine("  @path/to/file   Attach a file; Left/Right cycle path completions");
-        Console.WriteLine("  /model          Show model selection and switch models");
-        Console.WriteLine("  /cd path        Change directory; Left/Right cycle completions, Enter accepts");
-        Console.WriteLine("  /ask question   Ask a side question without changing chat history");
-        Console.WriteLine("  /mode           Show or change execution mode: status, pipeline, react");
-        Console.WriteLine("  /prompts        Show or change prompt source: status, defaults, external");
-        Console.WriteLine("  /sessions       List tracked sessions");
-        Console.WriteLine("  /continue       Continue the latest tracked session, or /continue <session>");
-        Console.WriteLine("  /transcript     Show or save a tracked session transcript");
-        Console.WriteLine("  /abort          Cancel the current task and return to the main prompt");
-        Console.WriteLine("  Ctrl+C          Abort the in-flight task; exits normally at the idle prompt");
-        Console.WriteLine("  Up/Down         Cycle through commands entered in this session");
-        Console.WriteLine("  exit, quit      Close Potato Code");
-        Console.WriteLine("  y, yes, ok      Approve the current specification");
-        Console.WriteLine("  execute         Approve a reviewed plan for execution");
-        Console.WriteLine("  abort           Cancel a reviewed plan before execution");
+        Console.WriteLine(shortcuts);
         Console.ResetColor();
     }
 

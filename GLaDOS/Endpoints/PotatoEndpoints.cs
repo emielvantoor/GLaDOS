@@ -15,6 +15,7 @@ public static class PotatoEndpoints
         group.MapPost("/sessions", StartSession);
         group.MapPost("/sessions/events", AddEvent);
         group.MapPost("/sessions/{id}/input", AddInput);
+        group.MapPost("/sessions/{id}/completions", GetCompletions);
         group.MapGet("/sessions/input/next", GetNextInput);
     }
 
@@ -77,5 +78,25 @@ public static class PotatoEndpoints
 
         string? input = store.DequeueInput(workingDirectory);
         return input is null ? Results.NoContent() : Results.Ok(new { content = input });
+    }
+
+    private static IResult GetCompletions(
+        [FromServices] PotatoSessionStore store,
+        string id,
+        [FromBody] PotatoSessionCompletionRequest? request)
+    {
+        if (request is null)
+        {
+            return Results.BadRequest(new { error = "Request body is required." });
+        }
+
+        IReadOnlyList<PotatoSessionCompletion>? completions = store.GetCompletions(
+            id,
+            request.Content ?? string.Empty,
+            request.CursorIndex);
+
+        return completions is null
+            ? Results.NotFound(new { error = "Potato session not found." })
+            : Results.Ok(new { data = completions });
     }
 }

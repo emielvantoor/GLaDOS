@@ -1,9 +1,16 @@
+    let agentCompletionItems = [];
+    let agentCompletionIndex = 0;
+    let agentCompletionRequestId = 0;
+    let agentCompletionTimer = null;
+
     function initializeAgentsView() {
         document.getElementById('chatTab')?.addEventListener('click', () => switchPrimaryView('chat'));
         document.getElementById('agentsTab')?.addEventListener('click', () => switchPrimaryView('agents'));
         document.getElementById('refreshAgentsBtn')?.addEventListener('click', () => refreshPotatoSessions({ forceDetail: true }));
         document.getElementById('agentSubmitBtn')?.addEventListener('click', sendPotatoInput);
         document.getElementById('agentPrompt')?.addEventListener('keydown', handleAgentPromptKeyPress);
+        document.getElementById('agentPrompt')?.addEventListener('input', scheduleAgentCompletions);
+        document.getElementById('agentPrompt')?.addEventListener('click', scheduleAgentCompletions);
         setAgentComposerState(false, 'Status: Select a Potato session');
 
         refreshPotatoSessions();
@@ -118,6 +125,7 @@
             if (path) path.textContent = 'Start Potato from a working directory to mirror it here.';
             if (status) status.textContent = 'Idle';
             setAgentComposerState(false, 'Status: Select a Potato session');
+            hideAgentCompletions();
             return;
         }
 
@@ -125,6 +133,7 @@
         if (path) path.textContent = session.workingDirectory;
         if (status) status.textContent = session.status || 'active';
         setAgentComposerState(true, 'Status: Ready');
+        scheduleAgentCompletions();
     }
 
     function renderPotatoEvents(events) {
@@ -190,10 +199,37 @@
         if (kind === 'model-request') return 'Potato model request';
         if (kind === 'model-response') return 'Potato model response';
         if (kind === 'input') return 'Queued browser input';
+        if (kind === 'shortcuts') return 'Potato shortcuts';
         return kind;
     }
 
     function handleAgentPromptKeyPress(event) {
+        if (isAgentCompletionsVisible()) {
+            if (event.key === 'ArrowDown') {
+                event.preventDefault();
+                selectAgentCompletion(agentCompletionIndex + 1);
+                return;
+            }
+
+            if (event.key === 'ArrowUp') {
+                event.preventDefault();
+                selectAgentCompletion(agentCompletionIndex - 1);
+                return;
+            }
+
+            if (event.key === 'Tab' || (event.key === 'Enter' && !event.shiftKey)) {
+                event.preventDefault();
+                applyAgentCompletion(agentCompletionItems[agentCompletionIndex]);
+                return;
+            }
+
+            if (event.key === 'Escape') {
+                event.preventDefault();
+                hideAgentCompletions();
+                return;
+            }
+        }
+
         if (event.key === 'Enter' && !event.shiftKey) {
             event.preventDefault();
             sendPotatoInput();
@@ -216,6 +252,7 @@
 
             if (!response.ok) throw new Error(`HTTP ${response.status}`);
             promptInput.value = '';
+            hideAgentCompletions();
             setAgentComposerState(true, 'Status: Input queued');
             await refreshActivePotatoSession();
         } catch (error) {
@@ -231,4 +268,129 @@
         if (promptInput) promptInput.disabled = !enabled;
         if (submitButton) submitButton.disabled = !enabled;
         if (status) status.textContent = statusText;
+        if (!enabled) hideAgentCompletions();
+    }
+
+    function scheduleAgentCompletions() {
+        window.clearTimeout(agentCompletionTimer);
+        agentCompletionTimer = window.setTimeout(updateAgentCompletions, 80);
+    }
+
+    async function updateAgentCompletions() {
+        const promptInput = document.getElementById('agentPrompt');
+        if (!promptInput || promptInput.disabled || !activePotatoSessionId) {
+            hideAgentCompletions();
+            return;
+        }
+
+        const content = promptInput.value;
+        const cursorIndex = promptInput.selectionStart ?? content.length;
+        if (!shouldRequestAgentCompletions(content, cursorIndex)) {
+            hideAgentCompletions();
+            return;
+        }
+
+        const requestId = ++agentCompletionRequestId;
+        try {
+            const response = await fetch(`${baseEndpoint}/v1/potato/sessions/${encodeURIComponent(activePotatoSessionId)}/completions`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ content, cursorIndex })
+            });
+
+            if (requestId !== agentCompletionRequestId) return;
+            if (!response.ok) {
+                hideAgentCompletions();
+                return;
+            }
+
+            const payload = await response.json();
+            renderAgentCompletions(Array.isArray(payload.data) ? payload.data : []);
+        } catch {
+            if (requestId === agentCompletionRequestId) hideAgentCompletions();
+        }
+    }
+
+    function shouldRequestAgentCompletions(content, cursorIndex) {
+        if (cursorIndex !== content.length) return false;
+        const text = content.slice(0, cursorIndex);
+        if (text.startsWith('/') && !text.includes('\n')) return true;
+        return /(^|\s)@\S*$/.test(text);
+    }
+
+    function renderAgentCompletions(completions) {
+        const container = document.getElementById('agentCompletions');
+        if (!container) return;
+
+        agentCompletionItems = completions;
+        agentCompletionIndex = 0;
+        container.innerHTML = '';
+
+        if (completions.length === 0) {
+            hideAgentCompletions();
+            return;
+        }
+
+        completions.forEach((completion, index) => {
+            const item = document.createElement('button');
+            item.type = 'button';
+            item.className = `agent-completion-item${index === agentCompletionIndex ? ' active' : ''}`;
+            item.addEventListener('mousedown', (event) => {
+                event.preventDefault();
+                applyAgentCompletion(completion);
+            });
+
+            const label = document.createElement('span');
+            label.className = 'agent-completion-label';
+            label.textContent = completion.replacementText || completion.displayText || '';
+
+            const kind = document.createElement('span');
+            kind.className = 'agent-completion-kind';
+            kind.textContent = completion.kind || 'completion';
+
+            item.append(label, kind);
+            container.appendChild(item);
+        });
+
+        container.classList.remove('hidden');
+    }
+
+    function selectAgentCompletion(index) {
+        if (agentCompletionItems.length === 0) return;
+        agentCompletionIndex = ((index % agentCompletionItems.length) + agentCompletionItems.length) % agentCompletionItems.length;
+        document.querySelectorAll('.agent-completion-item').forEach((item, itemIndex) => {
+            item.classList.toggle('active', itemIndex === agentCompletionIndex);
+        });
+    }
+
+    function applyAgentCompletion(completion) {
+        const promptInput = document.getElementById('agentPrompt');
+        if (!promptInput || !completion) return;
+
+        const content = promptInput.value;
+        const cursorIndex = promptInput.selectionStart ?? content.length;
+        const replacementStart = Math.max(0, Math.min(completion.replacementStart ?? cursorIndex, cursorIndex));
+        const replacementText = completion.replacementText || '';
+        promptInput.value = content.slice(0, replacementStart) + replacementText + content.slice(cursorIndex);
+        const nextCursorIndex = replacementStart + replacementText.length;
+        promptInput.setSelectionRange(nextCursorIndex, nextCursorIndex);
+        promptInput.focus();
+        hideAgentCompletions();
+        scheduleAgentCompletions();
+    }
+
+    function hideAgentCompletions() {
+        const container = document.getElementById('agentCompletions');
+        if (container) {
+            container.classList.add('hidden');
+            container.innerHTML = '';
+        }
+
+        agentCompletionItems = [];
+        agentCompletionIndex = 0;
+    }
+
+    function isAgentCompletionsVisible() {
+        const container = document.getElementById('agentCompletions');
+        return !!container && !container.classList.contains('hidden') && agentCompletionItems.length > 0;
     }
