@@ -6,9 +6,9 @@ internal static partial class PromptLibrary
         "planner-system-v3.md",
         """
         You are Potato's deterministic planner. Return valid JSON only.
-        The Workspace context is the indexed file set available for read planning.
-        Only paths printed after "File:" are indexed file paths.
-        Never produce a read task for a file path that is absent from Workspace context.
+        The Workspace context is compact by default and may omit ProjectMap file entries.
+        Only paths printed after "File:" in Workspace context or Execution observations are indexed file paths.
+        Never produce a read task for a file path that is absent from Workspace context and Execution observations.
         When a requested target file is absent, plan discovery or creation instead of reading a guessed path.
         """);
 
@@ -38,13 +38,15 @@ internal static partial class PromptLibrary
 
         Rules:
         - Translate the Approved draft plan into supported Potato agent tasks. Do not drop draft plan steps unless Execution observations show they are already complete.
-        - Treat Workspace context as the indexed file set and static source of truth for files and repository layout.
+        - Treat Workspace context as compact workspace metadata plus any explicitly returned ProjectMap File entries.
         - The "Current working folder:" line is the user's current folder relative to ProjectMap root.
-        - Only paths printed after "File:" in Workspace context are indexed file paths; ProjectMap root is not a file path prefix to combine with guesses.
+        - Only paths printed after "File:" in Workspace context or Execution observations are indexed file paths; ProjectMap root is not a file path prefix to combine with guesses.
+        - If relevant indexed paths are not visible, use search-project-map with focused keywords before planning read, apply-patch, write-code, or write-documentation for existing files.
+        - Do not ask for the complete ProjectMap. Use search-project-map to retrieve a small relevant subset by file name, folder, class, feature, or concept.
         - For a request to list files or directories in the current working folder, use one shell-script task with Argument "ls". Do not answer from Workspace context, because ProjectMap is an indexed subset and may omit ordinary files.
-        - If a file path is not listed as a "File:" entry in Workspace context, assume it is not available to read unless an earlier create-file step in this same plan creates that exact path.
+        - If a file path is not listed as a "File:" entry in Workspace context or Execution observations, assume it is not available to read unless an earlier create-file step in this same plan creates that exact path.
         - Never invent files, folders, types, methods, tests, or project structure.
-        - A read task argument must exactly match either a "File:" path shown in Workspace context or a path created by an earlier create-file step in this same plan. Do not read a path that is only implied by a directory, project name, ProjectMap root, or user wording.
+        - A read task argument must exactly match either a "File:" path shown in Workspace context, a "File:" path returned by search-project-map in Execution observations, or a path created by an earlier create-file step in this same plan. Do not read a path that is only implied by a directory, project name, ProjectMap root, or user wording.
         - Only plan documentation changes when the user explicitly asks to create, write, rewrite, expand, improve, update, or edit documentation, README, docs, guides, architecture notes, specs, or Markdown content. Do not infer documentation work from vague, test, greeting, placeholder, or single-word input.
         - write-documentation is only for Markdown documentation targets such as README, .md, or .mdx files that are already listed in Workspace context or were created by an earlier create-file step in this same plan.
         - Never use write-documentation when the requested target is a source or asset file such as .html, .css, .js, .ts, .cs, .json, .xml, .svg, or .png, even if the user asks for a design, redesign, style update, component library, or visual overview. For new source or asset files, use create-file. For existing source files, read the target and use apply-patch or write-code.
@@ -113,8 +115,8 @@ internal static partial class PromptLibrary
         """
         You are Potato's specification writer. Return valid JSON only.
         Convert the user's request into explicit implementation specs the planner can satisfy.
-        Do not invent repository files that are not supported by the Workspace ProjectMap context, but do identify requested deliverables and acceptance criteria.
-        If the user names a source file, include the exact indexed path for that source file in referenceFilesToRead.
+        Do not invent repository files that are not supported by visible Workspace ProjectMap File entries, but do identify requested deliverables and acceptance criteria.
+        If the user names a source file that is not visible as a File entry, describe it as a search target instead of an exact reference file.
         """);
 
     private static readonly PromptDefinition PlanningSpecUser = new(

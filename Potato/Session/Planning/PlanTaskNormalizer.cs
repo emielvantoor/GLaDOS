@@ -41,6 +41,18 @@ public sealed class PlanTaskNormalizer
     {
         foreach (Match match in Regex.Matches(
                      observationResult,
+                     @"^File:\s*(?<path>.+)$",
+                     RegexOptions.IgnoreCase | RegexOptions.Multiline))
+        {
+            string path = PlanningPathUtilities.NormalizeProjectPath(match.Groups["path"].Value);
+            if (PlanningPathUtilities.LooksLikeProjectPath(path))
+            {
+                yield return path;
+            }
+        }
+
+        foreach (Match match in Regex.Matches(
+                     observationResult,
                      @"File '(?<path>[^']+)' already exists",
                      RegexOptions.IgnoreCase))
         {

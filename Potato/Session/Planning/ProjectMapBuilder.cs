@@ -12,6 +12,7 @@ public sealed class ProjectMapBuilder
     private const int ProjectMapCacheSchemaVersion = 1;
     private const string ProjectMapCacheDirectoryName = ".potato";
     private const string ProjectMapCacheFileName = "project-map-cache.json";
+    private const int DefaultSearchResultLimit = 12;
 
     private static readonly string[] ProjectMapFileNames =
     [
@@ -162,6 +163,92 @@ public sealed class ProjectMapBuilder
         return builder.ToString();
     }
 
+    public string BuildProjectMapHeader(string targetDirectory)
+    {
+        ProjectMapCacheLocation cacheLocation = GetProjectMapCacheLocation(targetDirectory);
+        var builder = new StringBuilder();
+        builder.AppendLine($"ProjectMap root: {cacheLocation.TargetDirectory}");
+        builder.AppendLine("ProjectMap entries are not included by default. Use search-project-map to request relevant indexed files.");
+        return builder.ToString();
+    }
+
+    public async Task<string> SearchProjectMapAsync(
+        string targetDirectory,
+        string query,
+        int maxResults,
+        IChatClient chatClient,
+        CancellationToken cancellationToken)
+    {
+        ProjectMapCacheLocation cacheLocation = GetProjectMapCacheLocation(targetDirectory);
+        maxResults = Math.Clamp(maxResults <= 0 ? DefaultSearchResultLimit : maxResults, 1, 30);
+        query = query.Trim();
+
+        FileInfo[] files = EnumerateProjectMapFiles(cacheLocation.TargetDirectory)
+            .Where(IsProjectMapFile)
+            .OrderBy(file => ToRelativeProjectMapPath(cacheLocation.TargetDirectory, file.FullName), StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        string[] tokens = TokenizeSearchQuery(query);
+        ProjectMapSearchCandidate[] candidates = files
+            .Select(file => ScoreProjectMapSearchCandidate(cacheLocation.TargetDirectory, file, tokens))
+            .Where(candidate => candidate.Score > 0)
+            .OrderByDescending(candidate => candidate.Score)
+            .ThenBy(candidate => candidate.RelativePath, StringComparer.OrdinalIgnoreCase)
+            .Take(maxResults)
+            .ToArray();
+
+        var builder = new StringBuilder();
+        builder.AppendLine($"ProjectMap root: {cacheLocation.TargetDirectory}");
+        builder.AppendLine($"ProjectMap search query: {(string.IsNullOrWhiteSpace(query) ? "(default important files)" : query)}");
+        builder.AppendLine($"ProjectMap search results: {candidates.Length}/{files.Length}");
+
+        if (candidates.Length == 0)
+        {
+            builder.AppendLine("No indexed files matched the query.");
+            return builder.ToString();
+        }
+
+        string promptHash = ComputeHash(Prompts.PromptLibrary.BuildProjectMapCacheKey);
+        ProjectMapCache cache = LoadProjectMapCache(cacheLocation.CachePath);
+
+        using PotatoConsole.IProgressReporter progress =
+            PotatoConsole.StartProgress($"Searching ProjectMap for {candidates.Length} matched file(s)...");
+        for (int index = 0; index < candidates.Length; index++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            ProjectMapSearchCandidate candidate = candidates[index];
+            FileInfo file = candidate.File;
+            string cacheRelativePath = ToRelativeProjectMapPath(cacheLocation.CacheRootDirectory, file.FullName);
+            string fileHash = await ComputeFileHashAsync(file.FullName, cancellationToken);
+            ProjectMapCacheEntry? cachedEntry = GetValidProjectMapCacheEntry(cache, cacheRelativePath, fileHash, promptHash);
+            string summary;
+            if (cachedEntry is not null)
+            {
+                summary = cachedEntry.Summary;
+                progress.Update(BuildProjectMapProgressMessage(index + 1, candidates.Length, candidate.RelativePath, cached: true));
+            }
+            else
+            {
+                progress.Update(BuildProjectMapProgressMessage(index + 1, candidates.Length, candidate.RelativePath, cached: false));
+                string content = await File.ReadAllTextAsync(file.FullName, cancellationToken);
+                summary = await SummarizeProjectFileAsync(candidate.RelativePath, content, chatClient, cancellationToken);
+                cache.Entries[cacheRelativePath] = new ProjectMapCacheEntry
+                {
+                    LastWriteTimeUtcTicks = file.LastWriteTimeUtc.Ticks,
+                    Length = file.Length,
+                    FileHash = fileHash,
+                    PromptHash = promptHash,
+                    Summary = summary
+                };
+                SaveProjectMapCache(cacheLocation.CachePath, cache);
+            }
+
+            AppendProjectMapSummary(builder, candidate.RelativePath, summary);
+        }
+
+        return builder.ToString();
+    }
+
     private static string BuildProjectMapProgressMessage(int currentFileIndex, int totalFiles, string relativePath, bool cached)
     {
         int percentage = totalFiles == 0
@@ -253,6 +340,79 @@ public sealed class ProjectMapBuilder
                directory.Name.Equals("build", StringComparison.OrdinalIgnoreCase) ||
                directory.Name.Equals("coverage", StringComparison.OrdinalIgnoreCase) ||
                directory.Name.Equals("vendor", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static ProjectMapSearchCandidate ScoreProjectMapSearchCandidate(
+        string projectMapRoot,
+        FileInfo file,
+        IReadOnlyList<string> tokens)
+    {
+        string relativePath = ToRelativeProjectMapPath(projectMapRoot, file.FullName);
+        if (tokens.Count == 0)
+        {
+            int defaultScore = ProjectMapFileNames.Any(name => file.Name.Equals(name, StringComparison.OrdinalIgnoreCase))
+                ? 100
+                : file.Extension.Equals(".sln", StringComparison.OrdinalIgnoreCase) ||
+                  file.Extension.EndsWith("proj", StringComparison.OrdinalIgnoreCase)
+                    ? 90
+                    : 1;
+            return new ProjectMapSearchCandidate(file, relativePath, defaultScore);
+        }
+
+        string searchablePath = relativePath.ToLowerInvariant();
+        int score = 0;
+        foreach (string token in tokens)
+        {
+            if (searchablePath.Equals(token, StringComparison.OrdinalIgnoreCase))
+            {
+                score += 100;
+            }
+            else if (Path.GetFileName(searchablePath).Equals(token, StringComparison.OrdinalIgnoreCase))
+            {
+                score += 80;
+            }
+            else if (searchablePath.Contains(token, StringComparison.OrdinalIgnoreCase))
+            {
+                score += 40;
+            }
+        }
+
+        if (score == 0 && TryReadSearchPreview(file.FullName, out string preview))
+        {
+            foreach (string token in tokens)
+            {
+                if (preview.Contains(token, StringComparison.OrdinalIgnoreCase))
+                {
+                    score += 10;
+                }
+            }
+        }
+
+        return new ProjectMapSearchCandidate(file, relativePath, score);
+    }
+
+    private static string[] TokenizeSearchQuery(string query) =>
+        query.Split([' ', '\t', '\r', '\n', ',', ';', ':', '|', '"', '\''], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(token => token.Length >= 2)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+    private static bool TryReadSearchPreview(string filePath, out string preview)
+    {
+        const int maxCharacters = 20000;
+        preview = string.Empty;
+        try
+        {
+            using var reader = new StreamReader(filePath);
+            char[] buffer = new char[maxCharacters];
+            int read = reader.ReadBlock(buffer, 0, buffer.Length);
+            preview = new string(buffer, 0, read);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private static ProjectMapCacheEntry? GetValidProjectMapCacheEntry(
@@ -429,6 +589,8 @@ public sealed class ProjectMapBuilder
         string CacheRootDirectory,
         string CachePath,
         string? CachePrunePathPrefix);
+
+    private sealed record ProjectMapSearchCandidate(FileInfo File, string RelativePath, int Score);
 
     private sealed class ProjectMapCache
     {
