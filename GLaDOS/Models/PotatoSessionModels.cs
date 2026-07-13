@@ -40,3 +40,4 @@ public sealed record PotatoSessionEventRequest(
     string Content,
     bool Collapsed);
 
+public sealed record PotatoSessionInputRequest(string Content);

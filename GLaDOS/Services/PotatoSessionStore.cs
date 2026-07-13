@@ -85,6 +85,43 @@ public sealed class PotatoSessionStore
         }
     }
 
+    public bool EnqueueInput(string id, string content)
+    {
+        if (string.IsNullOrWhiteSpace(content))
+        {
+            return false;
+        }
+
+        string normalizedContent = content.TrimEnd();
+
+        lock (sync)
+        {
+            if (!sessions.TryGetValue(id, out StoredPotatoSession? session))
+            {
+                return false;
+            }
+
+            session.PendingInputs.Enqueue(normalizedContent);
+            session.LastActivityAt = DateTimeOffset.UtcNow;
+            AddEvent(session, session.LastActivityAt, "input", "user", normalizedContent, collapsed: true);
+            return true;
+        }
+    }
+
+    public string? DequeueInput(string workingDirectory)
+    {
+        string normalizedWorkingDirectory = NormalizeWorkingDirectory(workingDirectory);
+        string id = CreateSessionId(normalizedWorkingDirectory);
+
+        lock (sync)
+        {
+            return sessions.TryGetValue(id, out StoredPotatoSession? session) &&
+                   session.PendingInputs.TryDequeue(out string? input)
+                ? input
+                : null;
+        }
+    }
+
     private void AddEvent(StoredPotatoSession session, DateTimeOffset timestamp, string kind, string role, string content, bool collapsed)
     {
         session.Events.Add(new PotatoSessionEvent(
@@ -144,6 +181,6 @@ public sealed class PotatoSessionStore
         public DateTimeOffset StartedAt { get; set; } = startedAt;
         public DateTimeOffset LastActivityAt { get; set; } = startedAt;
         public List<PotatoSessionEvent> Events { get; } = [];
+        public Queue<string> PendingInputs { get; } = [];
     }
 }
-

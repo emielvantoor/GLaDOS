@@ -14,6 +14,8 @@ public static class PotatoEndpoints
         group.MapGet("/sessions/{id}", GetSession);
         group.MapPost("/sessions", StartSession);
         group.MapPost("/sessions/events", AddEvent);
+        group.MapPost("/sessions/{id}/input", AddInput);
+        group.MapGet("/sessions/input/next", GetNextInput);
     }
 
     private static IResult GetSessions([FromServices] PotatoSessionStore store) =>
@@ -48,5 +50,32 @@ public static class PotatoEndpoints
 
         return Results.Ok(store.AddEvent(request));
     }
-}
 
+    private static IResult AddInput(
+        [FromServices] PotatoSessionStore store,
+        string id,
+        [FromBody] PotatoSessionInputRequest? request)
+    {
+        if (request is null || string.IsNullOrWhiteSpace(request.Content))
+        {
+            return Results.BadRequest(new { error = "Content is required." });
+        }
+
+        return store.EnqueueInput(id, request.Content)
+            ? Results.Accepted()
+            : Results.NotFound(new { error = "Potato session not found." });
+    }
+
+    private static IResult GetNextInput(
+        [FromServices] PotatoSessionStore store,
+        [FromQuery] string? workingDirectory)
+    {
+        if (string.IsNullOrWhiteSpace(workingDirectory))
+        {
+            return Results.BadRequest(new { error = "WorkingDirectory is required." });
+        }
+
+        string? input = store.DequeueInput(workingDirectory);
+        return input is null ? Results.NoContent() : Results.Ok(new { content = input });
+    }
+}

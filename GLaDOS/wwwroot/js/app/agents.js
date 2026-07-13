@@ -2,6 +2,9 @@
         document.getElementById('chatTab')?.addEventListener('click', () => switchPrimaryView('chat'));
         document.getElementById('agentsTab')?.addEventListener('click', () => switchPrimaryView('agents'));
         document.getElementById('refreshAgentsBtn')?.addEventListener('click', () => refreshPotatoSessions({ forceDetail: true }));
+        document.getElementById('agentSubmitBtn')?.addEventListener('click', sendPotatoInput);
+        document.getElementById('agentPrompt')?.addEventListener('keydown', handleAgentPromptKeyPress);
+        setAgentComposerState(false, 'Status: Select a Potato session');
 
         refreshPotatoSessions();
         potatoSessionsPollId = window.setInterval(refreshPotatoSessions, 2000);
@@ -114,12 +117,14 @@
             if (title) title.textContent = 'No Potato session selected';
             if (path) path.textContent = 'Start Potato from a working directory to mirror it here.';
             if (status) status.textContent = 'Idle';
+            setAgentComposerState(false, 'Status: Select a Potato session');
             return;
         }
 
         if (title) title.textContent = session.displayName || 'Potato session';
         if (path) path.textContent = session.workingDirectory;
         if (status) status.textContent = session.status || 'active';
+        setAgentComposerState(true, 'Status: Ready');
     }
 
     function renderPotatoEvents(events) {
@@ -184,5 +189,46 @@
         const kind = event.kind || 'event';
         if (kind === 'model-request') return 'Potato model request';
         if (kind === 'model-response') return 'Potato model response';
+        if (kind === 'input') return 'Queued browser input';
         return kind;
+    }
+
+    function handleAgentPromptKeyPress(event) {
+        if (event.key === 'Enter' && !event.shiftKey) {
+            event.preventDefault();
+            sendPotatoInput();
+        }
+    }
+
+    async function sendPotatoInput() {
+        const promptInput = document.getElementById('agentPrompt');
+        const userText = promptInput?.value.trim();
+        if (!promptInput || !userText || !activePotatoSessionId) return;
+
+        setAgentComposerState(false, 'Status: Sending input...');
+
+        try {
+            const response = await fetch(`${baseEndpoint}/v1/potato/sessions/${encodeURIComponent(activePotatoSessionId)}/input`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ content: userText })
+            });
+
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            promptInput.value = '';
+            setAgentComposerState(true, 'Status: Input queued');
+            await refreshActivePotatoSession();
+        } catch (error) {
+            setAgentComposerState(true, `Status: Could not send input: ${error.message}`);
+        }
+    }
+
+    function setAgentComposerState(enabled, statusText) {
+        const promptInput = document.getElementById('agentPrompt');
+        const submitButton = document.getElementById('agentSubmitBtn');
+        const status = document.getElementById('agentStatusText');
+
+        if (promptInput) promptInput.disabled = !enabled;
+        if (submitButton) submitButton.disabled = !enabled;
+        if (status) status.textContent = statusText;
     }

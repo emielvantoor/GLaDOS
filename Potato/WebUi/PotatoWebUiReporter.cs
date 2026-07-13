@@ -1,13 +1,19 @@
+using System.Net;
 using System.Net.Http.Json;
+using System.Threading.Channels;
 
 namespace Potato.WebUi;
 
 internal sealed class PotatoWebUiReporter(Uri gladosEndpoint, string model) : PotatoConsole.IPotatoConsoleEventSink, IAsyncDisposable
 {
     private readonly HttpClient httpClient = new();
+    private readonly Channel<string> inputChannel = Channel.CreateUnbounded<string>();
     private readonly string workingDirectory = Environment.CurrentDirectory;
     private readonly Uri startSessionUri = new(gladosEndpoint, "potato/sessions");
     private readonly Uri eventUri = new(gladosEndpoint, "potato/sessions/events");
+    private readonly Uri nextInputUri = new(gladosEndpoint, $"potato/sessions/input/next?workingDirectory={Uri.EscapeDataString(Environment.CurrentDirectory)}");
+    private readonly CancellationTokenSource inputPollingCancellation = new();
+    private Task? inputPollingTask;
     private volatile bool disabled;
 
     public async Task StartAsync()
@@ -16,6 +22,7 @@ internal sealed class PotatoWebUiReporter(Uri gladosEndpoint, string model) : Po
             workingDirectory,
             model,
             Path.GetFileName(workingDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar))));
+        inputPollingTask = PollInputAsync(inputPollingCancellation.Token);
     }
 
     public void Record(string kind, string role, string content, bool collapsed)
@@ -33,8 +40,23 @@ internal sealed class PotatoWebUiReporter(Uri gladosEndpoint, string model) : Po
             collapsed)));
     }
 
+    public bool TryReadInput(out string? input) =>
+        inputChannel.Reader.TryRead(out input);
+
     public async ValueTask DisposeAsync()
     {
+        await inputPollingCancellation.CancelAsync();
+        if (inputPollingTask is not null)
+        {
+            try
+            {
+                await inputPollingTask;
+            }
+            catch (OperationCanceledException)
+            {
+            }
+        }
+
         if (!disabled)
         {
             await TryPostAsync(eventUri, new PotatoSessionEventPayload(
@@ -45,7 +67,38 @@ internal sealed class PotatoWebUiReporter(Uri gladosEndpoint, string model) : Po
                 Collapsed: true));
         }
 
+        inputPollingCancellation.Dispose();
         httpClient.Dispose();
+    }
+
+    private async Task PollInputAsync(CancellationToken cancellationToken)
+    {
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            try
+            {
+                using HttpResponseMessage response = await httpClient.GetAsync(nextInputUri, cancellationToken);
+                if (response.StatusCode == HttpStatusCode.OK)
+                {
+                    InputPayload? payload = await response.Content.ReadFromJsonAsync<InputPayload>(cancellationToken);
+                    if (!string.IsNullOrWhiteSpace(payload?.Content))
+                    {
+                        await inputChannel.Writer.WriteAsync(payload.Content, cancellationToken);
+                    }
+                }
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                break;
+            }
+            catch
+            {
+                await Task.Delay(1000, cancellationToken);
+                continue;
+            }
+
+            await Task.Delay(200, cancellationToken);
+        }
     }
 
     private async Task TryPostAsync<TPayload>(Uri uri, TPayload payload)
@@ -77,4 +130,6 @@ internal sealed class PotatoWebUiReporter(Uri gladosEndpoint, string model) : Po
         string Role,
         string Content,
         bool Collapsed);
+
+    private sealed record InputPayload(string Content);
 }

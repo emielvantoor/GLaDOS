@@ -52,6 +52,13 @@
                     <div class="message-content">Active Potato sessions will appear in the left pane.</div>
                 </div>
             </div>
+            <div class="composer agent-composer">
+                <div class="status" id="agentStatusText">Status: Select a Potato session</div>
+                <div class="input-area">
+                    <textarea id="agentPrompt" placeholder="Send input to the selected Potato session... (Shift+Enter for a new line)"></textarea>
+                    <button id="agentSubmitBtn" type="button">Send</button>
+                </div>
+            </div>
         </main>
 
         <div class="sidebar" id="chatSidebar">
@@ -224,7 +231,7 @@
 <script src="js/app/tools.js"></script>
 <script src="js/app/stream.js"></script>
 <script src="js/app/fim.js?v=fim-verification-1"></script>
-<script src="js/app/agents.js?v=potato-model-events-1"></script>
+<script src="js/app/agents.js?v=potato-input-1"></script>
 <script src="js/site.js?v=fim-verification-1"></script>
 
 </body>

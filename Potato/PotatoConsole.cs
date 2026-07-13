@@ -216,7 +216,16 @@ internal static class PotatoConsole
             while (true)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                if (cancellationToken.CanBeCanceled && !Console.KeyAvailable)
+                if (TryReadWebInput(out string? webInput))
+                {
+                    MoveCursorToInputLineEnd(inputTop);
+                    Console.WriteLine();
+                    WriteSeparator();
+                    Console.WriteLine();
+                    return webInput;
+                }
+
+                if (!Console.KeyAvailable)
                 {
                     Thread.Sleep(50);
                     continue;
@@ -397,6 +406,12 @@ internal static class PotatoConsole
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            if (TryReadWebInput(out string? webInput))
+            {
+                Console.WriteLine();
+                return webInput ?? string.Empty;
+            }
+
             if (!Console.KeyAvailable)
             {
                 Thread.Sleep(50);
@@ -580,6 +595,13 @@ internal static class PotatoConsole
     internal interface IPotatoConsoleEventSink
     {
         void Record(string kind, string role, string content, bool collapsed);
+        bool TryReadInput(out string? input);
+    }
+
+    private static bool TryReadWebInput(out string? input)
+    {
+        input = null;
+        return EventSink?.TryReadInput(out input) == true && !string.IsNullOrWhiteSpace(input);
     }
 
     public static IDisposable SuspendProgress()
