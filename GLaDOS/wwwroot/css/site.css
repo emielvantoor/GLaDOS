@@ -373,6 +373,7 @@ h1 {
 
 .message {
     width: min(100%, 780px);
+    flex: 0 0 auto;
     padding: 0;
     border-radius: 0;
     font-size: 15px;
@@ -797,6 +798,8 @@ button#agentSubmitBtn:disabled {
 
 .potato-event-details {
     width: min(100%, 780px);
+    min-height: 36px;
+    flex: 0 0 auto;
     align-self: center;
     border: 1px solid var(--border-color);
     border-radius: 6px;
