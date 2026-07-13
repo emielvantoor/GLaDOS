@@ -453,9 +453,62 @@ public sealed class PotatoSessionStore
             : rawPath;
         string workspaceRoot = FindGitRepositoryRoot(workingDirectory) ?? workingDirectory;
 
-        return Path.GetFullPath(Path.IsPathRooted(expandedPath)
-            ? expandedPath
-            : Path.Combine(workspaceRoot, expandedPath));
+        if (Path.IsPathRooted(expandedPath))
+        {
+            string rootedPath = Path.GetFullPath(expandedPath);
+            return ResolveExistingPathWithCurrentCasing(rootedPath) ?? rootedPath;
+        }
+
+        string workingDirectoryPath = Path.GetFullPath(Path.Combine(workingDirectory, expandedPath));
+        string? resolvedWorkingDirectoryPath = ResolveExistingPathWithCurrentCasing(workingDirectoryPath);
+        if (resolvedWorkingDirectoryPath is not null)
+        {
+            return resolvedWorkingDirectoryPath;
+        }
+
+        string workspacePath = Path.GetFullPath(Path.Combine(workspaceRoot, expandedPath));
+        return ResolveExistingPathWithCurrentCasing(workspacePath) ?? workspacePath;
+    }
+
+    private static string? ResolveExistingPathWithCurrentCasing(string path)
+    {
+        if (Directory.Exists(path) || File.Exists(path))
+        {
+            return path;
+        }
+
+        string fullPath = Path.GetFullPath(path);
+        string? root = Path.GetPathRoot(fullPath);
+        if (string.IsNullOrWhiteSpace(root))
+        {
+            return null;
+        }
+
+        string current = root;
+        string relative = Path.GetRelativePath(root, fullPath);
+        foreach (string segment in relative.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar))
+        {
+            if (string.IsNullOrWhiteSpace(segment) || segment == ".")
+            {
+                continue;
+            }
+
+            if (!Directory.Exists(current))
+            {
+                return null;
+            }
+
+            string? match = Directory.EnumerateFileSystemEntries(current)
+                .FirstOrDefault(entry => string.Equals(Path.GetFileName(entry), segment, StringComparison.OrdinalIgnoreCase));
+            if (match is null)
+            {
+                return null;
+            }
+
+            current = match;
+        }
+
+        return Directory.Exists(current) || File.Exists(current) ? current : null;
     }
 
     private static string? FindGitRepositoryRoot(string directoryPath)
