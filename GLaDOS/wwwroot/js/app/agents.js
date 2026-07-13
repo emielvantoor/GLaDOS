@@ -229,11 +229,18 @@
 
     function formatPotatoEventSummary(event) {
         const kind = event.kind || 'event';
+        if (kind === 'model-exchange') return getPotatoEventStepTitle(event.content) || 'step: model exchange';
         if (kind === 'model-request') return 'Potato model request';
         if (kind === 'model-response') return 'Potato model response';
+        if (kind === 'progress') return `step: ${event.content || 'progress'}`;
         if (kind === 'input') return 'Queued browser input';
         if (kind === 'shortcuts') return 'Potato shortcuts';
         return kind;
+    }
+
+    function getPotatoEventStepTitle(content) {
+        const firstLine = (content || '').split(/\r?\n/, 1)[0]?.trim();
+        return firstLine?.toLowerCase().startsWith('step: ') ? firstLine : '';
     }
 
     function handleAgentPromptKeyPress(event) {

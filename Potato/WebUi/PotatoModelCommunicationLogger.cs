@@ -15,10 +15,9 @@ internal sealed class PotatoModelCommunicationLogger(IChatClient innerClient) : 
     {
         ChatMessage[] capturedMessages = messages.ToArray();
         long requestId = Interlocked.Increment(ref nextRequestId);
-        RecordModelRequest(requestId, capturedMessages, options);
 
         ChatResponse response = await base.GetResponseAsync(capturedMessages, options, cancellationToken);
-        RecordModelResponse(requestId, response.Text);
+        RecordModelExchange(requestId, capturedMessages, options, response.Text);
         return response;
     }
 
@@ -29,7 +28,6 @@ internal sealed class PotatoModelCommunicationLogger(IChatClient innerClient) : 
     {
         ChatMessage[] capturedMessages = messages.ToArray();
         long requestId = Interlocked.Increment(ref nextRequestId);
-        RecordModelRequest(requestId, capturedMessages, options);
 
         var response = new StringBuilder();
         await foreach (ChatResponseUpdate update in base.GetStreamingResponseAsync(capturedMessages, options, cancellationToken)
@@ -39,31 +37,32 @@ internal sealed class PotatoModelCommunicationLogger(IChatClient innerClient) : 
             yield return update;
         }
 
-        RecordModelResponse(requestId, response.ToString());
+        RecordModelExchange(requestId, capturedMessages, options, response.ToString());
     }
 
-    private static void RecordModelRequest(long requestId, IReadOnlyList<ChatMessage> messages, ChatOptions? options)
+    private static void RecordModelExchange(
+        long requestId,
+        IReadOnlyList<ChatMessage> messages,
+        ChatOptions? options,
+        string response)
     {
         PotatoConsole.EventSink?.Record(
-            "model-request",
+            "model-exchange",
             "model",
-            FormatModelRequest($"Potato model request #{requestId}", messages, options),
+            FormatModelExchange(requestId, messages, options, response),
             collapsed: true);
     }
 
-    private static void RecordModelResponse(long requestId, string response)
-    {
-        PotatoConsole.EventSink?.Record(
-            "model-response",
-            "model",
-            FormatModelResponse($"Potato model response #{requestId}", response),
-            collapsed: true);
-    }
-
-    private static string FormatModelRequest(string title, IReadOnlyList<ChatMessage> messages, ChatOptions? options)
+    private static string FormatModelExchange(
+        long requestId,
+        IReadOnlyList<ChatMessage> messages,
+        ChatOptions? options,
+        string response)
     {
         var builder = new StringBuilder();
-        builder.AppendLine(title);
+        builder.AppendLine($"step: {PotatoConsole.ActiveProgressMessage ?? $"Potato model call #{requestId}"}");
+        builder.AppendLine();
+        builder.AppendLine("## Request");
         AppendOptions(builder, options);
         builder.AppendLine();
 
@@ -75,14 +74,8 @@ internal sealed class PotatoModelCommunicationLogger(IChatClient innerClient) : 
             builder.AppendLine();
         }
 
-        return builder.ToString().TrimEnd();
-    }
-
-    private static string FormatModelResponse(string title, string response)
-    {
-        var builder = new StringBuilder();
-        builder.AppendLine(title);
         builder.AppendLine();
+        builder.AppendLine("## Response");
         builder.AppendLine(string.IsNullOrWhiteSpace(response) ? "(empty)" : response);
         return builder.ToString().TrimEnd();
     }

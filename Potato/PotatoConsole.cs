@@ -10,6 +10,7 @@ internal static class PotatoConsole
     private const string DefaultPromptPlaceholder = "Type your message or @path/to/file";
     private static readonly object ProgressLock = new();
     private static ProgressSpinner? ActiveProgress;
+    private static string? activeProgressMessage;
     private static readonly string[] ProgressJokes =
     [
         "Please remain calm. Your task is being processed with nearly adequate competence.",
@@ -116,6 +117,8 @@ internal static class PotatoConsole
     private static int ProgressJokeIndex;
 
     public static IPotatoConsoleEventSink? EventSink { get; set; }
+
+    public static string? ActiveProgressMessage => activeProgressMessage;
 
     public static void WriteStartupBanner(Uri gladosEndpoint, string model)
     {
@@ -583,16 +586,18 @@ internal static class PotatoConsole
 
     public static IProgressReporter StartProgress(string message)
     {
-        EventSink?.Record("progress", "status", message, collapsed: true);
+        string? previousProgressMessage = activeProgressMessage;
         if (Console.IsOutputRedirected)
         {
-            return new NoopDisposable();
+            activeProgressMessage = message;
+            return new ProgressScope(new NoopDisposable(), previousProgressMessage);
         }
 
         lock (ProgressLock)
         {
             ActiveProgress?.Dispose();
-            ActiveProgress = new ProgressSpinner(message, ProgressLock, NextProgressJoke);
+            activeProgressMessage = message;
+            ActiveProgress = new ProgressSpinner(message, ProgressLock, NextProgressJoke, previousProgressMessage);
             ActiveProgress.Start();
             return ActiveProgress;
         }
@@ -1579,12 +1584,14 @@ internal static class PotatoConsole
         private readonly Stopwatch stopwatch = Stopwatch.StartNew();
         private readonly int progressTop;
         private readonly int reservedLines = 2;
+        private readonly string? previousProgressMessage;
 
-        public ProgressSpinner(string message, object syncRoot, Func<string> nextJoke)
+        public ProgressSpinner(string message, object syncRoot, Func<string> nextJoke, string? previousProgressMessage)
         {
             this.message = message;
             this.syncRoot = syncRoot;
             this.nextJoke = nextJoke;
+            this.previousProgressMessage = previousProgressMessage;
             joke = nextJoke();
             Console.WriteLine();
             Console.WriteLine();
@@ -1603,6 +1610,7 @@ internal static class PotatoConsole
                 if (!disposed)
                 {
                     this.message = message;
+                    activeProgressMessage = message;
                 }
             }
         }
@@ -1638,6 +1646,7 @@ internal static class PotatoConsole
 
                 disposed = true;
                 ActiveProgress = null;
+                activeProgressMessage = previousProgressMessage;
                 cancellation.Cancel();
                 Clear();
             }
@@ -1736,11 +1745,23 @@ internal static class PotatoConsole
     {
         public void Update(string message)
         {
+            activeProgressMessage = message;
         }
 
         public void Dispose()
         {
         }
 
+    }
+
+    private sealed class ProgressScope(IProgressReporter inner, string? previousProgressMessage) : IProgressReporter
+    {
+        public void Update(string message) => inner.Update(message);
+
+        public void Dispose()
+        {
+            inner.Dispose();
+            activeProgressMessage = previousProgressMessage;
+        }
     }
 }
