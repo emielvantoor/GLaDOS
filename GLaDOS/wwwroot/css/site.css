@@ -321,6 +321,11 @@ h1 {
     padding-left: 16px;
 }
 
+.agent-composer.webui-input-disabled .input-area,
+.agent-composer.webui-input-disabled .agent-completions {
+    display: none;
+}
+
 .agent-completions {
     width: min(100%, 780px);
     margin: 6px auto 0;

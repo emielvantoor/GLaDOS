@@ -6,6 +6,8 @@ public sealed class PotatoRuntimeOptions
 
     public bool UseCompiledDefaultPrompts { get; init; }
 
+    public bool WebUiInputEnabled { get; init; }
+
     public string ExecutionMode { get; init; } = "react";
 
     public HashSet<string> AlwaysAllowedPermissionKeys { get; } = new(StringComparer.Ordinal);
@@ -16,8 +18,21 @@ public sealed class PotatoRuntimeOptions
         {
             PromptDirectory = GetPromptDirectory(args),
             UseCompiledDefaultPrompts = appSettings.UseCompiledDefaultPrompts,
+            WebUiInputEnabled = GetWebUiInputEnabled(appSettings),
             ExecutionMode = appSettings.ExecutionMode ?? "react"
         };
+    }
+
+    private static bool GetWebUiInputEnabled(PotatoAppSettings appSettings)
+    {
+        string? environmentValue = Environment.GetEnvironmentVariable("POTATO_WEBUI_ALLOW_INPUT");
+        if (string.IsNullOrWhiteSpace(environmentValue))
+        {
+            return appSettings.WebUiInputEnabled;
+        }
+
+        return string.Equals(environmentValue, "true", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(environmentValue, "1", StringComparison.OrdinalIgnoreCase);
     }
 
     private static string GetPromptDirectory(string[] args)

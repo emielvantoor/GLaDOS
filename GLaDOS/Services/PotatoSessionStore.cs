@@ -12,6 +12,7 @@ public sealed class PotatoSessionStore
         "/ask",
         "/mode",
         "/prompts",
+        "/webui-input",
         "/sessions",
         "/continue",
         "/transcript",
@@ -37,6 +38,7 @@ public sealed class PotatoSessionStore
 
             session.Model = request.Model;
             session.DisplayName = BuildDisplayName(request, workingDirectory);
+            session.WebUiInputEnabled = IsInputEnabledMode(request.Mode);
             session.Status = "active";
             session.IsProcessing = false;
             session.CurrentProgress = null;
@@ -122,6 +124,11 @@ public sealed class PotatoSessionStore
                 return false;
             }
 
+            if (!session.WebUiInputEnabled)
+            {
+                return false;
+            }
+
             session.PendingInputs.Enqueue(normalizedContent);
             session.LastActivityAt = DateTimeOffset.UtcNow;
             AddEvent(session, session.LastActivityAt, "input", "user", normalizedContent, collapsed: true);
@@ -150,6 +157,12 @@ public sealed class PotatoSessionStore
 
             session.Status = "active";
             session.LastActivityAt = now;
+            if (!session.WebUiInputEnabled)
+            {
+                session.PendingInputs.Clear();
+                return null;
+            }
+
             return session.PendingInputs.TryDequeue(out string? input) ? input : null;
         }
     }
@@ -265,6 +278,7 @@ public sealed class PotatoSessionStore
             session.IsProcessing,
             session.CurrentProgress,
             session.CurrentInputPrompt,
+            session.WebUiInputEnabled,
             session.StartedAt,
             session.LastActivityAt,
             session.Events.Count);
@@ -279,6 +293,7 @@ public sealed class PotatoSessionStore
             session.IsProcessing,
             session.CurrentProgress,
             session.CurrentInputPrompt,
+            session.WebUiInputEnabled,
             session.StartedAt,
             session.LastActivityAt,
             session.Events.ToArray());
@@ -314,8 +329,24 @@ public sealed class PotatoSessionStore
             return true;
         }
 
+        if (kind.Equals("webui-input-enabled", StringComparison.OrdinalIgnoreCase))
+        {
+            session.WebUiInputEnabled = true;
+            return false;
+        }
+
+        if (kind.Equals("webui-input-disabled", StringComparison.OrdinalIgnoreCase))
+        {
+            session.WebUiInputEnabled = false;
+            session.PendingInputs.Clear();
+            return false;
+        }
+
         return false;
     }
+
+    private static bool IsInputEnabledMode(string? mode) =>
+        string.Equals(mode, "input-enabled", StringComparison.OrdinalIgnoreCase);
 
     private static string NormalizeWorkingDirectory(string workingDirectory) =>
         Path.GetFullPath(string.IsNullOrWhiteSpace(workingDirectory) ? "." : workingDirectory);
@@ -574,6 +605,7 @@ public sealed class PotatoSessionStore
         public bool IsProcessing { get; set; }
         public string? CurrentProgress { get; set; }
         public string? CurrentInputPrompt { get; set; }
+        public bool WebUiInputEnabled { get; set; }
         public DateTimeOffset StartedAt { get; set; } = startedAt;
         public DateTimeOffset LastActivityAt { get; set; } = startedAt;
         public List<PotatoSessionEvent> Events { get; } = [];

@@ -135,6 +135,7 @@
             if (status) status.textContent = 'Idle';
             setAgentComposerState(false, 'Status: Select a Potato session');
             updateAgentPromptPlaceholder(null);
+            updateAgentComposerVisibility(null);
             hideAgentCompletions();
             return;
         }
@@ -142,12 +143,19 @@
         if (title) title.textContent = session.displayName || 'Potato session';
         if (path) path.textContent = session.workingDirectory;
         if (status) status.textContent = session.isProcessing ? 'thinking' : (session.status || 'active');
-        setAgentComposerState(true, getAgentStatusText(session));
+        updateAgentComposerVisibility(session);
+        setAgentComposerState(Boolean(session.webUiInputEnabled), getAgentStatusText(session));
         updateAgentPromptPlaceholder(session);
-        scheduleAgentCompletions();
+        if (session.webUiInputEnabled) {
+            scheduleAgentCompletions();
+        }
     }
 
     function getAgentStatusText(session) {
+        if (!session.webUiInputEnabled) {
+            return 'Status: WebUI input disabled from Potato';
+        }
+
         if (session.currentInputPrompt) {
             return `Status: Waiting for input (${session.currentInputPrompt})`;
         }
@@ -160,6 +168,15 @@
         if (!promptInput) return;
 
         promptInput.placeholder = session?.currentInputPrompt || defaultAgentPromptPlaceholder;
+    }
+
+    function updateAgentComposerVisibility(session) {
+        const composer = document.querySelector('.agent-composer');
+        if (!composer) return;
+
+        const isVisible = Boolean(session?.webUiInputEnabled);
+        composer.classList.toggle('webui-input-disabled', !isVisible);
+        hideAgentCompletions();
     }
 
     function renderPotatoEvents(events, options = {}) {

@@ -9,6 +9,7 @@ internal sealed class SlashCommandHandler(
     FileMentionExpander fileMentionExpander,
     Action resetConversationState,
     Action<bool> setUseCompiledDefaultPrompts,
+    Action<bool> setWebUiInputEnabled,
     Action<string> setSelectedModel,
     Action<string> handleTranscriptCommand,
     Action writeSessions,
@@ -55,6 +56,10 @@ internal sealed class SlashCommandHandler(
 
             case "/mode":
                 HandleModeCommand(arguments);
+                return true;
+
+            case "/webui-input":
+                await HandleWebUiInputCommandAsync(arguments);
                 return true;
 
             case "/transcript":
@@ -107,6 +112,37 @@ internal sealed class SlashCommandHandler(
 
             default:
                 PotatoConsole.WriteStatus("Type /mode status, /mode pipeline, or /mode react.");
+                return;
+        }
+    }
+
+    private async Task HandleWebUiInputCommandAsync(string arguments)
+    {
+        string mode = arguments.Trim().ToLowerInvariant();
+        switch (mode)
+        {
+            case "on":
+            case "enable":
+            case "enabled":
+            case "true":
+            case "1":
+                await PotatoConsole.SetWebUiInputEnabledAsync(true);
+                setWebUiInputEnabled(true);
+                PotatoConsole.WriteSuccess("GLaDOS WebUI input enabled.");
+                return;
+
+            case "off":
+            case "disable":
+            case "disabled":
+            case "false":
+            case "0":
+                await PotatoConsole.SetWebUiInputEnabledAsync(false);
+                setWebUiInputEnabled(false);
+                PotatoConsole.WriteSuccess("GLaDOS WebUI input disabled.");
+                return;
+
+            default:
+                PotatoConsole.WriteStatus("Type /webui-input enable or /webui-input disable.");
                 return;
         }
     }

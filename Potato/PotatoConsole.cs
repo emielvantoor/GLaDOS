@@ -504,6 +504,7 @@ internal static class PotatoConsole
             "  /ask question   Ask a side question without changing chat history",
             "  /mode           Show or change execution mode: status, pipeline, react",
             "  /prompts        Show or change prompt source: status, defaults, external",
+            "  /webui-input    Enable or disable GLaDOS WebUI input: enable, disable",
             "  /sessions       List tracked sessions",
             "  /continue       Continue the latest tracked session, or /continue <session>",
             "  /transcript     Show or save a tracked session transcript",
@@ -620,7 +621,11 @@ internal static class PotatoConsole
     {
         void Record(string kind, string role, string content, bool collapsed);
         bool TryReadInput(out string? input);
+        Task SetWebUiInputEnabledAsync(bool enabled);
     }
+
+    public static Task SetWebUiInputEnabledAsync(bool enabled) =>
+        EventSink?.SetWebUiInputEnabledAsync(enabled) ?? Task.CompletedTask;
 
     private static bool TryReadWebInput(out string? input)
     {

@@ -78,6 +78,7 @@ internal sealed class PipelineSession
             fileMentionExpander,
             ResetConversationState,
             SetUseCompiledDefaultPrompts,
+            appSettingsStore.SetWebUiInputEnabled,
             appSettingsStore.SetSelectedModel,
             HandleTranscriptCommand,
             WriteSessions,

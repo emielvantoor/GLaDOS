@@ -57,15 +57,7 @@ class Program
         provider.GetRequiredService<CurrentChatClientState>().SetOpenAiClient(openAiClient);
 
         await using var webUiReporter = new PotatoWebUiReporter(gladosEndpoint, model);
-        bool allowWebUiInput = string.Equals(
-            Environment.GetEnvironmentVariable("POTATO_WEBUI_ALLOW_INPUT"),
-            "true",
-            StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(
-                Environment.GetEnvironmentVariable("POTATO_WEBUI_ALLOW_INPUT"),
-                "1",
-                StringComparison.OrdinalIgnoreCase);
-        await webUiReporter.StartAsync(allowWebUiInput);
+        await webUiReporter.StartAsync(options.WebUiInputEnabled);
         PotatoConsole.EventSink = webUiReporter;
 
         PotatoConsole.WriteStartupBanner(gladosEndpoint, model);

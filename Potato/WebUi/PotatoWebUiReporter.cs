@@ -14,9 +14,11 @@ internal sealed class PotatoWebUiReporter(Uri gladosEndpoint, string model) : Po
     private readonly Uri eventUri = new(gladosEndpoint, "potato/sessions/events");
     private readonly CancellationTokenSource inputPollingCancellation = new();
     private Task? inputPollingTask;
+    private volatile bool allowInput;
 
     public async Task StartAsync(bool allowInput = false)
     {
+        this.allowInput = allowInput;
         await TryPostAsync(startSessionUri, new PotatoSessionStartPayload(
             sessionId,
             sessionWorkingDirectory,
@@ -26,12 +28,13 @@ internal sealed class PotatoWebUiReporter(Uri gladosEndpoint, string model) : Po
         if (allowInput)
         {
             Record("status", "status", "Web UI input is enabled for this Potato session. CLI input remains authoritative.", collapsed: true);
-            inputPollingTask = PollInputAsync(inputPollingCancellation.Token);
         }
         else
         {
             Record("status", "status", "Web UI is observe-only for this Potato session.", collapsed: true);
         }
+
+        inputPollingTask = PollInputAsync(inputPollingCancellation.Token);
     }
 
     public void Record(string kind, string role, string content, bool collapsed)
@@ -52,8 +55,33 @@ internal sealed class PotatoWebUiReporter(Uri gladosEndpoint, string model) : Po
             collapsed)));
     }
 
-    public bool TryReadInput(out string? input) =>
-        inputChannel.Reader.TryRead(out input);
+    public bool TryReadInput(out string? input)
+    {
+        input = null;
+        return allowInput && inputChannel.Reader.TryRead(out input);
+    }
+
+    public async Task SetWebUiInputEnabledAsync(bool enabled)
+    {
+        allowInput = enabled;
+        if (!enabled)
+        {
+            while (inputChannel.Reader.TryRead(out _))
+            {
+            }
+        }
+
+        await TryPostAsync(eventUri, new PotatoSessionEventPayload(
+            sessionId,
+            sessionWorkingDirectory,
+            Environment.CurrentDirectory,
+            enabled ? "webui-input-enabled" : "webui-input-disabled",
+            "status",
+            enabled
+                ? "Web UI input is enabled for this Potato session."
+                : "Web UI input is disabled for this Potato session.",
+            Collapsed: true));
+    }
 
     public async ValueTask DisposeAsync()
     {

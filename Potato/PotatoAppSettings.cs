@@ -7,6 +7,8 @@ public sealed class PotatoAppSettings
 {
     public bool UseCompiledDefaultPrompts { get; init; }
 
+    public bool WebUiInputEnabled { get; init; }
+
     public string? SelectedModel { get; init; }
 
     public string? ExecutionMode { get; init; }
@@ -15,6 +17,7 @@ public sealed class PotatoAppSettings
 public sealed class PotatoAppSettingsStore
 {
     private const string UseCompiledDefaultPromptsProperty = "UseCompiledDefaultPrompts";
+    private const string WebUiInputEnabledProperty = "WebUiInputEnabled";
     private const string SelectedModelProperty = "SelectedModel";
     private const string ExecutionModeProperty = "ExecutionMode";
     private readonly string path;
@@ -32,6 +35,7 @@ public sealed class PotatoAppSettingsStore
         return new PotatoAppSettings
         {
             UseCompiledDefaultPrompts = GetBool(root, UseCompiledDefaultPromptsProperty),
+            WebUiInputEnabled = GetBool(root, WebUiInputEnabledProperty),
             SelectedModel = GetString(root, SelectedModelProperty),
             ExecutionMode = NormalizeExecutionMode(GetString(root, ExecutionModeProperty))
         };
@@ -41,6 +45,13 @@ public sealed class PotatoAppSettingsStore
     {
         JsonObject root = LoadRoot();
         root[UseCompiledDefaultPromptsProperty] = value;
+        SaveRoot(root);
+    }
+
+    public void SetWebUiInputEnabled(bool value)
+    {
+        JsonObject root = LoadRoot();
+        root[WebUiInputEnabledProperty] = value;
         SaveRoot(root);
     }
 

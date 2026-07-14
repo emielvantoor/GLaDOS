@@ -9,6 +9,7 @@ public sealed record PotatoSessionSummary(
     bool IsProcessing,
     string? CurrentProgress,
     string? CurrentInputPrompt,
+    bool WebUiInputEnabled,
     DateTimeOffset StartedAt,
     DateTimeOffset LastActivityAt,
     int MessageCount);
@@ -22,6 +23,7 @@ public sealed record PotatoSessionDetail(
     bool IsProcessing,
     string? CurrentProgress,
     string? CurrentInputPrompt,
+    bool WebUiInputEnabled,
     DateTimeOffset StartedAt,
     DateTimeOffset LastActivityAt,
     IReadOnlyList<PotatoSessionEvent> Events);
@@ -37,7 +39,8 @@ public sealed record PotatoSessionEvent(
 public sealed record PotatoSessionStartRequest(
     string WorkingDirectory,
     string Model,
-    string? DisplayName);
+    string? DisplayName,
+    string? Mode);
 
 public sealed record PotatoSessionEventRequest(
     string WorkingDirectory,
