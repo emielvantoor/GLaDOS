@@ -12,6 +12,7 @@ class Program
     static async Task Main(string[] args)
     {
         Console.Title = "Potato Code";
+        InitializeWorkingDirectory();
         var appSettingsStore = new PotatoAppSettingsStore(PotatoAppSettingsStore.DefaultPath);
         PotatoAppSettings appSettings = appSettingsStore.Load();
         PotatoRuntimeOptions options = PotatoRuntimeOptions.FromArgs(args, appSettings);
@@ -92,5 +93,63 @@ class Program
         {
             PotatoConsole.EventSink = null;
         }
+    }
+
+    private static void InitializeWorkingDirectory()
+    {
+        string currentDirectory = Environment.CurrentDirectory;
+        string appBaseDirectory = AppContext.BaseDirectory;
+        if (!IsSameOrChildPath(currentDirectory, appBaseDirectory))
+        {
+            return;
+        }
+
+        string? sourceProjectDirectory = FindSourceProjectDirectory(appBaseDirectory);
+        if (sourceProjectDirectory is not null)
+        {
+            Environment.CurrentDirectory = FindGitRepositoryRoot(sourceProjectDirectory) ?? sourceProjectDirectory;
+        }
+    }
+
+    private static string? FindSourceProjectDirectory(string startDirectory)
+    {
+        var directory = new DirectoryInfo(startDirectory);
+        while (directory is not null)
+        {
+            if (File.Exists(Path.Combine(directory.FullName, "Potato.csproj")))
+            {
+                return directory.FullName;
+            }
+
+            directory = directory.Parent;
+        }
+
+        return null;
+    }
+
+    private static string? FindGitRepositoryRoot(string startDirectory)
+    {
+        var directory = new DirectoryInfo(startDirectory);
+        while (directory is not null)
+        {
+            if (Directory.Exists(Path.Combine(directory.FullName, ".git")) ||
+                File.Exists(Path.Combine(directory.FullName, ".git")))
+            {
+                return directory.FullName;
+            }
+
+            directory = directory.Parent;
+        }
+
+        return null;
+    }
+
+    private static bool IsSameOrChildPath(string candidatePath, string parentPath)
+    {
+        string candidate = Path.GetFullPath(candidatePath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        string parent = Path.GetFullPath(parentPath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        return candidate.Equals(parent, StringComparison.OrdinalIgnoreCase) ||
+               candidate.StartsWith(parent + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) ||
+               candidate.StartsWith(parent + Path.AltDirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
     }
 }

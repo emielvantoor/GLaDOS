@@ -129,12 +129,11 @@ public sealed class ProjectMapBuilder
                 FileInfo file = files[index];
                 string relativePath = ToRelativeProjectMapPath(cacheLocation.TargetDirectory, file.FullName);
                 string cacheRelativePath = ToRelativeProjectMapPath(cacheLocation.CacheRootDirectory, file.FullName);
-                string fileHash = await ComputeFileHashAsync(file.FullName, cancellationToken);
-                ProjectMapCacheEntry? cachedEntry = GetValidProjectMapCacheEntry(cache, cacheRelativePath, fileHash, promptHash);
+                ProjectMapCacheEntry? cachedEntry = GetValidProjectMapCacheEntry(cache, cacheRelativePath, file, promptHash);
                 if (cachedEntry is not null)
                 {
                     progress.Update(BuildProjectMapProgressMessage(index + 1, files.Length, relativePath, cached: true));
-                    if (UpdateProjectMapCacheEntry(cache, cacheRelativePath, file, fileHash, promptHash, cachedEntry.Summary))
+                    if (UpdateProjectMapCacheEntry(cache, cacheRelativePath, file, cachedEntry.FileHash, promptHash, cachedEntry.Summary))
                     {
                         SaveProjectMapCache(cacheLocation.CachePath, cache);
                     }
@@ -151,7 +150,7 @@ public sealed class ProjectMapBuilder
                 {
                     LastWriteTimeUtcTicks = file.LastWriteTimeUtc.Ticks,
                     Length = file.Length,
-                    FileHash = fileHash,
+                    FileHash = string.Empty,
                     PromptHash = promptHash,
                     Summary = summary
                 };
@@ -178,11 +177,11 @@ public sealed class ProjectMapBuilder
         string targetDirectory,
         string query,
         int maxResults,
-        IChatClient chatClient,
+        IChatClient? chatClient,
         CancellationToken cancellationToken)
     {
         ProjectMapCacheLocation cacheLocation = GetProjectMapCacheLocation(targetDirectory);
-        await ValidateProjectMapCacheAsync(cacheLocation, cancellationToken);
+        ValidateProjectMapCacheMetadata(cacheLocation);
         maxResults = Math.Clamp(maxResults <= 0 ? DefaultSearchResultLimit : maxResults, 1, 30);
         query = query.Trim();
 
@@ -222,8 +221,7 @@ public sealed class ProjectMapBuilder
             ProjectMapSearchCandidate candidate = candidates[index];
             FileInfo file = candidate.File;
             string cacheRelativePath = ToRelativeProjectMapPath(cacheLocation.CacheRootDirectory, file.FullName);
-            string fileHash = await ComputeFileHashAsync(file.FullName, cancellationToken);
-            ProjectMapCacheEntry? cachedEntry = GetValidProjectMapCacheEntry(cache, cacheRelativePath, fileHash, promptHash);
+            ProjectMapCacheEntry? cachedEntry = GetValidProjectMapCacheEntry(cache, cacheRelativePath, file, promptHash);
             string summary;
             if (cachedEntry is not null)
             {
@@ -233,17 +231,24 @@ public sealed class ProjectMapBuilder
             else
             {
                 progress.Update(BuildProjectMapProgressMessage(index + 1, candidates.Length, candidate.RelativePath, cached: false));
-                string content = await File.ReadAllTextAsync(file.FullName, cancellationToken);
-                summary = await SummarizeProjectFileAsync(candidate.RelativePath, content, chatClient, cancellationToken);
-                cache.Entries[cacheRelativePath] = new ProjectMapCacheEntry
+                if (chatClient is null)
                 {
-                    LastWriteTimeUtcTicks = file.LastWriteTimeUtc.Ticks,
-                    Length = file.Length,
-                    FileHash = fileHash,
-                    PromptHash = promptHash,
-                    Summary = summary
-                };
-                SaveProjectMapCache(cacheLocation.CachePath, cache);
+                    summary = "- Summary not cached yet. Read this file directly if it looks relevant.";
+                }
+                else
+                {
+                    string content = await File.ReadAllTextAsync(file.FullName, cancellationToken);
+                    summary = await SummarizeProjectFileAsync(candidate.RelativePath, content, chatClient, cancellationToken);
+                    cache.Entries[cacheRelativePath] = new ProjectMapCacheEntry
+                    {
+                        LastWriteTimeUtcTicks = file.LastWriteTimeUtc.Ticks,
+                        Length = file.Length,
+                        FileHash = string.Empty,
+                        PromptHash = promptHash,
+                        Summary = summary
+                    };
+                    SaveProjectMapCache(cacheLocation.CachePath, cache);
+                }
             }
 
             AppendProjectMapSummary(builder, candidate.RelativePath, summary);
@@ -418,9 +423,7 @@ public sealed class ProjectMapBuilder
         }
     }
 
-    private static async Task<ProjectMapCacheValidationResult> ValidateProjectMapCacheAsync(
-        ProjectMapCacheLocation cacheLocation,
-        CancellationToken cancellationToken)
+    private static ProjectMapCacheValidationResult ValidateProjectMapCacheMetadata(ProjectMapCacheLocation cacheLocation)
     {
         FileInfo[] files = EnumerateProjectMapFiles(cacheLocation.TargetDirectory)
             .Where(IsProjectMapFile)
@@ -447,7 +450,6 @@ public sealed class ProjectMapBuilder
                 entry.LastWriteTimeUtcTicks != file.LastWriteTimeUtc.Ticks ||
                 entry.Length != file.Length ||
                 !string.Equals(entry.PromptHash, promptHash, StringComparison.Ordinal) ||
-                !string.Equals(entry.FileHash, await ComputeFileHashAsync(file.FullName, cancellationToken), StringComparison.Ordinal) ||
                 string.IsNullOrWhiteSpace(entry.Summary))
             {
                 cache.Entries.Remove(cacheRelativePath);
@@ -468,7 +470,7 @@ public sealed class ProjectMapBuilder
     private static ProjectMapCacheEntry? GetValidProjectMapCacheEntry(
         ProjectMapCache cache,
         string relativePath,
-        string fileHash,
+        FileInfo file,
         string promptHash)
     {
         if (!cache.Entries.TryGetValue(relativePath, out ProjectMapCacheEntry? entry))
@@ -476,7 +478,8 @@ public sealed class ProjectMapBuilder
             return null;
         }
 
-        return string.Equals(entry.FileHash, fileHash, StringComparison.Ordinal) &&
+        return entry.LastWriteTimeUtcTicks == file.LastWriteTimeUtc.Ticks &&
+               entry.Length == file.Length &&
                string.Equals(entry.PromptHash, promptHash, StringComparison.Ordinal) &&
                !string.IsNullOrWhiteSpace(entry.Summary)
             ? entry

@@ -8,22 +8,29 @@ internal sealed class PotatoWebUiReporter(Uri gladosEndpoint, string model) : Po
 {
     private readonly HttpClient httpClient = new();
     private readonly Channel<string> inputChannel = Channel.CreateUnbounded<string>();
+    private readonly string sessionId = Guid.NewGuid().ToString("N");
     private readonly string sessionWorkingDirectory = Environment.CurrentDirectory;
     private readonly Uri startSessionUri = new(gladosEndpoint, "potato/sessions");
     private readonly Uri eventUri = new(gladosEndpoint, "potato/sessions/events");
-    private readonly Uri nextInputUri = new(gladosEndpoint, $"potato/sessions/input/next?workingDirectory={Uri.EscapeDataString(Environment.CurrentDirectory)}");
     private readonly CancellationTokenSource inputPollingCancellation = new();
     private Task? inputPollingTask;
 
     public async Task StartAsync(bool allowInput = false)
     {
         await TryPostAsync(startSessionUri, new PotatoSessionStartPayload(
+            sessionId,
             sessionWorkingDirectory,
             model,
+            allowInput ? "input-enabled" : "observe-only",
             Path.GetFileName(sessionWorkingDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar))));
         if (allowInput)
         {
+            Record("status", "status", "Web UI input is enabled for this Potato session. CLI input remains authoritative.", collapsed: true);
             inputPollingTask = PollInputAsync(inputPollingCancellation.Token);
+        }
+        else
+        {
+            Record("status", "status", "Web UI is observe-only for this Potato session.", collapsed: true);
         }
     }
 
@@ -36,6 +43,7 @@ internal sealed class PotatoWebUiReporter(Uri gladosEndpoint, string model) : Po
 
         string currentWorkingDirectory = Environment.CurrentDirectory;
         _ = Task.Run(() => TryPostAsync(eventUri, new PotatoSessionEventPayload(
+            sessionId,
             sessionWorkingDirectory,
             currentWorkingDirectory,
             kind,
@@ -62,6 +70,7 @@ internal sealed class PotatoWebUiReporter(Uri gladosEndpoint, string model) : Po
         }
 
         await TryPostAsync(eventUri, new PotatoSessionEventPayload(
+            sessionId,
             sessionWorkingDirectory,
             Environment.CurrentDirectory,
             "stopped",
@@ -79,7 +88,7 @@ internal sealed class PotatoWebUiReporter(Uri gladosEndpoint, string model) : Po
         {
             try
             {
-                using HttpResponseMessage response = await httpClient.GetAsync(nextInputUri, cancellationToken);
+                using HttpResponseMessage response = await httpClient.GetAsync(BuildNextInputUri(), cancellationToken);
                 if (response.StatusCode == HttpStatusCode.OK)
                 {
                     InputPayload? payload = await response.Content.ReadFromJsonAsync<InputPayload>(cancellationToken);
@@ -115,9 +124,15 @@ internal sealed class PotatoWebUiReporter(Uri gladosEndpoint, string model) : Po
         }
     }
 
-    private sealed record PotatoSessionStartPayload(string WorkingDirectory, string Model, string? DisplayName);
+    private Uri BuildNextInputUri() =>
+        new(
+            gladosEndpoint,
+            $"potato/sessions/input/next?workingDirectory={Uri.EscapeDataString(Environment.CurrentDirectory)}&sessionId={Uri.EscapeDataString(sessionId)}");
+
+    private sealed record PotatoSessionStartPayload(string SessionId, string WorkingDirectory, string Model, string Mode, string? DisplayName);
 
     private sealed record PotatoSessionEventPayload(
+        string SessionId,
         string WorkingDirectory,
         string CurrentWorkingDirectory,
         string Kind,

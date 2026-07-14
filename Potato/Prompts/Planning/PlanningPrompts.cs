@@ -6,7 +6,7 @@ internal static partial class PromptLibrary
         "planner-system-v3.md",
         """
         You are Potato's deterministic planner. Return valid JSON only.
-        The Workspace context is compact by default and may omit ProjectMap file entries.
+        The Workspace context is compact by default and usually omits ProjectMap file entries.
         Only paths printed after "File:" in Workspace context or Execution observations are indexed file paths.
         Never produce a read task for a file path that is absent from Workspace context and Execution observations.
         When a requested target file is absent, plan discovery or creation instead of reading a guessed path.
@@ -37,11 +37,11 @@ internal static partial class PromptLibrary
         {{DraftPlan}}
 
         Rules:
-        - Translate the Approved draft plan into supported Potato agent tasks. Do not drop draft plan steps unless Execution observations show they are already complete.
+        - Translate the Approved draft plan into the fewest supported Potato agent tasks that can complete the request. Do not drop draft plan steps unless Execution observations show they are already complete.
         - Treat Workspace context as compact workspace metadata plus any explicitly returned ProjectMap File entries.
         - The "Current working folder:" line is the user's current folder relative to ProjectMap root.
         - Only paths printed after "File:" in Workspace context or Execution observations are indexed file paths; ProjectMap root is not a file path prefix to combine with guesses.
-        - If relevant indexed paths are not visible, use search-project-map with focused keywords before planning read, apply-patch, write-code, or write-documentation for existing files.
+        - If relevant indexed paths are not visible, use one search-project-map task with focused keywords before planning read, apply-patch, write-code, or write-documentation for existing files.
         - Do not ask for the complete ProjectMap. Use search-project-map to retrieve a small relevant subset by file name, folder, class, feature, or concept.
         - For a request to list files or directories in the current working folder, use one shell-script task with Argument "ls". Do not answer from Workspace context, because ProjectMap is an indexed subset and may omit ordinary files.
         - If a file path is not listed as a "File:" entry in Workspace context or Execution observations, assume it is not available to read unless an earlier create-file step in this same plan creates that exact path.
@@ -90,6 +90,7 @@ internal static partial class PromptLibrary
         - If an Execution observation says a create-file step failed because the target already exists, do not plan create-file for that path again. For existing Markdown documentation targets, use write-documentation when supported.
         - If an observation contains an architect-refactor blueprint, use it as implementation guidance and continue with concrete create-file, apply-patch, write-code, or write-report steps.
         - If an observation contains a design blueprint, use it as implementation guidance and continue with concrete create-file, apply-patch, write-code, write-documentation, shell-script, or write-report steps. Do not plan another design task for the same open question.
+        - Prefer direct read/search/edit/shell tasks over design, architect-refactor, write-code, or apply-patch tasks that force the model to reinvent known content.
         - Produce a deterministic, linear plan for the executor.
         - Context-gathering actions such as read, inspect-project, search-files, search-file-contents, list-files, list-project-files, and summarize-file-purpose are never sufficient as the final step. Follow them with the requested implementation, review, documentation, shell, or a write-report that answers the user.
         - Every task must contain exactly these properties: Step, Action, Argument, Reason.

@@ -195,17 +195,8 @@ internal sealed class PipelineSession
 
     private async Task HandleUserGoalWithReActAsync(string expandedGoal, CancellationToken cancellationToken)
     {
-        List<AgentTask>? plan = await ReviewPlanAsync(expandedGoal, currentOpenAiClient, cancellationToken);
-        if (plan is null)
-        {
-            string abortedMessage = "Plan was aborted. No ReAct execution was started.";
-            chatHistory.Add(new ChatMessage(ChatRole.Assistant, abortedMessage));
-            PotatoConsole.WriteStatus(abortedMessage);
-            ResetConversationState();
-            return;
-        }
-
-        string finalMessage = await _reActSession.ExecuteAsync(expandedGoal, plan, currentOpenAiClient, cancellationToken);
+        string guidance = _planningService.BuildDirectExecutionGuidance(expandedGoal, Environment.CurrentDirectory);
+        string finalMessage = await _reActSession.ExecuteAsync(expandedGoal, guidance, currentOpenAiClient, cancellationToken);
         chatHistory.Add(new ChatMessage(ChatRole.Assistant, finalMessage));
         PotatoConsole.WriteAgentResponse(finalMessage);
         ResetConversationState();

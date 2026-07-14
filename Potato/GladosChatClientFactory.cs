@@ -18,9 +18,7 @@ internal sealed class GladosChatClientFactory
                 Endpoint = gladosEndpoint
             }).AsIChatClient();
 
-        return new ChatClientBuilder(new PotatoModelCommunicationLogger(openAiClient))
-            .UseFunctionInvocation()
-            .Build();
+        return new PotatoModelCommunicationLogger(openAiClient);
     }
 
 }

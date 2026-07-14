@@ -390,6 +390,8 @@
         if (kind === 'model-exchange') return getPotatoEventStepTitle(event.content) || 'step: model exchange';
         if (kind === 'model-request') return 'Potato model request';
         if (kind === 'model-response') return 'Potato model response';
+        if (kind === 'tool-call') return 'Tool call';
+        if (kind === 'tool-result') return 'Tool result';
         if (kind === 'progress') return `step: ${event.content || 'progress'}`;
         if (kind === 'input') return 'Queued browser input';
         if (kind === 'shortcuts') return 'Potato shortcuts';

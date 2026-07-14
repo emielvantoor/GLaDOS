@@ -1,4 +1,6 @@
 using System.Text;
+using System.ComponentModel;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.AI;
@@ -14,12 +16,12 @@ internal sealed class ReActSession(
     PlanningService planningService)
 {
     private const int MaxReActIterations = 12;
-    private const int MaxToolCallsPerIteration = 4;
+    private const int MaxToolCallsPerIteration = 1;
     private const int MaxConsecutiveInvalidReActResponses = 2;
 
     public async Task<string> ExecuteAsync(
         string goal,
-        IReadOnlyList<AgentTask> plan,
+        string executionGuidance,
         IChatClient chatClient,
         CancellationToken cancellationToken)
     {
@@ -27,7 +29,6 @@ internal sealed class ReActSession(
         int successfulEditsBeforeExecution = agentTools.SuccessfulEditCount;
         int consecutiveInvalidResponses = 0;
         ChatOptions toolOptions = CreateToolOptions();
-        string formattedPlan = FormatTaskList(plan);
         string projectMap = await planningService.BuildProjectMapHeaderAsync(Environment.CurrentDirectory, cancellationToken);
 
         executionMemory.Add("ProjectMap", projectMap);
@@ -37,7 +38,7 @@ internal sealed class ReActSession(
             new(ChatRole.System, PromptLibrary.ReActSystemPrompt),
             new(ChatRole.User, PromptLibrary.BuildReActInitialUserPrompt(
                 goal,
-                formattedPlan,
+                executionGuidance,
                 Environment.CurrentDirectory,
                 projectMap))
         };
@@ -67,7 +68,33 @@ internal sealed class ReActSession(
                 ? "No assistant response was returned."
                 : response.Text.Trim();
 
-            reactHistory.Add(new ChatMessage(ChatRole.Assistant, responseText));
+            IReadOnlyList<FunctionCallContent> functionCalls = GetFunctionCalls(response);
+            if (functionCalls.Count > 0)
+            {
+                FunctionCallContent functionCall = functionCalls[0];
+                reactHistory.Add(new ChatMessage(ChatRole.Assistant, [functionCall]));
+                string functionCallSummary = $"Function call: {functionCall.Name} ({functionCall.CallId})";
+                executionMemory.Add("Assistant ReAct response", functionCallSummary);
+                if (functionCalls.Count > 1)
+                {
+                    executionMemory.Add(
+                        "Ignored extra function calls",
+                        $"Ignored {functionCalls.Count - 1} extra tool call(s) because ReAct permits one tool call per iteration.");
+                }
+
+                string result = await ExecuteFunctionCallAsync(functionCall, cancellationToken);
+                reactHistory.Add(new ChatMessage(
+                    ChatRole.Tool,
+                    [new FunctionResultContent(functionCall.CallId, result)]));
+                await executionMemory.SummarizeLargeUnsummarizedItemsAsync(chatClient, cancellationToken);
+                reactHistory.Add(new ChatMessage(
+                    ChatRole.User,
+                    PromptLibrary.BuildReActObservationUserPrompt(goal, executionGuidance, functionCall.Name, result)));
+                consecutiveInvalidResponses = 0;
+                continue;
+            }
+
+            AddResponseMessages(reactHistory, response, responseText);
             executionMemory.Add("Assistant ReAct response", responseText);
 
             if (IsFinalResponse(responseText))
@@ -92,11 +119,11 @@ internal sealed class ReActSession(
                 string observation = executionMemory.GetRange(memoryItemsBefore, executionMemory.Count, full: true);
                 reactHistory.Add(new ChatMessage(
                     ChatRole.User,
-                    PromptLibrary.BuildReActObservationUserPrompt(goal, formattedPlan, "native tool call", observation)));
+                    PromptLibrary.BuildReActObservationUserPrompt(goal, executionGuidance, "native tool call", observation)));
                 continue;
             }
 
-            if (await TryExecuteTextualActionAsync(responseText, reactHistory, goal, formattedPlan, chatClient, cancellationToken))
+            if (await TryExecuteTextualActionAsync(responseText, reactHistory, goal, executionGuidance, chatClient, cancellationToken))
             {
                 consecutiveInvalidResponses = 0;
                 continue;
@@ -120,7 +147,7 @@ internal sealed class ReActSession(
 
             string retryInstruction = consecutiveInvalidResponses >= MaxConsecutiveInvalidReActResponses
                 ? "The next response must be exactly one available tool call, or FINAL: only if the task is fully complete and verified."
-                : "Continue with one concrete next action from the approved plan.";
+                : "Continue with one concrete next action from the execution guidance.";
 
             reactHistory.Add(new ChatMessage(
                 ChatRole.User,
@@ -130,14 +157,45 @@ internal sealed class ReActSession(
                 Original goal:
                 {goal}
 
-                Approved plan:
-                {formattedPlan}
+                Execution guidance:
+                {executionGuidance}
 
                 Current working directory: {Environment.CurrentDirectory}
                 """));
         }
 
         return $"Stopped after {MaxReActIterations} ReAct iterations without a FINAL response.";
+    }
+
+    private static void AddResponseMessages(List<ChatMessage> reactHistory, ChatResponse response, string fallbackText)
+    {
+        if (response.Messages.Count == 0)
+        {
+            reactHistory.Add(new ChatMessage(ChatRole.Assistant, fallbackText));
+            return;
+        }
+
+        foreach (ChatMessage message in response.Messages)
+        {
+            reactHistory.Add(message);
+        }
+    }
+
+    private static IReadOnlyList<FunctionCallContent> GetFunctionCalls(ChatResponse response)
+    {
+        var functionCalls = new List<FunctionCallContent>();
+        foreach (ChatMessage message in response.Messages)
+        {
+            foreach (AIContent content in message.Contents)
+            {
+                if (content is FunctionCallContent candidate)
+                {
+                    functionCalls.Add(candidate);
+                }
+            }
+        }
+
+        return functionCalls;
     }
 
     private ChatOptions CreateToolOptions() =>
@@ -149,6 +207,7 @@ internal sealed class ReActSession(
                 AIFunctionFactory.Create(agentTools.ReadFileContent),
                 AIFunctionFactory.Create(agentTools.ListFiles),
                 AIFunctionFactory.Create(agentTools.ListProjectFiles),
+                AIFunctionFactory.Create(SearchProjectMapAsync),
                 AIFunctionFactory.Create(agentTools.SearchFiles),
                 AIFunctionFactory.Create(agentTools.SearchFileContents),
                 AIFunctionFactory.Create(agentTools.SummarizeFilePurpose),
@@ -160,6 +219,27 @@ internal sealed class ReActSession(
             ],
             Temperature = 0.0f
         };
+
+    [Description("Searches Potato's cached ProjectMap for likely relevant source, test, documentation, or project files. Use this for targeted repository discovery before exact file reads when the file path is not already known.")]
+    public async Task<string> SearchProjectMapAsync(
+        [Description("Focused search terms such as file name, folder, class, feature, symbol, or concept.")] string query,
+        [Description("Maximum number of matching ProjectMap entries to return. Defaults to 12 and is capped by the runtime.")] int maxResults = 12)
+    {
+        if (!agentTools.TryReserveExternalToolInvocation(nameof(SearchProjectMapAsync), out string rejectionReason))
+        {
+            return agentTools.RejectExternalToolInvocation(nameof(SearchProjectMapAsync), rejectionReason);
+        }
+
+        PotatoConsole.WriteStatus($"Tool call: {nameof(SearchProjectMapAsync)} query={query}");
+        string result = await planningService.SearchProjectMapAsync(
+            Environment.CurrentDirectory,
+            query,
+            maxResults,
+            chatClient: null,
+            agentTools.CurrentCancellationToken);
+        executionMemory.Add(nameof(SearchProjectMapAsync), result);
+        return result;
+    }
 
     private bool RequiresSuccessfulEditBeforeFinal(string goal, int successfulEditsBeforeExecution) =>
         ApprovalPolicy.IsProjectChangeRequest(goal) &&
@@ -193,7 +273,7 @@ internal sealed class ReActSession(
         string responseText,
         List<ChatMessage> reactHistory,
         string goal,
-        string formattedPlan,
+        string executionGuidance,
         IChatClient chatClient,
         CancellationToken cancellationToken)
     {
@@ -211,8 +291,47 @@ internal sealed class ReActSession(
         await executionMemory.SummarizeLargeUnsummarizedItemsAsync(chatClient, cancellationToken);
         reactHistory.Add(new ChatMessage(
             ChatRole.User,
-            PromptLibrary.BuildReActObservationUserPrompt(goal, formattedPlan, toolCall.Name, result)));
+            PromptLibrary.BuildReActObservationUserPrompt(goal, executionGuidance, toolCall.Name, result)));
         return true;
+    }
+
+    private async Task<string> ExecuteFunctionCallAsync(
+        FunctionCallContent functionCall,
+        CancellationToken cancellationToken)
+    {
+        var arguments = new JsonObject();
+        IDictionary<string, object?>? sourceArguments = functionCall.Arguments;
+        if (sourceArguments is not null)
+        {
+            foreach ((string key, object? value) in sourceArguments)
+            {
+                arguments[key] = ConvertArgumentToJsonNode(value);
+            }
+        }
+
+        return await ExecuteTextualToolCallAsync(
+            new TextualToolCall(functionCall.Name, arguments),
+            cancellationToken);
+    }
+
+    private static JsonNode? ConvertArgumentToJsonNode(object? value)
+    {
+        if (value is null)
+        {
+            return null;
+        }
+
+        if (value is JsonNode node)
+        {
+            return node.DeepClone();
+        }
+
+        if (value is JsonElement element)
+        {
+            return JsonNode.Parse(element.GetRawText());
+        }
+
+        return JsonSerializer.SerializeToNode(value);
     }
 
     private async Task<string> ExecuteTextualToolCallAsync(TextualToolCall toolCall, CancellationToken cancellationToken)
@@ -243,6 +362,14 @@ internal sealed class ReActSession(
                         GetStringArgument(toolCall.Arguments, "directoryPath") ??
                         GetStringArgument(toolCall.Arguments, "directory_path") ??
                         GetStringArgument(toolCall.Arguments, "path")),
+                    nameof(SearchProjectMapAsync) => await SearchProjectMapAsync(
+                        GetStringArgument(toolCall.Arguments, "query") ??
+                        GetStringArgument(toolCall.Arguments, "searchTerms") ??
+                        GetStringArgument(toolCall.Arguments, "search_terms") ??
+                        string.Empty,
+                        GetIntArgument(toolCall.Arguments, "maxResults") ??
+                        GetIntArgument(toolCall.Arguments, "max_results") ??
+                        12),
                     nameof(AgentTools.SearchFiles) => agentTools.SearchFiles(
                         GetStringArgument(toolCall.Arguments, "searchTerms") ??
                         GetStringArgument(toolCall.Arguments, "search_terms") ??
@@ -540,11 +667,14 @@ internal sealed class ReActSession(
         string normalized = name.Trim();
         return normalized switch
         {
-            "SearchReplace" or "search_replace" or "apply_search_replace" or "replace_file" => nameof(AgentTools.ApplySearchReplaceAsync),
+            "ApplySearchReplace" or "SearchReplace" or "search_replace" or "apply_search_replace" or "replace_file" => nameof(AgentTools.ApplySearchReplaceAsync),
             "CreateFile" or "create_file" or "write_new_file" or "new_file" => nameof(AgentTools.CreateFileAsync),
+            "ApplyDiffPatch" or "apply_diff_patch" or "diff_patch" => nameof(AgentTools.ApplyDiffPatchAsync),
+            "ExecuteShellCommand" or "execute_shell_command" or "shell" => nameof(AgentTools.ExecuteShellCommandAsync),
             "read_file" => nameof(AgentTools.ReadFileContent),
             "list_files" => nameof(AgentTools.ListFiles),
             "ListProjects" or "list_projects" or "list_project_files" or "project_inventory" => nameof(AgentTools.ListProjectFiles),
+            "SearchProjectMap" or "search_project_map" or "project_map_search" or "search-project-map" => nameof(SearchProjectMapAsync),
             "SearchFileContents" or "SearchInFiles" or "search_in_files" or "search_file_contents" or "grep" => nameof(AgentTools.SearchFileContents),
             "search_files" or "find_files" or "search_file_names" or "find_file_names" => nameof(AgentTools.SearchFiles),
             _ => normalized

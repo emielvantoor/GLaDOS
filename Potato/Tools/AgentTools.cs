@@ -56,6 +56,12 @@ public class AgentTools(ExecutionMemory memory, CurrentChatClientState chatClien
         }
     }
 
+    internal bool TryReserveExternalToolInvocation(string toolName, out string rejectionReason) =>
+        TryReserveToolInvocation(toolName, out rejectionReason);
+
+    internal string RejectExternalToolInvocation(string toolName, string reason) =>
+        RejectToolInvocation(toolName, reason);
+
     private bool TryReserveToolInvocation(string toolName, out string rejectionReason)
     {
         CurrentCancellationToken.ThrowIfCancellationRequested();
@@ -1615,6 +1621,12 @@ public class AgentTools(ExecutionMemory memory, CurrentChatClientState chatClien
         Console.ForegroundColor = waitsForResult ? ConsoleColor.DarkGray : ConsoleColor.Green;
         Console.WriteLine($"{prefix} {label}{displayPath}{displayQuery}");
         Console.ResetColor();
+
+        PotatoConsole.EventSink?.Record(
+            "tool-call",
+            "tool",
+            FormatToolEventContent(label, displayPath, displayQuery, parameters),
+            collapsed: true);
     }
 
     private static string? GetParameterValue(IReadOnlyList<(string Name, string Value)> parameters, string name)
@@ -1636,6 +1648,31 @@ public class AgentTools(ExecutionMemory memory, CurrentChatClientState chatClien
         Console.ForegroundColor = success ? ConsoleColor.Green : ConsoleColor.Red;
         Console.WriteLine($"{(success ? "✓" : "x")} {label}{displayDetail}");
         Console.ResetColor();
+
+        PotatoConsole.EventSink?.Record(
+            "tool-result",
+            "tool",
+            $"{(success ? "Success" : "Failed")}: {label}{displayDetail}",
+            collapsed: true);
+    }
+
+    private static string FormatToolEventContent(
+        string label,
+        string displayPath,
+        string displayQuery,
+        IReadOnlyList<(string Name, string Value)> parameters)
+    {
+        var builder = new StringBuilder();
+        builder.AppendLine($"{label}{displayPath}{displayQuery}".TrimEnd());
+        foreach ((string name, string value) in parameters)
+        {
+            if (!string.IsNullOrWhiteSpace(value))
+            {
+                builder.AppendLine($"{name}: {value}");
+            }
+        }
+
+        return builder.ToString().TrimEnd();
     }
 
     private string StoreAndReturn(string source, string result)

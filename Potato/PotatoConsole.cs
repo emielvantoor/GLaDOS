@@ -220,7 +220,7 @@ internal static class PotatoConsole
             while (true)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                if (TryReadWebInput(out string? webInput))
+                if (buffer.Count == 0 && TryReadWebInput(out string? webInput))
                 {
                     MoveCursorToInputLineEnd(inputTop);
                     Console.WriteLine();
@@ -1641,7 +1641,7 @@ internal static class PotatoConsole
         private string message;
         private string joke;
         private readonly Stopwatch stopwatch = Stopwatch.StartNew();
-        private readonly int progressTop;
+        private int progressTop;
         private readonly int reservedLines = 2;
         private readonly string? previousProgressMessage;
 
@@ -1690,6 +1690,9 @@ internal static class PotatoConsole
             {
                 if (!disposed)
                 {
+                    Console.WriteLine();
+                    Console.WriteLine();
+                    progressTop = Math.Max(0, Console.CursorTop - reservedLines);
                     paused = false;
                 }
             }
