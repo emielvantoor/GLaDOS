@@ -9,11 +9,6 @@ public class WriteReportTask : AgentTaskBase, IAgentTask
 {
     protected override string Name { get; } = "write-report";
 
-    public override IReadOnlyList<string> PlanningGuidance =>
-    [
-        "Use write-report when the user should receive findings or a summary."
-    ];
-
     public async Task<string> ExecuteTaskAsync(
         string goal,
         AgentTask task,

@@ -9,11 +9,6 @@ public class CodeReviewTask : AgentTaskBase, IAgentTask
 {
     protected override string Name { get; } = "code_review";
 
-    public override IReadOnlyList<string> PlanningGuidance =>
-    [
-        "Use code-review only after reading the file that should be reviewed."
-    ];
-
     public async Task<string> ExecuteTaskAsync(
         string goal,
         AgentTask task,

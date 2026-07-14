@@ -10,14 +10,6 @@ public class ApplyPatchTask(AgentTools agentTools) : AgentTaskBase, IAgentTask
 {
     protected override string Name { get; } = "apply-patch";
 
-    public override IReadOnlyList<string> PlanningGuidance =>
-    [
-        $"Use {Name} only after reading the file that should be changed.",
-        $"When reading another file only as a reference, read the reference first and then read the target file immediately before {Name}.",
-        $"For {Name}, put the edit target and instructions in Argument using this format: Target file: <exact path from Workspace context or prior create-file>\nInstructions: <concrete edit instructions>.",
-        $"Never use {Name} to edit a file that was described as a reference."
-    ];
-    
     public async Task<string> ExecuteTaskAsync(string goal,
         AgentTask task,
         ExecutorContext context,

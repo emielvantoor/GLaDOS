@@ -175,8 +175,6 @@ public class GLaDOSAgent
 
     private static string CleanAssistantText(IAgentProtocol protocol, string response)
     {
-        return protocol.SupportsThinking
-            ? GLaDOSProtocol.StripThinking(response)
-            : response.Trim();
+        return protocol.CleanResponse(response);
     }
 }

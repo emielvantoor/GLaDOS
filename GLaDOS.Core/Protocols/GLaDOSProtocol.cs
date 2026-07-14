@@ -91,6 +91,11 @@ public class GLaDOSProtocol : IAgentProtocol
         return $"<tool_response name=\"{toolCall.ToolName}\">\n{toolResult}\n</tool_response>\nUse this tool result for the next step. Do not emit another tool call unless more data is required.";
     }
 
+    public string CleanResponse(string response)
+    {
+        return StripThinking(response);
+    }
+
     public static string StripThinking(string response)
     {
         return Regex.Replace(response, @"<think>[\s\S]*?</think>", "").Trim();

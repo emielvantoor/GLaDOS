@@ -8,8 +8,6 @@ namespace Potato.Session;
 
 public sealed class PlanningArtifactGenerator
 {
-    private const int MaxDraftPlanAttempts = 5;
-
     public async Task<string> GeneratePlanningSpecAsync(
         string goal,
         string workspacePlanningContext,
@@ -41,37 +39,13 @@ public sealed class PlanningArtifactGenerator
         IChatClient chatClient,
         CancellationToken cancellationToken)
     {
-        var draftFeedback = new List<string>();
-        string latestDraftPlan = string.Empty;
-        for (int attempt = 1; attempt <= MaxDraftPlanAttempts; attempt++)
-        {
-            latestDraftPlan = await GenerateDraftPlanAsync(
-                goal,
-                planningSpec,
-                workspaceContext,
-                FormatDraftFeedback(draftFeedback),
-                chatClient,
-                cancellationToken);
-
-            PlanCompletenessReview review = await ReviewDraftPlanAsync(
-                planningSpec,
-                latestDraftPlan,
-                chatClient,
-                cancellationToken);
-            if (review.IsComplete)
-            {
-                return latestDraftPlan;
-            }
-
-            string feedback = string.IsNullOrWhiteSpace(review.Feedback)
-                ? "Draft plan does not satisfy the derived implementation spec."
-                : review.Feedback.Trim();
-            draftFeedback.Add(feedback);
-            PotatoConsole.WriteStatus($"Draft plan review failed: {feedback}");
-        }
-
-        throw new InvalidOperationException(
-            $"Planner could not produce a complete draft plan after {MaxDraftPlanAttempts} attempts: {draftFeedback.LastOrDefault() ?? latestDraftPlan}");
+        return await GenerateDraftPlanAsync(
+            goal,
+            planningSpec,
+            workspaceContext,
+            "(none)",
+            chatClient,
+            cancellationToken);
     }
 
     private static async Task<string> GenerateDraftPlanAsync(

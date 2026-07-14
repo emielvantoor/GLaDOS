@@ -10,11 +10,6 @@ public class ReadFileTask(AgentTools agentTools) : AgentTaskBase, IAgentTask
 {
     protected override string Name { get; } = "read";
 
-    public override IReadOnlyList<string> PlanningGuidance =>
-    [
-        "Use read only with an exact file path from Workspace context; never use read for a guessed, implied, or not-yet-existing path."
-    ];
-
     public Task<string> ExecuteTaskAsync(string goal, AgentTask task, ExecutorContext context,
         IReadOnlyList<TaskObservation> observations,
         IChatClient chatClient, CancellationToken cancellationToken)

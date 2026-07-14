@@ -17,5 +17,7 @@ public interface IAgentProtocol
         AgentToolCall toolCall,
         string toolResult);
 
+    string CleanResponse(string response);
+
     bool SupportsThinking { get; }
 }

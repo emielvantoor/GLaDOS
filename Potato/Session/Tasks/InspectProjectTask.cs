@@ -10,12 +10,6 @@ public class InspectProjectTask(AgentTools agentTools) : AgentTaskBase, IAgentTa
 {
     protected override string Name { get; } = "inspect-project";
 
-    public override IReadOnlyList<string> PlanningGuidance =>
-    [
-        "Use inspect-project for read-only project or folder overview requests before choosing specific files to read.",
-        "Use inspect-project with '.' when the user asks to inspect the current project or repository."
-    ];
-
     public Task<string> ExecuteTaskAsync(
         string goal,
         AgentTask task,

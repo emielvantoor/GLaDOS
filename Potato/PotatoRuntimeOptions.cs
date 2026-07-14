@@ -6,7 +6,7 @@ public sealed class PotatoRuntimeOptions
 
     public bool UseCompiledDefaultPrompts { get; init; }
 
-    public string ExecutionMode { get; init; } = "pipeline";
+    public string ExecutionMode { get; init; } = "react";
 
     public HashSet<string> AlwaysAllowedPermissionKeys { get; } = new(StringComparer.Ordinal);
 
@@ -16,7 +16,7 @@ public sealed class PotatoRuntimeOptions
         {
             PromptDirectory = GetPromptDirectory(args),
             UseCompiledDefaultPrompts = appSettings.UseCompiledDefaultPrompts,
-            ExecutionMode = appSettings.ExecutionMode ?? "pipeline"
+            ExecutionMode = appSettings.ExecutionMode ?? "react"
         };
     }
 

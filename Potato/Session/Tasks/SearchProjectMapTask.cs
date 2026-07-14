@@ -8,14 +8,6 @@ public class SearchProjectMapTask(ProjectMapBuilder projectMapBuilder) : AgentTa
 {
     protected override string Name { get; } = "search-project-map";
 
-    public override IReadOnlyList<string> PlanningGuidance =>
-    [
-        "Use search-project-map when the compact Workspace context does not list the file needed for a read, edit, documentation, or architecture task.",
-        "Use search-project-map before read when the user names a file, class, feature, folder, or concept and the exact indexed path is not already known.",
-        "For search-project-map, put a focused query in Argument, optionally using this format: Query: <keywords, file name, class, feature, or folder>\nMax results: <1-30>.",
-        "After search-project-map returns File entries, plan read or edit tasks only for exact paths returned by that search result."
-    ];
-
     public async Task<string> ExecuteTaskAsync(
         string goal,
         AgentTask task,

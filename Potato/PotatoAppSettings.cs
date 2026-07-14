@@ -54,7 +54,7 @@ public sealed class PotatoAppSettingsStore
     public void SetExecutionMode(string mode)
     {
         JsonObject root = LoadRoot();
-        root[ExecutionModeProperty] = NormalizeExecutionMode(mode) ?? "pipeline";
+        root[ExecutionModeProperty] = NormalizeExecutionMode(mode) ?? "react";
         SaveRoot(root);
     }
 
@@ -134,7 +134,7 @@ public sealed class PotatoAppSettingsStore
         {
             "react" or "re-act" or "loop" => "react",
             "pipeline" or "plan" or "deterministic" => "pipeline",
-            _ => null
+            _ => "react"
         };
     }
 }

@@ -12,7 +12,7 @@ public sealed class PlannerTaskGenerator(
     IEnumerable<IAgentTask> agentTasks,
     PlanTaskNormalizer taskNormalizer)
 {
-    private const int MaxPlannerRepairAttempts = 10;
+    private const int MaxPlannerRepairAttempts = 3;
 
     public async Task<List<AgentTask>> GenerateTaskListAsync(
         string goal,
@@ -25,7 +25,6 @@ public sealed class PlannerTaskGenerator(
         CancellationToken cancellationToken)
     {
         IReadOnlyList<string> supportedActions = GetSupportedActions();
-        IReadOnlyList<string> planningGuidance = GetPlanningGuidance();
         string executionObservations = observations.FormatObservations();
         Exception? lastPlanningError = null;
         var plannerRepairMessages = new List<string>();
@@ -41,7 +40,6 @@ public sealed class PlannerTaskGenerator(
                     planningSpec,
                     draftPlan,
                     supportedActions,
-                    planningGuidance,
                     executionObservations))
             };
 
@@ -115,11 +113,4 @@ public sealed class PlannerTaskGenerator(
             .OrderBy(action => action, StringComparer.OrdinalIgnoreCase)
             .ToArray();
 
-    private IReadOnlyList<string> GetPlanningGuidance() =>
-        agentTasks
-            .OrderBy(task => task.ActionName, StringComparer.OrdinalIgnoreCase)
-            .SelectMany(task => task.PlanningGuidance)
-            .Where(guidance => !string.IsNullOrWhiteSpace(guidance))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToArray();
 }

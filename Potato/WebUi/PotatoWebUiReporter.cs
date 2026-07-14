@@ -15,13 +15,16 @@ internal sealed class PotatoWebUiReporter(Uri gladosEndpoint, string model) : Po
     private readonly CancellationTokenSource inputPollingCancellation = new();
     private Task? inputPollingTask;
 
-    public async Task StartAsync()
+    public async Task StartAsync(bool allowInput = false)
     {
         await TryPostAsync(startSessionUri, new PotatoSessionStartPayload(
             sessionWorkingDirectory,
             model,
             Path.GetFileName(sessionWorkingDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar))));
-        inputPollingTask = PollInputAsync(inputPollingCancellation.Token);
+        if (allowInput)
+        {
+            inputPollingTask = PollInputAsync(inputPollingCancellation.Token);
+        }
     }
 
     public void Record(string kind, string role, string content, bool collapsed)

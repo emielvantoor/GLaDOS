@@ -485,9 +485,9 @@ internal sealed class PipelineSession
     private static ExecutionMode ParseExecutionMode(string? mode)
     {
         string normalized = mode?.Trim().ToLowerInvariant() ?? string.Empty;
-        return normalized is "react" or "re-act" or "loop"
-            ? ExecutionMode.ReAct
-            : ExecutionMode.Pipeline;
+        return normalized is "pipeline" or "plan" or "deterministic"
+            ? ExecutionMode.Pipeline
+            : ExecutionMode.ReAct;
     }
 
     private void EnsureCurrentSession(string firstUserInput)

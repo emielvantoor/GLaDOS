@@ -9,13 +9,6 @@ public class ArchitectRefactorTask : AgentTaskBase, IAgentTask
 {
     protected override string Name { get; } = "architect-refactor";
 
-    public override IReadOnlyList<string> PlanningGuidance =>
-    [
-        "Use architect-refactor to think about complex architectural changes, design patterns, or multi-method refactoring.",
-        "This task does NOT modify files directly; it generates a blueprint.",
-        "Always follow this task with a patch or write task to actually apply the planned changes."
-    ];
-
     public async Task<string> ExecuteTaskAsync(
         string goal,
         AgentTask task,

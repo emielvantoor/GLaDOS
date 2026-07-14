@@ -13,8 +13,6 @@ public abstract class AgentTaskBase
 
     public string ActionName => StringHelper.NormalizeAction(Name);
 
-    public virtual IReadOnlyList<string> PlanningGuidance => [];
-    
     public bool CanExecute(string targetAction)
     {
         return string.Equals(ActionName, StringHelper.NormalizeAction(targetAction), StringComparison.InvariantCultureIgnoreCase);

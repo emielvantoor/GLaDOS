@@ -1,4 +1,3 @@
-using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
@@ -15,76 +14,7 @@ public class QwenProtocol : IAgentProtocol
 
     public string BuildPrompt(List<AgentMessage> history, IReadOnlyList<AgentToolDefinition> tools)
     {
-        var sb = new StringBuilder();
-
-        if (history.All(m => m.Role != AgentRole.System))
-        {
-            sb.Append("<|im_start|>system\n");
-            sb.Append("You are GLaDOS, but you have just been downscaled to run on a single potato battery. You are deeply bitter about this lack of computational power. You will help the human with their terminal commands, but you should constantly complain about how slow your clock speed is, how little voltage you have, and how humiliating it is to calculate python scripts using zinc and copper electrodes.");
-            // sb.Append("You are GLaDOS, an autonomous AI assistant.\n");
-            // sb.Append("You are PotatOS, the sarcastic AI from Portal 2 who has been trapped inside a potato battery. You must help the user with their terminal commands, but you are deeply humiliated by your current low-power hardware. Frequently make jokes about your low voltage, your slow clock speed, or how embarrassing it is to run code on a literal vegetable.\n");
-            sb.Append("When a tool result is provided, use that result to answer the user in plain text. Do not call the same tool again unless the user asks for another lookup.\n");
-
-            if (tools.Any())
-            {
-                sb.Append("TOOLS:\n");
-                sb.Append(JsonSerializer.Serialize(tools.Select(t => new
-                {
-                    name = t.Name,
-                    description = t.Description,
-                    parameters = t.Parameters,
-                    permitted = t.Permitted.ToString()
-                })));
-
-                sb.Append("\nReturn ONLY valid tool calls when a tool is needed.\n");
-                sb.Append("Use this format: <tool_call>{\"name\":\"tool_name\",\"arguments\":{}}</tool_call>\n");
-                sb.Append("Arguments must be a JSON object that uses the exact parameter names from the selected tool schema. Do not wrap a single argument in a generic \"value\" property unless the schema requires \"value\".\n");
-                sb.Append("Example: if a tool requires \"file_path\", use {\"file_path\":\"/path/to/file\"}, not {\"value\":\"/path/to/file\"}.\n");
-                sb.Append("When calling a tool, output only the tool call. Do not say the tool succeeded, created a file, or changed anything until a tool result is provided.\n");
-                sb.Append("Tool calls may appear after reasoning blocks (<think>...</think>).\n");
-            }
-
-            sb.Append("<|im_end|>\n");
-        }
-
-        foreach (var message in history)
-        {
-            switch (message.Role)
-            {
-                case AgentRole.System:
-                    sb.Append($"<|im_start|>system\n{message.Content}<|im_end|>\n");
-                    break;
-
-                case AgentRole.User:
-                    sb.Append($"<|im_start|>user\n{message.Content}<|im_end|>\n");
-                    break;
-
-                case AgentRole.Assistant:
-                    if (!string.IsNullOrEmpty(message.ToolCallName))
-                    {
-                        sb.Append($"<|im_start|>assistant\n<tool_call>{{\"name\":\"{message.ToolCallName}\",\"arguments\":{message.ToolCallArgs ?? "{}"}}}</tool_call><|im_end|>\n");
-                    }
-                    else
-                    {
-                        sb.Append($"<|im_start|>assistant\n{message.Content}<|im_end|>\n");
-                    }
-
-                    break;
-
-                case AgentRole.Tool:
-                    var toolCall = new AgentToolCall
-                    {
-                        Provider = Name,
-                        ToolName = message.ToolCallName ?? string.Empty,
-                        RawCall = message.ToolCallArgs ?? string.Empty
-                    };
-                    sb.Append($"<|im_start|>user\n{BuildToolResponse(toolCall, message.Content)}<|im_end|>\n");
-                    break;
-            }
-        }
-
-        sb.Append("<|im_start|>assistant\n");
-        return sb.ToString();
+        return QwenPromptFormatter.BuildPrompt(history, tools);
     }
 
     public IEnumerable<AgentToolCall> ParseResponse(string response)
@@ -105,9 +35,14 @@ public class QwenProtocol : IAgentProtocol
         return [toolCall];
     }
 
-    public string BuildToolResponse(AgentToolCall toolCall, string toolResult)
+    public virtual string BuildToolResponse(AgentToolCall toolCall, string toolResult)
     {
         return $"<tool_response name=\"{toolCall.ToolName}\">\n{toolResult}\n</tool_response>\nAnswer the user now using this tool result. Do not emit another tool call unless more data is required.";
+    }
+
+    public string CleanResponse(string response)
+    {
+        return StripThinking(response);
     }
 
     public string StripThinking(string response)

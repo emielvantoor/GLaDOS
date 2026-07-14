@@ -95,7 +95,6 @@ internal static partial class PromptLibrary
         - Every task must contain exactly these properties: Step, Action, Argument, Reason.
         - Step must be a sequential integer starting at 1.
         - Action must be one of the supported actions listed above.
-        {{PlanningGuidance}}
 
         Example:
         [
@@ -258,7 +257,6 @@ internal static partial class PromptLibrary
         string planningSpec,
         string draftPlan,
         IReadOnlyCollection<string> supportedActions,
-        IReadOnlyCollection<string> planningGuidance,
         string executionObservations) =>
         Render(PlannerUser, new Dictionary<string, string>
         {
@@ -267,8 +265,7 @@ internal static partial class PromptLibrary
             ["WorkspaceContext"] = workspaceContext,
             ["PlanningSpec"] = planningSpec,
             ["DraftPlan"] = draftPlan,
-            ["SupportedActions"] = BuildSupportedActionList(supportedActions),
-            ["PlanningGuidance"] = BuildPlanningGuidance(planningGuidance)
+            ["SupportedActions"] = BuildSupportedActionList(supportedActions)
         });
 
     public static string BuildPlanningSpecUserPrompt(
@@ -319,7 +316,4 @@ internal static partial class PromptLibrary
 
     private static string BuildSupportedActionList(IReadOnlyCollection<string> supportedActions) =>
         string.Join(Environment.NewLine, supportedActions.Select(action => $"- {action}"));
-
-    private static string BuildPlanningGuidance(IReadOnlyCollection<string> planningGuidance) =>
-        string.Join(Environment.NewLine, planningGuidance.Select(guidance => $"- {guidance}"));
 }

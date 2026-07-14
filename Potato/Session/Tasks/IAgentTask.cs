@@ -8,8 +8,6 @@ public interface IAgentTask
 {
     string ActionName { get; }
 
-    IReadOnlyList<string> PlanningGuidance { get; }
-
     bool CanExecute(string targetAction);
 
     Task<string> ExecuteTaskAsync(

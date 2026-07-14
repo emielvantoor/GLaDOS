@@ -163,15 +163,15 @@ public sealed class ProjectMapBuilder
         return builder.ToString();
     }
 
-    public async Task<string> BuildProjectMapHeaderAsync(string targetDirectory, CancellationToken cancellationToken)
+    public Task<string> BuildProjectMapHeaderAsync(string targetDirectory, CancellationToken cancellationToken)
     {
         ProjectMapCacheLocation cacheLocation = GetProjectMapCacheLocation(targetDirectory);
-        ProjectMapCacheValidationResult validationResult = await ValidateProjectMapCacheAsync(cacheLocation, cancellationToken);
+        ProjectMapCache cache = LoadProjectMapCache(cacheLocation.CachePath);
         var builder = new StringBuilder();
         builder.AppendLine($"ProjectMap root: {cacheLocation.TargetDirectory}");
-        builder.AppendLine($"ProjectMap cache: {validationResult.ValidEntries} valid, {validationResult.RemovedEntries} stale/removed.");
-        builder.AppendLine("ProjectMap entries are not included by default. Use search-project-map to request relevant indexed files.");
-        return builder.ToString();
+        builder.AppendLine($"ProjectMap cache: {cache.Entries.Count} cached entries.");
+        builder.AppendLine("ProjectMap entries are validated lazily during build and search.");
+        return Task.FromResult(builder.ToString());
     }
 
     public async Task<string> SearchProjectMapAsync(

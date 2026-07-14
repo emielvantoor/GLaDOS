@@ -12,7 +12,7 @@ public class OpenAIProtocol : IAgentProtocol
 
     public string BuildPrompt(List<AgentMessage> history, IReadOnlyList<AgentToolDefinition> tools)
     {
-        return new QwenProtocol().BuildPrompt(history, tools);
+        return QwenPromptFormatter.BuildPrompt(history, tools);
     }
 
     public IEnumerable<AgentToolCall> ParseResponse(string response)
@@ -48,6 +48,11 @@ public class OpenAIProtocol : IAgentProtocol
     public string BuildToolResponse(AgentToolCall toolCall, string toolResult)
     {
         return toolResult;
+    }
+
+    public string CleanResponse(string response)
+    {
+        return response.Trim();
     }
 
     private static JsonNode NormalizeArguments(JsonNode? arguments)
