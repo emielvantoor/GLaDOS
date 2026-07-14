@@ -442,7 +442,7 @@ public static class OpenAiEndpoints
     {
         if (request.Messages.Any(message =>
                 string.Equals(message.Role, "system", StringComparison.OrdinalIgnoreCase) &&
-                message.Content?.Contains("You are PotatOS", StringComparison.Ordinal) == true))
+                message.Content?.Contains("You are Potato", StringComparison.Ordinal) == true))
         {
             return true;
         }

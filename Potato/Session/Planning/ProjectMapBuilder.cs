@@ -163,11 +163,13 @@ public sealed class ProjectMapBuilder
         return builder.ToString();
     }
 
-    public string BuildProjectMapHeader(string targetDirectory)
+    public async Task<string> BuildProjectMapHeaderAsync(string targetDirectory, CancellationToken cancellationToken)
     {
         ProjectMapCacheLocation cacheLocation = GetProjectMapCacheLocation(targetDirectory);
+        ProjectMapCacheValidationResult validationResult = await ValidateProjectMapCacheAsync(cacheLocation, cancellationToken);
         var builder = new StringBuilder();
         builder.AppendLine($"ProjectMap root: {cacheLocation.TargetDirectory}");
+        builder.AppendLine($"ProjectMap cache: {validationResult.ValidEntries} valid, {validationResult.RemovedEntries} stale/removed.");
         builder.AppendLine("ProjectMap entries are not included by default. Use search-project-map to request relevant indexed files.");
         return builder.ToString();
     }
@@ -180,6 +182,7 @@ public sealed class ProjectMapBuilder
         CancellationToken cancellationToken)
     {
         ProjectMapCacheLocation cacheLocation = GetProjectMapCacheLocation(targetDirectory);
+        await ValidateProjectMapCacheAsync(cacheLocation, cancellationToken);
         maxResults = Math.Clamp(maxResults <= 0 ? DefaultSearchResultLimit : maxResults, 1, 30);
         query = query.Trim();
 
@@ -415,6 +418,53 @@ public sealed class ProjectMapBuilder
         }
     }
 
+    private static async Task<ProjectMapCacheValidationResult> ValidateProjectMapCacheAsync(
+        ProjectMapCacheLocation cacheLocation,
+        CancellationToken cancellationToken)
+    {
+        FileInfo[] files = EnumerateProjectMapFiles(cacheLocation.TargetDirectory)
+            .Where(IsProjectMapFile)
+            .ToArray();
+        var currentFilesByCachePath = files.ToDictionary(
+            file => ToRelativeProjectMapPath(cacheLocation.CacheRootDirectory, file.FullName),
+            StringComparer.OrdinalIgnoreCase);
+
+        ProjectMapCache cache = LoadProjectMapCache(cacheLocation.CachePath);
+        string promptHash = ComputeHash(Prompts.PromptLibrary.BuildProjectMapCacheKey);
+        int originalEntryCount = cache.Entries.Count;
+
+        var currentRelativePaths = currentFilesByCachePath.Keys.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        bool changed = PruneDeletedProjectMapEntries(cache, currentRelativePaths, cacheLocation.CachePrunePathPrefix);
+
+        foreach ((string cacheRelativePath, ProjectMapCacheEntry entry) in cache.Entries.ToArray())
+        {
+            if (!IsPathInCachePruneScope(cacheRelativePath, cacheLocation.CachePrunePathPrefix))
+            {
+                continue;
+            }
+
+            if (!currentFilesByCachePath.TryGetValue(cacheRelativePath, out FileInfo? file) ||
+                entry.LastWriteTimeUtcTicks != file.LastWriteTimeUtc.Ticks ||
+                entry.Length != file.Length ||
+                !string.Equals(entry.PromptHash, promptHash, StringComparison.Ordinal) ||
+                !string.Equals(entry.FileHash, await ComputeFileHashAsync(file.FullName, cancellationToken), StringComparison.Ordinal) ||
+                string.IsNullOrWhiteSpace(entry.Summary))
+            {
+                cache.Entries.Remove(cacheRelativePath);
+                changed = true;
+            }
+        }
+
+        if (changed)
+        {
+            SaveProjectMapCache(cacheLocation.CachePath, cache);
+        }
+
+        return new ProjectMapCacheValidationResult(
+            cache.Entries.Count(path => IsPathInCachePruneScope(path.Key, cacheLocation.CachePrunePathPrefix)),
+            originalEntryCount - cache.Entries.Count);
+    }
+
     private static ProjectMapCacheEntry? GetValidProjectMapCacheEntry(
         ProjectMapCache cache,
         string relativePath,
@@ -591,6 +641,8 @@ public sealed class ProjectMapBuilder
         string? CachePrunePathPrefix);
 
     private sealed record ProjectMapSearchCandidate(FileInfo File, string RelativePath, int Score);
+
+    private sealed record ProjectMapCacheValidationResult(int ValidEntries, int RemovedEntries);
 
     private sealed class ProjectMapCache
     {

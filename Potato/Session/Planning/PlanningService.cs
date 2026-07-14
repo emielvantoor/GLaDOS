@@ -18,7 +18,7 @@ public class PlanningService(
         IChatClient chatClient,
         CancellationToken cancellationToken)
     {
-        string workspaceContext = projectMapBuilder.BuildProjectMapHeader(Environment.CurrentDirectory);
+        string workspaceContext = await projectMapBuilder.BuildProjectMapHeaderAsync(Environment.CurrentDirectory, cancellationToken);
         string workspacePlanningContext = ProjectMapIndexFormatter.BuildWorkspacePlanningContext(
             workspaceContext,
             Environment.CurrentDirectory);
@@ -51,8 +51,8 @@ public class PlanningService(
         CancellationToken cancellationToken) =>
         projectMapBuilder.BuildProjectMapAsync(targetDirectory, chatClient, cancellationToken);
 
-    public string BuildProjectMapHeader(string targetDirectory) =>
-        projectMapBuilder.BuildProjectMapHeader(targetDirectory);
+    public Task<string> BuildProjectMapHeaderAsync(string targetDirectory, CancellationToken cancellationToken) =>
+        projectMapBuilder.BuildProjectMapHeaderAsync(targetDirectory, cancellationToken);
 
     public Task<string> SearchProjectMapAsync(
         string targetDirectory,

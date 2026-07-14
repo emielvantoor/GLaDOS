@@ -28,7 +28,7 @@ internal sealed class ReActSession(
         int consecutiveInvalidResponses = 0;
         ChatOptions toolOptions = CreateToolOptions();
         string formattedPlan = FormatTaskList(plan);
-        string projectMap = planningService.BuildProjectMapHeader(Environment.CurrentDirectory);
+        string projectMap = await planningService.BuildProjectMapHeaderAsync(Environment.CurrentDirectory, cancellationToken);
 
         executionMemory.Add("ProjectMap", projectMap);
 
