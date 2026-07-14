@@ -488,7 +488,7 @@ internal sealed class ReActSession(
     {
         Match match = Regex.Match(
             responseText,
-            @"<tool_call>\s*(?<json>\{[\s\S]*?\})\s*</tool_call>",
+            @"<tool_?call>\s*(?<json>\{[\s\S]*?\})\s*</tool_?call>",
             RegexOptions.IgnoreCase);
 
         if (!match.Success)
