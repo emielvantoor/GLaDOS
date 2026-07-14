@@ -52,9 +52,8 @@ public sealed class PlannerTaskGenerator(
 
             try
             {
-                string json = PlanningJsonExtractor.ExtractJsonArray(response.Text);
-                List<AgentTask>? tasks = JsonSerializer.Deserialize<List<AgentTask>>(json, AgentTaskBase.JsonOptions);
-                if (tasks is null || tasks.Count == 0)
+                List<AgentTask> tasks = ExtractPlannerTasks(response, supportedActions);
+                if (tasks.Count == 0)
                 {
                     throw new InvalidOperationException("Planner returned no tasks.");
                 }
@@ -113,4 +112,113 @@ public sealed class PlannerTaskGenerator(
             .OrderBy(action => action, StringComparer.OrdinalIgnoreCase)
             .ToArray();
 
+    private static List<AgentTask> ExtractPlannerTasks(ChatResponse response, IReadOnlyList<string> supportedActions)
+    {
+        if (!string.IsNullOrWhiteSpace(response.Text))
+        {
+            string json = PlanningJsonExtractor.ExtractJsonArray(response.Text);
+            return JsonSerializer.Deserialize<List<AgentTask>>(json, AgentTaskBase.JsonOptions) ?? [];
+        }
+
+        FunctionCallContent[] functionCalls = response.Messages
+            .SelectMany(message => message.Contents)
+            .OfType<FunctionCallContent>()
+            .ToArray();
+        if (functionCalls.Length == 0)
+        {
+            throw new InvalidOperationException("Planner did not return a JSON array.");
+        }
+
+        var supportedActionSet = new HashSet<string>(supportedActions, StringComparer.OrdinalIgnoreCase);
+        var tasks = new List<AgentTask>();
+        foreach ((FunctionCallContent functionCall, int index) in functionCalls.Select((functionCall, index) => (functionCall, index)))
+        {
+            string action = StringHelper.NormalizeAction(functionCall.Name);
+            if (!supportedActionSet.Contains(action))
+            {
+                throw new InvalidOperationException($"Planner returned unsupported function call: {functionCall.Name}.");
+            }
+
+            tasks.Add(new AgentTask
+            {
+                Step = index + 1,
+                Action = action,
+                Argument = FormatFunctionCallArgument(action, functionCall.Arguments ?? new Dictionary<string, object?>()),
+                Reason = $"Continue planning with the supported {action} task requested by the planner."
+            });
+        }
+
+        return tasks;
+    }
+
+    private static string FormatFunctionCallArgument(string action, IDictionary<string, object?> arguments)
+    {
+        if (StringHelper.NormalizeAction(action) == "search-project-map")
+        {
+            string query = GetStringArgument(arguments, "query") ??
+                           GetStringArgument(arguments, "keywords") ??
+                           GetStringArgument(arguments, "searchTerms") ??
+                           string.Empty;
+            int maxResults = GetIntArgument(arguments, "maxResults") ??
+                             GetIntArgument(arguments, "max_results") ??
+                             12;
+
+            return $"Query: {query}{Environment.NewLine}Max results: {maxResults}";
+        }
+
+        return JsonSerializer.Serialize(arguments, AgentTaskBase.JsonOptions);
+    }
+
+    private static string? GetStringArgument(IDictionary<string, object?> arguments, string key)
+    {
+        if (!TryGetArgument(arguments, key, out object? value) || value is null)
+        {
+            return null;
+        }
+
+        if (value is JsonElement element)
+        {
+            return element.ValueKind == JsonValueKind.String ? element.GetString() : element.ToString();
+        }
+
+        return value.ToString();
+    }
+
+    private static int? GetIntArgument(IDictionary<string, object?> arguments, string key)
+    {
+        if (!TryGetArgument(arguments, key, out object? value) || value is null)
+        {
+            return null;
+        }
+
+        if (value is JsonElement element)
+        {
+            return element.ValueKind == JsonValueKind.Number && element.TryGetInt32(out int jsonValue)
+                ? jsonValue
+                : int.TryParse(element.ToString(), out int parsedJsonValue)
+                    ? parsedJsonValue
+                    : null;
+        }
+
+        return value is int intValue
+            ? intValue
+            : int.TryParse(value.ToString(), out int parsedValue)
+                ? parsedValue
+                : null;
+    }
+
+    private static bool TryGetArgument(IDictionary<string, object?> arguments, string key, out object? value)
+    {
+        foreach (KeyValuePair<string, object?> argument in arguments)
+        {
+            if (string.Equals(argument.Key, key, StringComparison.OrdinalIgnoreCase))
+            {
+                value = argument.Value;
+                return true;
+            }
+        }
+
+        value = null;
+        return false;
+    }
 }

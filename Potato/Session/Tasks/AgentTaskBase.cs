@@ -36,7 +36,9 @@ public abstract class AgentTaskBase
         new()
         {
             Temperature = (float)temperature,
-            ResponseFormat = ChatResponseFormat.Json
+            ResponseFormat = ChatResponseFormat.Json,
+            ToolMode = ChatToolMode.None,
+            Tools = []
         };
     
     protected SearchReplacePatch ParseSearchReplaceBlocks(string text)

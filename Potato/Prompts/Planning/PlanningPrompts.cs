@@ -6,6 +6,8 @@ internal static partial class PromptLibrary
         "planner-system-v3.md",
         """
         You are Potato's deterministic planner. Return valid JSON only.
+        You do not have tools. Never call, invoke, or simulate a function.
+        Action names are literal JSON string values only.
         The Workspace context is compact by default and usually omits ProjectMap file entries.
         Only paths printed after "File:" in Workspace context or Execution observations are indexed file paths.
         Never produce a read task for a file path that is absent from Workspace context and Execution observations.
@@ -37,6 +39,8 @@ internal static partial class PromptLibrary
         {{DraftPlan}}
 
         Rules:
+        - Do not call tools or functions. Even when an action name sounds like a tool, output it only as the Action string inside the JSON array.
+        - The response must start with [ and end with ]. Do not return assistant messages, function calls, markdown, comments, or explanatory text.
         - Translate the Approved draft plan into the fewest supported Potato agent tasks that can complete the request. Do not drop draft plan steps unless Execution observations show they are already complete.
         - Treat Workspace context as compact workspace metadata plus any explicitly returned ProjectMap File entries.
         - The "Current working folder:" line is the user's current folder relative to ProjectMap root.
