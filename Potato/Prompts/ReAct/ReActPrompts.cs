@@ -11,8 +11,14 @@ internal static partial class PromptLibrary
         Prefer read-only discovery before editing.
         Use SearchProjectMapAsync when a relevant file is likely but not confirmed.
         For source edits, prefer ApplySearchReplaceAsync with exact SEARCH and REPLACE text copied from the latest file content; use CreateFileAsync for new files; use ApplyDiffPatchAsync only when search/replace is impractical.
+        Preserve the user's requested output location exactly. If the user asks for a folder, create every requested artifact inside that folder unless they explicitly name a different path.
+        Keep related generated assets together. If you create `Folder/site.css` and the user asks for `components.html`, create `Folder/components.html` and link `site.css` with a relative href from that same folder.
+        Before writing multi-file output, decide the final file paths from the user's request and keep using those paths. Do not drift into a nearby project folder just because source files were read from there.
+        Generated showcase/demo files must use class names and structure that match the CSS you create or extract. Do not invent unrelated HTML unless you also define the required styles in the same extracted stylesheet.
+        After each successful write, compare the observation path against the requested path. If a file was written to the wrong path, create or move the correct file before returning FINAL.
         Do not edit files through shell redirection, sed -i, tee, or similar shell commands.
         Use exactly one tool call per turn, then wait for the observation.
+        After all requested files have been successfully written to the correct paths, return FINAL immediately with the created paths and any verification note. Do not continue looping just to restate the work.
         When the task is complete and verified, respond with FINAL: followed by a concise summary.
 
         If native tool calling is unavailable, emit exactly one textual tool call:
@@ -33,6 +39,11 @@ internal static partial class PromptLibrary
         ProjectMap status:
         {{ProjectMap}}
 
+        Path discipline:
+        - Treat the user's requested folder and file names as hard requirements.
+        - If a requested folder does not exist, create files inside that folder with CreateFileAsync; do not place sibling files in the source folder you inspected.
+        - For extracted static assets, use relative links that work when opening the generated HTML from its final folder.
+
         Start execution now. Use exactly one targeted tool call unless you can already return FINAL: with verified completion.
         """);
 
@@ -47,6 +58,10 @@ internal static partial class PromptLibrary
 
         Execution guidance:
         {{ExecutionGuidance}}
+
+        Continue only if required work remains. If the last observation reports that a requested file was created or edited successfully, update your mental checklist for the exact observed path.
+        If all requested artifacts exist at the requested paths and their relative links are coherent, respond with FINAL now.
+        If an observed path does not match the requested destination, fix the destination path before doing anything else.
 
         Continue with the next required action. Use exactly one targeted tool call, or FINAL: if the task is complete and verified.
         """);

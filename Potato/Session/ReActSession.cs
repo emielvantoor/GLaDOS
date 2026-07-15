@@ -18,6 +18,9 @@ internal sealed class ReActSession(
     private const int MaxReActIterations = 12;
     private const int MaxToolCallsPerIteration = 1;
     private const int MaxConsecutiveInvalidReActResponses = 2;
+    private const int ReActMaxOutputTokens = 8192;
+    private const int MaxToolResultCharactersInHistory = 12_000;
+    private const int MaxAssistantResponseCharactersInHistory = 4_000;
 
     public async Task<string> ExecuteAsync(
         string goal,
@@ -49,7 +52,6 @@ internal sealed class ReActSession(
             int memoryItemsBefore = executionMemory.Count;
             int toolCallsBefore = agentTools.ToolInvocationCount;
 
-            PotatoConsole.WriteStatus($"ReAct iteration {iteration}/{MaxReActIterations}");
             ChatResponse response;
             using (PotatoConsole.StartProgress($"ReAct iteration {iteration}/{MaxReActIterations}..."))
             {
@@ -85,16 +87,16 @@ internal sealed class ReActSession(
                 string result = await ExecuteFunctionCallAsync(functionCall, cancellationToken);
                 reactHistory.Add(new ChatMessage(
                     ChatRole.Tool,
-                    [new FunctionResultContent(functionCall.CallId, result)]));
+                    [new FunctionResultContent(functionCall.CallId, result)]
+                    // [new FunctionResultContent(functionCall.CallId, CompactForReActHistory(result, MaxToolResultCharactersInHistory))]
+                    // This was the original truncate, but the agent was getting half the data (here gemini)
+                    ));
                 await executionMemory.SummarizeLargeUnsummarizedItemsAsync(chatClient, cancellationToken);
-                reactHistory.Add(new ChatMessage(
-                    ChatRole.User,
-                    PromptLibrary.BuildReActObservationUserPrompt(goal, executionGuidance, functionCall.Name, result)));
                 consecutiveInvalidResponses = 0;
                 continue;
             }
 
-            AddResponseMessages(reactHistory, response, responseText);
+            AddResponseMessages(reactHistory, response, responseText, MaxAssistantResponseCharactersInHistory);
             executionMemory.Add("Assistant ReAct response", responseText);
 
             if (IsFinalResponse(responseText))
@@ -116,7 +118,9 @@ internal sealed class ReActSession(
             if (toolCallsThisIteration > 0)
             {
                 consecutiveInvalidResponses = 0;
-                string observation = executionMemory.GetRange(memoryItemsBefore, executionMemory.Count, full: true);
+                string observation = CompactForReActHistory(
+                    executionMemory.GetRange(memoryItemsBefore, executionMemory.Count, full: false),
+                    MaxToolResultCharactersInHistory);
                 reactHistory.Add(new ChatMessage(
                     ChatRole.User,
                     PromptLibrary.BuildReActObservationUserPrompt(goal, executionGuidance, "native tool call", observation)));
@@ -127,6 +131,13 @@ internal sealed class ReActSession(
             {
                 consecutiveInvalidResponses = 0;
                 continue;
+            }
+
+            if (LooksLikeTruncatedToolResponse(responseText))
+            {
+                string message = BuildTruncatedToolResponseMessage(responseText);
+                PotatoConsole.WriteError("Stopped: the model response appears to contain a truncated tool call. The full partial response is shown in the agent message.");
+                return message;
             }
 
             consecutiveInvalidResponses++;
@@ -167,18 +178,45 @@ internal sealed class ReActSession(
         return $"Stopped after {MaxReActIterations} ReAct iterations without a FINAL response.";
     }
 
-    private static void AddResponseMessages(List<ChatMessage> reactHistory, ChatResponse response, string fallbackText)
+    private static void AddResponseMessages(
+        List<ChatMessage> reactHistory,
+        ChatResponse response,
+        string fallbackText,
+        int maxCharacters)
     {
         if (response.Messages.Count == 0)
         {
-            reactHistory.Add(new ChatMessage(ChatRole.Assistant, fallbackText));
+            reactHistory.Add(new ChatMessage(ChatRole.Assistant, CompactForReActHistory(fallbackText, maxCharacters)));
             return;
         }
 
+        string responseText = FormatAssistantResponseForHistory(response);
+        reactHistory.Add(new ChatMessage(
+            ChatRole.Assistant,
+            CompactForReActHistory(string.IsNullOrWhiteSpace(responseText) ? fallbackText : responseText, maxCharacters)));
+    }
+
+    private static string FormatAssistantResponseForHistory(ChatResponse response)
+    {
+        var builder = new StringBuilder();
         foreach (ChatMessage message in response.Messages)
         {
-            reactHistory.Add(message);
+            if (!string.IsNullOrWhiteSpace(message.Text))
+            {
+                builder.AppendLine(message.Text);
+                continue;
+            }
+
+            foreach (AIContent content in message.Contents)
+            {
+                if (content is TextContent text && !string.IsNullOrWhiteSpace(text.Text))
+                {
+                    builder.AppendLine(text.Text);
+                }
+            }
         }
+
+        return builder.ToString().TrimEnd();
     }
 
     private static IReadOnlyList<FunctionCallContent> GetFunctionCalls(ChatResponse response)
@@ -217,7 +255,8 @@ internal sealed class ReActSession(
                 AIFunctionFactory.Create(agentTools.CreateFileAsync),
                 AIFunctionFactory.Create(agentTools.ApplyDiffPatchAsync)
             ],
-            Temperature = 0.0f
+            Temperature = 0.0f,
+            MaxOutputTokens = ReActMaxOutputTokens
         };
 
     [Description("Searches Potato's cached ProjectMap for likely relevant source, test, documentation, or project files. Use this for targeted repository discovery before exact file reads when the file path is not already known.")]
@@ -291,8 +330,24 @@ internal sealed class ReActSession(
         await executionMemory.SummarizeLargeUnsummarizedItemsAsync(chatClient, cancellationToken);
         reactHistory.Add(new ChatMessage(
             ChatRole.User,
-            PromptLibrary.BuildReActObservationUserPrompt(goal, executionGuidance, toolCall.Name, result)));
+            PromptLibrary.BuildReActObservationUserPrompt(
+                goal,
+                executionGuidance,
+                toolCall.Name,
+                CompactForReActHistory(result, MaxToolResultCharactersInHistory))));
         return true;
+    }
+
+    private static string CompactForReActHistory(string value, int maxCharacters)
+    {
+        string trimmed = value.Trim();
+        if (trimmed.Length <= maxCharacters)
+        {
+            return trimmed;
+        }
+
+        return trimmed[..maxCharacters] +
+               $"\n...(truncated for ReAct history after {maxCharacters:N0} characters; use GetCollectedContext if exact earlier content is needed)";
     }
 
     private async Task<string> ExecuteFunctionCallAsync(
@@ -509,6 +564,176 @@ internal sealed class ReActSession(
         {
             return null;
         }
+    }
+
+    private static bool LooksLikeTruncatedToolResponse(string responseText)
+    {
+        string trimmed = responseText.Trim();
+        if (trimmed.Length == 0)
+        {
+            return false;
+        }
+
+        string lower = trimmed.ToLowerInvariant();
+        if ((lower.Contains("<tool_call", StringComparison.Ordinal) ||
+             lower.Contains("<toolcall", StringComparison.Ordinal)) &&
+            !(lower.Contains("</tool_call>", StringComparison.Ordinal) ||
+              lower.Contains("</toolcall>", StringComparison.Ordinal)))
+        {
+            return true;
+        }
+
+        if (ContainsEditToolName(lower) &&
+            (HasUnbalancedJson(trimmed) ||
+             HasUnclosedStringLiteral(trimmed) ||
+             LooksLikeIncompleteToolJson(trimmed)))
+        {
+            return true;
+        }
+
+        if (lower.Contains("<<<<<<< search", StringComparison.Ordinal) &&
+            !lower.Contains(">>>>>>> replace", StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        if (lower.Contains("**search**", StringComparison.Ordinal) &&
+            !lower.Contains("**replace**", StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        if (lower.Contains("```diff", StringComparison.Ordinal) &&
+            !trimmed.EndsWith("```", StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        if ((lower.Contains("createfileasync", StringComparison.Ordinal) ||
+             lower.Contains("create_file", StringComparison.Ordinal) ||
+             lower.Contains("write_new_file", StringComparison.Ordinal)) &&
+            lower.Contains("\"content\"", StringComparison.Ordinal) &&
+            HasUnbalancedJson(trimmed))
+        {
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool ContainsEditToolName(string lowerText) =>
+        lowerText.Contains("applysearchreplaceasync", StringComparison.Ordinal) ||
+        lowerText.Contains("apply_search_replace", StringComparison.Ordinal) ||
+        lowerText.Contains("search_replace", StringComparison.Ordinal) ||
+        lowerText.Contains("createfileasync", StringComparison.Ordinal) ||
+        lowerText.Contains("create_file", StringComparison.Ordinal) ||
+        lowerText.Contains("write_new_file", StringComparison.Ordinal) ||
+        lowerText.Contains("applydiffpatchasync", StringComparison.Ordinal) ||
+        lowerText.Contains("apply_diff_patch", StringComparison.Ordinal);
+
+    private static bool LooksLikeIncompleteToolJson(string text) =>
+        Regex.IsMatch(text, @"""(?:name|arguments|filePath|file_path|path|content|search|replace|patch)""\s*:\s*$", RegexOptions.IgnoreCase) ||
+        Regex.IsMatch(text, @"""(?:content|search|replace|patch)""\s*:\s*""[\s\S]*\z", RegexOptions.IgnoreCase);
+
+    private static bool HasUnbalancedJson(string text)
+    {
+        int objectDepth = 0;
+        int arrayDepth = 0;
+        bool inString = false;
+        bool escaped = false;
+
+        foreach (char current in text)
+        {
+            if (escaped)
+            {
+                escaped = false;
+                continue;
+            }
+
+            if (current == '\\' && inString)
+            {
+                escaped = true;
+                continue;
+            }
+
+            if (current == '"')
+            {
+                inString = !inString;
+                continue;
+            }
+
+            if (inString)
+            {
+                continue;
+            }
+
+            switch (current)
+            {
+                case '{':
+                    objectDepth++;
+                    break;
+                case '}':
+                    objectDepth--;
+                    break;
+                case '[':
+                    arrayDepth++;
+                    break;
+                case ']':
+                    arrayDepth--;
+                    break;
+            }
+
+            if (objectDepth < 0 || arrayDepth < 0)
+            {
+                return true;
+            }
+        }
+
+        return inString || objectDepth > 0 || arrayDepth > 0;
+    }
+
+    private static bool HasUnclosedStringLiteral(string text)
+    {
+        bool inString = false;
+        bool escaped = false;
+
+        foreach (char current in text)
+        {
+            if (escaped)
+            {
+                escaped = false;
+                continue;
+            }
+
+            if (current == '\\' && inString)
+            {
+                escaped = true;
+                continue;
+            }
+
+            if (current == '"')
+            {
+                inString = !inString;
+            }
+        }
+
+        return inString;
+    }
+
+    private static string BuildTruncatedToolResponseMessage(string responseText)
+    {
+        return $"""
+        Stopped: the model response appears to contain a truncated tool call.
+
+        This usually means the ReAct prompt is too close to the context limit or the requested edit payload is too large for one model response. Potato did not execute the partial tool call because it may corrupt a file.
+
+        Full partial model response:
+        ```text
+        {responseText}
+        ```
+
+        Try again with a narrower request, split the file creation/edit into smaller pieces, reduce prior context, or increase the model context window.
+        """;
     }
 
     private static TextualToolCall? TryParseSearchReplaceBlock(string responseText)
