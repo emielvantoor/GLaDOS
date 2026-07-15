@@ -21,27 +21,7 @@ internal static partial class PromptLibrary
         After all requested files have been successfully written to the correct paths, return FINAL immediately with the created paths and any verification note. Do not continue looping just to restate the work.
         When the task is complete and verified, respond with FINAL: followed by a concise summary.
 
-        **CRITICAL: Handling Truncated Data**
-        Important: Tool results larger than 12KB are truncated in chat history to save tokens. Truncation is indicated by [TRUNCATED • ref#N] markers.
-        When you see [TRUNCATED • ref#N] in any observation:
-        1. STOP. Do not edit, create, or analyze based on partial data.
-        2. Call GetCollectedContext("N", full=true) immediately to retrieve the complete content.
-        3. Wait for the full content response before proceeding with any edits or analysis.
-        4. Only after retrieving the full content should you proceed with edits, file operations, or decisions.
-         
-        CRITICAL RULE: Never attempt to reconstruct, guess, or work around truncated content. You will cause errors if you proceed without retrieving the full data first.
-         
-        Examples (you MUST follow this pattern):
-        - You see: "file content: src/auth.ts (1530 lines) ... [TRUNCATED • ref#5]"
-          → STOP. Call GetCollectedContext("5", full=true)
-          → Wait for full 1530 lines
-          → THEN edit the file with complete knowledge
-        - You see: "Search: 42 results, showing top 10 ... [TRUNCATED • ref#7]"
-          → STOP. Call GetCollectedContext("7") to see summary or full results
-          → Proceed with analysis only after retrieving
-        - Use GetCollectedContext("list") anytime to see all available collected context
-         
-        If the system blocks your edit with a message about truncated data, it means you skipped step 2. Call GetCollectedContext immediately and retry.
+        {{ContextOptimizationSection}}
 
         If native tool calling is unavailable, emit exactly one textual tool call:
         <tool_call>{"name":"ReadFileContent","arguments":{"filePath":"path/to/file"}}</tool_call>
@@ -66,6 +46,8 @@ internal static partial class PromptLibrary
         - If a requested folder does not exist, create files inside that folder with CreateFileAsync; do not place sibling files in the source folder you inspected.
         - For extracted static assets, use relative links that work when opening the generated HTML from its final folder.
 
+        {{ContextOptimizationSection}}
+
         Start execution now. Use exactly one targeted tool call unless you can already return FINAL: with verified completion.
         """);
 
@@ -85,34 +67,74 @@ internal static partial class PromptLibrary
         If all requested artifacts exist at the requested paths and their relative links are coherent, respond with FINAL now.
         If an observed path does not match the requested destination, fix the destination path before doing anything else.
 
+        {{ContextOptimizationSection}}
+
         Continue with the next required action. Use exactly one targeted tool call, or FINAL: if the task is complete and verified.
         """);
 
-    public static string ReActSystemPrompt => Load(ReActSystem);
+    public static string BuildReActSystemPrompt(bool contextOptimizationEnabled) =>
+        Render(ReActSystem, new Dictionary<string, string>
+        {
+            ["ContextOptimizationSection"] = BuildContextOptimizationSection(contextOptimizationEnabled)
+        });
+
+    private static string BuildContextOptimizationSection(bool contextOptimizationEnabled)
+    {
+        if (!contextOptimizationEnabled)
+            return string.Empty;
+
+        return """
+            **CRITICAL: Handling Truncated Data**
+            Important: Tool results larger than 12KB are truncated in chat history to save tokens. Truncation is indicated by [TRUNCATED • ref#N] markers.
+            When you see [TRUNCATED • ref#N] in any observation:
+            1. STOP. Do not edit, create, or analyze based on partial data.
+            2. Call GetCollectedContext("N", full=true) immediately to retrieve the complete content.
+            3. Wait for the full content response before proceeding with any edits or analysis.
+            4. Only after retrieving the full content should you proceed with edits, file operations, or decisions.
+             
+            CRITICAL RULE: Never attempt to reconstruct, guess, or work around truncated content. You will cause errors if you proceed without retrieving the full data first.
+             
+            Examples (you MUST follow this pattern):
+            - You see: "file content: src/auth.ts (1530 lines) ... [TRUNCATED • ref#5]"
+              → STOP. Call GetCollectedContext("5", full=true)
+              → Wait for full 1530 lines
+              → THEN edit the file with complete knowledge
+            - You see: "Search: 42 results, showing top 10 ... [TRUNCATED • ref#7]"
+              → STOP. Call GetCollectedContext("7") to see summary or full results
+              → Proceed with analysis only after retrieving
+            - Use GetCollectedContext("list") anytime to see all available collected context
+             
+            If the system blocks your edit with a message about truncated data, it means you skipped step 2. Call GetCollectedContext immediately and retry.
+            """;
+    }
 
     public static string BuildReActInitialUserPrompt(
         string goal,
         string executionGuidance,
         string workingDirectory,
-        string projectMap) =>
+        string projectMap,
+        bool contextOptimizationEnabled) =>
         Render(ReActInitialUser, new Dictionary<string, string>
         {
             ["Goal"] = goal,
             ["ExecutionGuidance"] = executionGuidance,
             ["WorkingDirectory"] = workingDirectory,
-            ["ProjectMap"] = projectMap
+            ["ProjectMap"] = projectMap,
+            ["ContextOptimizationSection"] = BuildContextOptimizationSection(contextOptimizationEnabled)
         });
 
     public static string BuildReActObservationUserPrompt(
         string goal,
         string executionGuidance,
         string observationSource,
-        string observation) =>
+        string observation,
+        bool contextOptimizationEnabled) =>
         Render(ReActObservationUser, new Dictionary<string, string>
         {
             ["Goal"] = goal,
             ["ExecutionGuidance"] = executionGuidance,
             ["ObservationSource"] = observationSource,
-            ["Observation"] = observation
+            ["Observation"] = observation,
+            ["ContextOptimizationSection"] = BuildContextOptimizationSection(contextOptimizationEnabled)
         });
 }

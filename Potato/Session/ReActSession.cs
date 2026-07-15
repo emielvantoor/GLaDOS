@@ -43,12 +43,13 @@ internal sealed class ReActSession(
 
         var reactHistory = new List<ChatMessage>
         {
-            new(ChatRole.System, PromptLibrary.ReActSystemPrompt),
+            new(ChatRole.System, PromptLibrary.BuildReActSystemPrompt(getContextOptimizationEnabled())),
             new(ChatRole.User, PromptLibrary.BuildReActInitialUserPrompt(
                 goal,
                 executionGuidance,
                 Environment.CurrentDirectory,
-                projectMap))
+                projectMap,
+                getContextOptimizationEnabled()))
         };
 
         for (int iteration = 1; iteration <= MaxReActIterations; iteration++)
@@ -185,7 +186,7 @@ internal sealed class ReActSession(
                     MaxToolResultCharactersInHistory);
                 reactHistory.Add(new ChatMessage(
                     ChatRole.User,
-                    PromptLibrary.BuildReActObservationUserPrompt(goal, executionGuidance, "native tool call", observation)));
+                    PromptLibrary.BuildReActObservationUserPrompt(goal, executionGuidance, "native tool call", observation, getContextOptimizationEnabled())));
                 continue;
             }
 
@@ -428,7 +429,8 @@ internal sealed class ReActSession(
                 goal,
                 executionGuidance,
                 toolCall.Name,
-                finalContent)));
+                finalContent,
+                getContextOptimizationEnabled())));
         return true;
     }
 
