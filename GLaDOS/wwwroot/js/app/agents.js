@@ -404,7 +404,11 @@
 
     function formatPotatoEventSummary(event) {
         const kind = event.kind || 'event';
-        if (kind === 'model-exchange') return getPotatoEventStepTitle(event.content) || 'step: model exchange';
+        if (kind === 'model-exchange') {
+            const title = getPotatoEventStepTitle(event.content) || 'step: model exchange';
+            const context = getPotatoEventContextSummary(event.content);
+            return context ? `${title} · ${context}` : title;
+        }
         if (kind === 'model-request') return 'Potato model request';
         if (kind === 'model-response') return 'Potato model response';
         if (kind === 'tool-call') return 'Tool call';
@@ -418,6 +422,20 @@
     function getPotatoEventStepTitle(content) {
         const firstLine = (content || '').split(/\r?\n/, 1)[0]?.trim();
         return firstLine?.toLowerCase().startsWith('step: ') ? firstLine : '';
+    }
+
+    function getPotatoEventContextSummary(content) {
+        const text = content || '';
+        const promptMatch = text.match(/estimated prompt:\s*([0-9,.\s]+)\s*\/\s*([0-9,.\s]+)\s*tokens/i);
+        if (!promptMatch) return '';
+
+        const headroomMatch = text.match(/headroom after reserved output:\s*([0-9,.\s]+)\s*tokens/i);
+        const prompt = promptMatch[1].trim();
+        const total = promptMatch[2].trim();
+        const headroom = headroomMatch?.[1]?.trim();
+        return headroom
+            ? `context ${prompt}/${total}, headroom ${headroom}`
+            : `context ${prompt}/${total}`;
     }
 
     function handleAgentPromptKeyPress(event) {

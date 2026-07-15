@@ -18,6 +18,7 @@ internal sealed class PotatoModelCommunicationLogger(IChatClient innerClient, in
     {
         ChatMessage[] capturedMessages = messages.ToArray();
         long requestId = Interlocked.Increment(ref nextRequestId);
+        PotatoConsole.WriteStatus(FormatContextStatus(capturedMessages, options));
 
         ChatResponse response = await base.GetResponseAsync(capturedMessages, options, cancellationToken);
         RecordModelExchange(requestId, capturedMessages, options, response);
@@ -31,6 +32,7 @@ internal sealed class PotatoModelCommunicationLogger(IChatClient innerClient, in
     {
         ChatMessage[] capturedMessages = messages.ToArray();
         long requestId = Interlocked.Increment(ref nextRequestId);
+        PotatoConsole.WriteStatus(FormatContextStatus(capturedMessages, options));
 
         var response = new StringBuilder();
         await foreach (ChatResponseUpdate update in base.GetStreamingResponseAsync(capturedMessages, options, cancellationToken)
@@ -118,31 +120,69 @@ internal sealed class PotatoModelCommunicationLogger(IChatClient innerClient, in
         ChatOptions? options,
         string responseText)
     {
-        if (contextSize <= 0)
+        ContextUsage? usage = GetContextUsage(messages, options, responseText);
+        if (usage is null)
         {
             return;
         }
 
+        builder.AppendLine("## Context");
+        builder.AppendLine(
+            $"estimated prompt: {FormatNumber(usage.PromptTokens)} / {FormatNumber(usage.ContextSize)} tokens " +
+            $"({FormatPercent(usage.PromptTokens, usage.ContextSize)} used)");
+        builder.AppendLine($"available before output: {FormatNumber(usage.AvailableBeforeOutput)} tokens");
+        builder.AppendLine($"reserved output ({usage.OutputSource}): {FormatNumber(usage.MaxOutputTokens)} tokens");
+        builder.AppendLine($"headroom after reserved output: {FormatNumber(usage.HeadroomAfterReservedOutput)} tokens");
+        builder.AppendLine($"estimated response: {FormatNumber(usage.ResponseTokens)} tokens");
+
+        if (usage.ExceedsContext)
+        {
+            builder.AppendLine("warning: estimated prompt plus reserved output exceeds the configured context window.");
+        }
+    }
+
+    private string FormatContextStatus(IReadOnlyList<ChatMessage> messages, ChatOptions? options)
+    {
+        ContextUsage? usage = GetContextUsage(messages, options, responseText: null);
+        if (usage is null)
+        {
+            return "Context estimate unavailable.";
+        }
+
+        string warning = usage.ExceedsContext ? " warning: prompt + output exceeds context" : string.Empty;
+        return
+            $"Context estimate: prompt {FormatNumber(usage.PromptTokens)} / {FormatNumber(usage.ContextSize)} tokens " +
+            $"({FormatPercent(usage.PromptTokens, usage.ContextSize)}), " +
+            $"available {FormatNumber(usage.AvailableBeforeOutput)}, " +
+            $"reserved output {FormatNumber(usage.MaxOutputTokens)}, " +
+            $"headroom {FormatNumber(usage.HeadroomAfterReservedOutput)}.{warning}";
+    }
+
+    private ContextUsage? GetContextUsage(
+        IReadOnlyList<ChatMessage> messages,
+        ChatOptions? options,
+        string? responseText)
+    {
+        if (contextSize <= 0)
+        {
+            return null;
+        }
+
         int promptTokens = EstimateMessageTokens(messages);
-        int responseTokens = EstimateTokenCount(responseText);
+        int responseTokens = EstimateTokenCount(responseText ?? string.Empty);
         int maxOutputTokens = options?.MaxOutputTokens ?? DefaultMaxOutputTokens;
         int availableBeforeOutput = Math.Max(0, contextSize - promptTokens);
         int headroomAfterReservedOutput = Math.Max(0, contextSize - promptTokens - maxOutputTokens);
         string outputSource = options?.MaxOutputTokens.HasValue == true ? "requested" : "default";
 
-        builder.AppendLine("## Context");
-        builder.AppendLine(
-            $"estimated prompt: {FormatNumber(promptTokens)} / {FormatNumber(contextSize)} tokens " +
-            $"({FormatPercent(promptTokens, contextSize)} used)");
-        builder.AppendLine($"available before output: {FormatNumber(availableBeforeOutput)} tokens");
-        builder.AppendLine($"reserved output ({outputSource}): {FormatNumber(maxOutputTokens)} tokens");
-        builder.AppendLine($"headroom after reserved output: {FormatNumber(headroomAfterReservedOutput)} tokens");
-        builder.AppendLine($"estimated response: {FormatNumber(responseTokens)} tokens");
-
-        if (promptTokens + maxOutputTokens > contextSize)
-        {
-            builder.AppendLine("warning: estimated prompt plus reserved output exceeds the configured context window.");
-        }
+        return new ContextUsage(
+            contextSize,
+            promptTokens,
+            responseTokens,
+            maxOutputTokens,
+            outputSource,
+            availableBeforeOutput,
+            headroomAfterReservedOutput);
     }
 
     private static string FormatMessages(IList<ChatMessage> messages)
@@ -212,6 +252,18 @@ internal sealed class PotatoModelCommunicationLogger(IChatClient innerClient, in
         }
 
         return $"{Math.Min(100.0, used * 100.0 / total):0.#}%";
+    }
+
+    private sealed record ContextUsage(
+        int ContextSize,
+        int PromptTokens,
+        int ResponseTokens,
+        int MaxOutputTokens,
+        string OutputSource,
+        int AvailableBeforeOutput,
+        int HeadroomAfterReservedOutput)
+    {
+        public bool ExceedsContext => PromptTokens + MaxOutputTokens > ContextSize;
     }
 
     private static void AppendContent(StringBuilder builder, AIContent content)
