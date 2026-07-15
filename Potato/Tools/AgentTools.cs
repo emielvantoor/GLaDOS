@@ -590,10 +590,10 @@ public class AgentTools(ExecutionMemory memory, CurrentChatClientState chatClien
         return StoreAndReturn($"{nameof(SummarizeFilePurpose)} {resolvedPath}", builder.ToString());
     }
 
-    [Description("Gets collected execution context by index. Use index 'list' to list available items with descriptions, 'latest' for the newest item, or a numeric index. Use this to retrieve earlier ReadFileContent or SummarizeFilePurpose results for a file instead of reading or summarizing that same unchanged file again. Set full to true only when exact full content is needed. After a file has been edited, earlier collected context for that file is stale and the file must be read or summarized again.")]
+    [Description("Retrieves earlier collected tool results and execution context by reference key. Use 'list' to see all available context items with descriptions and their ref#N keys. Use 'latest' to get the most recent item. Use a numeric ref#N (e.g., GetCollectedContext(\"5\") for ref#5) or index to retrieve a specific item. Set full=true ONLY when you need the complete original content (use sparingly to save tokens). Typical uses: (1) When you see [TRUNCATED • ref#N] in an observation, call GetCollectedContext(\"N\", full=true) to get full content, (2) Before re-reading an unchanged file, call GetCollectedContext(\"list\") to check if you already have it in context, (3) To retrieve earlier large search results or shell output for analysis.")]
     public string GetCollectedContext(
-        [Description("Use 'list', 'latest', or a numeric index from the collected context list.")] string index = "list",
-        [Description("Whether to return full stored content instead of a summary when available.")] bool full = false)
+        [Description("Use 'list' to list available items with descriptions and reference keys, 'latest' for the newest item, or a numeric index/ref#N from the context list.")] string index = "list",
+        [Description("Set to true only when exact full content is needed; returns truncated to 12KB if content is very large. Use sparingly to conserve tokens.")] bool full = false)
     {
         if (!TryReserveToolInvocation(nameof(GetCollectedContext), out string rejectionReason))
         {

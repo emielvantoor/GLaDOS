@@ -6,7 +6,7 @@ using Potato.WebUi;
 
 namespace Potato;
 
-internal sealed class GladosChatClientFactory
+internal sealed class GladosChatClientFactory(ExecutionMemory executionMemory)
 {
     private static readonly TimeSpan ModelRequestTimeout = TimeSpan.FromMinutes(30);
 
@@ -21,7 +21,7 @@ internal sealed class GladosChatClientFactory
                 NetworkTimeout = ModelRequestTimeout
             }).AsIChatClient();
 
-        return new PotatoModelCommunicationLogger(openAiClient, contextSize);
+        return new PotatoModelCommunicationLogger(openAiClient, contextSize, executionMemory);
     }
 
 }

@@ -1,4 +1,5 @@
 using Microsoft.Extensions.AI;
+using Potato.Models;
 
 namespace Potato;
 
@@ -13,6 +14,11 @@ public sealed class ExecutionMemory
 
     public int Add(string source, string content)
     {
+        return Add(source, content, ToolResultType.Generic);
+    }
+
+    public int Add(string source, string content, ToolResultType resultType, int? truncatedLength = null, string? retrievalHint = null, string? contextKey = null)
+    {
         if (string.IsNullOrWhiteSpace(content))
         {
             content = "(empty)";
@@ -23,7 +29,11 @@ public sealed class ExecutionMemory
             source,
             BuildDescriptor(source, content),
             DateTimeOffset.Now,
-            content);
+            content,
+            resultType,
+            contextKey,
+            truncatedLength,
+            retrievalHint);
         items.Add(item);
         return item.Index;
     }
@@ -41,9 +51,14 @@ public sealed class ExecutionMemory
             return items.Count == 0 ? "No collected context is available." : FormatItem(items[^1], full);
         }
 
-        if (!int.TryParse(index, out int itemIndex))
+        // Handle both "3" and "ref#3" formats
+        string normalizedIndex = index.StartsWith("ref#", StringComparison.OrdinalIgnoreCase)
+            ? index.Substring(4)
+            : index;
+
+        if (!int.TryParse(normalizedIndex, out int itemIndex))
         {
-            return "Error: index must be 'list', 'latest', or a numeric collected context index.";
+            return $"Error: index must be 'list', 'latest', a numeric index (e.g., '5'), or reference key (e.g., 'ref#5'). You provided: '{index}'";
         }
 
         ExecutionMemoryItem? item = items.FirstOrDefault(candidate => candidate.Index == itemIndex);
@@ -69,6 +84,7 @@ public sealed class ExecutionMemory
     }
 
     public async Task SummarizeLargeUnsummarizedItemsAsync(
+        string? goal,
         IChatClient summarizerClient,
         CancellationToken cancellationToken = default)
     {
@@ -77,12 +93,53 @@ public sealed class ExecutionMemory
                      item.Content.Length > SummaryThresholdCharacters))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            item.Summary = await SummarizeAsync(summarizerClient, item, cancellationToken);
+            item.Summary = await SummarizeAsync(summarizerClient, item, goal, cancellationToken);
             item.Descriptor = BuildDescriptor(item.Source, item.Summary);
         }
     }
 
+    /// <summary>
+    /// Gets the summary confidence level from a summary (looks for [Confidence: X] marker)
+    /// </summary>
+    public ConfidenceLevel GetSummaryConfidence(int itemIndex)
+    {
+        ExecutionMemoryItem? item = items.FirstOrDefault(candidate => candidate.Index == itemIndex);
+        if (item?.Summary is null)
+        {
+            return ConfidenceLevel.Unknown;
+        }
+
+        return ParseConfidenceLevel(item.Summary);
+    }
+
+    /// <summary>
+    /// Check if summary has high confidence (can edit with just summary, no need for full content)
+    /// </summary>
+    public bool IsSummaryHighConfidence(int itemIndex)
+    {
+        return GetSummaryConfidence(itemIndex) == ConfidenceLevel.High;
+    }
+
     public void Clear() => items.Clear();
+
+    public (int TotalCharacters, int TruncatedCount, int TotalBytesRecovered) GetMetrics()
+    {
+        int totalChars = 0;
+        int truncatedCount = 0;
+        int bytesRecovered = 0;
+
+        foreach (var item in items)
+        {
+            totalChars += item.Content.Length;
+            if (item.TruncatedLength.HasValue && item.TruncatedLength > item.Content.Length)
+            {
+                truncatedCount++;
+                bytesRecovered += item.TruncatedLength.Value - item.Content.Length;
+            }
+        }
+
+        return (totalChars, truncatedCount, bytesRecovered);
+    }
 
     private string List()
     {
@@ -96,7 +153,16 @@ public sealed class ExecutionMemory
             items.Select(item =>
             {
                 string preview = item.Summary ?? FirstLine(item.Content);
-                return $"[{item.Index}] {item.Descriptor} | source: {item.Source} | {item.Content.Length} chars | preview: {Trim(preview, 140)}";
+                string typeInfo = item.ResultType != ToolResultType.Generic 
+                    ? $" | type: {item.ResultType}" 
+                    : string.Empty;
+                string refInfo = !string.IsNullOrEmpty(item.ContextKey)
+                    ? $" | {item.ContextKey}"
+                    : string.Empty;
+                string truncInfo = item.TruncatedLength.HasValue
+                    ? $" | [TRUNCATED]"
+                    : string.Empty;
+                return $"[{item.Index}] {item.Descriptor} | source: {item.Source}{typeInfo}{refInfo}{truncInfo} | {item.Content.Length} chars | preview: {Trim(preview, 140)}";
             }));
     }
 
@@ -106,7 +172,33 @@ public sealed class ExecutionMemory
             ? Trim(item.Content, FullContentLimitCharacters)
             : item.Summary ?? Trim(item.Content, FullContentLimitCharacters);
 
-        return $"[{item.Index}] {item.Descriptor}\nSource: {item.Source}\nCollected at: {item.CreatedAt:HH:mm:ss}\n{content}";
+        var descriptor = new System.Text.StringBuilder();
+        descriptor.Append($"[{item.Index}] {item.Descriptor}\n");
+        descriptor.Append($"Source: {item.Source}\n");
+        descriptor.Append($"Collected at: {item.CreatedAt:HH:mm:ss}\n");
+        
+        if (item.ResultType != ToolResultType.Generic)
+        {
+            descriptor.Append($"Type: {item.ResultType}\n");
+        }
+
+        if (!string.IsNullOrEmpty(item.ContextKey))
+        {
+            descriptor.Append($"Reference: {item.ContextKey}\n");
+        }
+
+        if (item.TruncatedLength.HasValue && item.TruncatedLength > item.Content.Length)
+        {
+            descriptor.Append($"[Truncated: original {item.TruncatedLength:N0} chars → {item.Content.Length:N0} chars shown]\n");
+        }
+
+        if (!string.IsNullOrEmpty(item.RetrievalHint))
+        {
+            descriptor.Append($"Hint: {item.RetrievalHint}\n");
+        }
+
+        descriptor.Append(content);
+        return descriptor.ToString();
     }
 
     private static string BuildDescriptor(string source, string content)
@@ -140,18 +232,25 @@ public sealed class ExecutionMemory
     private static async Task<string> SummarizeAsync(
         IChatClient summarizerClient,
         ExecutionMemoryItem item,
+        string? goal,
         CancellationToken cancellationToken)
     {
         try
         {
+            // Use goal-aware prompt if goal provided, otherwise generic
+            string userPrompt = string.IsNullOrWhiteSpace(goal)
+                ? Potato.Prompts.PromptLibrary.BuildExecutionMemorySummaryUserPrompt(
+                    item.Source,
+                    Trim(item.Content, FullContentLimitCharacters))
+                : Potato.Prompts.PromptLibrary.BuildExecutionMemorySummaryGoalAwarePrompt(
+                    goal,
+                    item.Source,
+                    Trim(item.Content, FullContentLimitCharacters));
+
             var messages = new List<ChatMessage>
             {
                 new(ChatRole.System, Potato.Prompts.PromptLibrary.SideQuestionSystemPrompt),
-                new(
-                    ChatRole.User,
-                    Potato.Prompts.PromptLibrary.BuildExecutionMemorySummaryUserPrompt(
-                        item.Source,
-                        Trim(item.Content, FullContentLimitCharacters)))
+                new(ChatRole.User, userPrompt)
             };
 
             ChatResponse response = await summarizerClient.GetResponseAsync(messages, new ChatOptions(), cancellationToken);
@@ -163,6 +262,32 @@ public sealed class ExecutionMemory
         {
             return Trim(item.Content, SummaryThresholdCharacters);
         }
+    }
+
+    private static ConfidenceLevel ParseConfidenceLevel(string summary)
+    {
+        // Look for [Confidence: X] marker anywhere in summary
+        int idx = summary.IndexOf("[Confidence:", StringComparison.OrdinalIgnoreCase);
+        if (idx < 0)
+        {
+            return ConfidenceLevel.Unknown;
+        }
+
+        string after = summary[idx..];
+        if (after.Contains("HIGH", StringComparison.OrdinalIgnoreCase))
+        {
+            return ConfidenceLevel.High;
+        }
+        if (after.Contains("MEDIUM", StringComparison.OrdinalIgnoreCase))
+        {
+            return ConfidenceLevel.Medium;
+        }
+        if (after.Contains("LOW", StringComparison.OrdinalIgnoreCase))
+        {
+            return ConfidenceLevel.Low;
+        }
+
+        return ConfidenceLevel.Unknown;
     }
 
     private static string FirstLine(string text)
@@ -204,7 +329,11 @@ public sealed class ExecutionMemory
         string source,
         string descriptor,
         DateTimeOffset createdAt,
-        string content)
+        string content,
+        ToolResultType resultType = ToolResultType.Generic,
+        string? contextKey = null,
+        int? truncatedLength = null,
+        string? retrievalHint = null)
     {
         public int Index { get; } = index;
 
@@ -217,5 +346,13 @@ public sealed class ExecutionMemory
         public string Content { get; } = content;
 
         public string? Summary { get; set; }
+
+        public ToolResultType ResultType { get; } = resultType;
+
+        public string? ContextKey { get; } = contextKey;
+
+        public int? TruncatedLength { get; } = truncatedLength;
+
+        public string? RetrievalHint { get; } = retrievalHint;
     }
 }

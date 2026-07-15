@@ -5,7 +5,10 @@ using Microsoft.Extensions.AI;
 
 namespace Potato.WebUi;
 
-internal sealed class PotatoModelCommunicationLogger(IChatClient innerClient, int contextSize) : DelegatingChatClient(innerClient)
+internal sealed class PotatoModelCommunicationLogger(
+    IChatClient innerClient,
+    int contextSize,
+    ExecutionMemory? executionMemory = null) : DelegatingChatClient(innerClient)
 {
     private const int DefaultMaxOutputTokens = 4096;
 
@@ -128,8 +131,26 @@ internal sealed class PotatoModelCommunicationLogger(IChatClient innerClient, in
 
         builder.AppendLine("## Context");
         builder.AppendLine(
-            $"estimated prompt: {FormatNumber(usage.PromptTokens)} / {FormatNumber(usage.ContextSize)} tokens " +
+            $"estimated prompt (chat history): {FormatNumber(usage.PromptTokens)} / {FormatNumber(usage.ContextSize)} tokens " +
             $"({FormatPercent(usage.PromptTokens, usage.ContextSize)} used)");
+        
+        // Show ExecutionMemory optimization metrics if available
+        if (executionMemory is not null && executionMemory.Count > 0)
+        {
+            var metrics = CalculateOptimizationMetrics(messages);
+            if (metrics.HasData)
+            {
+                builder.AppendLine($"  - Execution memory (full data): {FormatNumber(metrics.ExecutionMemoryCharacters)} chars " +
+                    $"(~{FormatNumber(metrics.ExecutionMemoryEstimatedTokens)} est. tokens, not in chat)");
+                builder.AppendLine($"  - Truncations: {metrics.TruncationCount} items, " +
+                    $"recovered {FormatNumber(metrics.TotalBytesRecovered)} bytes");
+                if (metrics.TokensSavedPercentage > 0)
+                {
+                    builder.AppendLine($"  - Token efficiency: +{metrics.TokensSavedPercentage:F1}% extra data available");
+                }
+            }
+        }
+        
         builder.AppendLine($"available before output: {FormatNumber(usage.AvailableBeforeOutput)} tokens");
         builder.AppendLine($"reserved output ({usage.OutputSource}): {FormatNumber(usage.MaxOutputTokens)} tokens");
         builder.AppendLine($"headroom after reserved output: {FormatNumber(usage.HeadroomAfterReservedOutput)} tokens");
@@ -264,6 +285,37 @@ internal sealed class PotatoModelCommunicationLogger(IChatClient innerClient, in
         int HeadroomAfterReservedOutput)
     {
         public bool ExceedsContext => PromptTokens + MaxOutputTokens > ContextSize;
+    }
+
+    private sealed record OptimizationMetrics(
+        int ExecutionMemoryCharacters,
+        int ExecutionMemoryEstimatedTokens,
+        int TruncationCount,
+        int TotalBytesRecovered,
+        double TokensSavedPercentage)
+    {
+        public bool HasData => TruncationCount > 0 || ExecutionMemoryCharacters > 0;
+    }
+
+    private OptimizationMetrics CalculateOptimizationMetrics(IReadOnlyList<ChatMessage> messages)
+    {
+        if (executionMemory is null || executionMemory.Count == 0)
+        {
+            return new OptimizationMetrics(0, 0, 0, 0, 0);
+        }
+
+        var (totalMemoryCharacters, truncatedItems, totalBytesRecovered) = executionMemory.GetMetrics();
+        
+        int chatHistoryTokens = EstimateMessageTokens(messages);
+        int memoryEstimatedTokens = totalMemoryCharacters > 0 ? (int)Math.Ceiling(totalMemoryCharacters / 4.0) : 0;
+        double tokensSaved = chatHistoryTokens > 0 ? (totalBytesRecovered / 4.0) / chatHistoryTokens * 100.0 : 0;
+
+        return new OptimizationMetrics(
+            totalMemoryCharacters,
+            memoryEstimatedTokens,
+            truncatedItems,
+            totalBytesRecovered,
+            tokensSaved);
     }
 
     private static void AppendContent(StringBuilder builder, AIContent content)

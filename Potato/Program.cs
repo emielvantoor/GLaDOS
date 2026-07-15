@@ -28,6 +28,7 @@ class Program
         services.AddSingleton<PlanTaskNormalizer>();
         services.AddSingleton<PlannerTaskGenerator>();
         services.AddSingleton<PlanningService>();
+        services.AddSingleton<ContextCompactor>();
         services.AddSingleton<ReActSession>();
         services.AddSingleton<AgentTools>();
         services.AddSingleton<ExecutionMemory>();
@@ -48,7 +49,8 @@ class Program
         var provider = services.BuildServiceProvider();
 
         Uri gladosEndpoint = GladosConfiguration.GetEndpoint();
-        var clientFactory = new GladosChatClientFactory();
+        var executionMemory = provider.GetRequiredService<ExecutionMemory>();
+        var clientFactory = new GladosChatClientFactory(executionMemory);
         var modelSelector = new ModelSelector();
         string model = await modelSelector.SelectStartupModelAsync(gladosEndpoint, appSettings.SelectedModel);
         appSettingsStore.SetSelectedModel(model);
@@ -70,7 +72,7 @@ class Program
             options,
             appSettingsStore,
             provider.GetRequiredService<AgentTools>(),
-            provider.GetRequiredService<ExecutionMemory>(),
+            executionMemory,
             provider.GetRequiredService<CurrentChatClientState>(),
             provider.GetRequiredService<PlanningService>(),
             provider.GetRequiredService<ExecutionService>(),
