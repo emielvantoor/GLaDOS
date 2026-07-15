@@ -66,7 +66,7 @@ internal sealed class PipelineSession
         executionMode = ParseExecutionMode(options.ExecutionMode);
         
         PotatoAppSettings settings = appSettingsStore.Load();
-        contextOptimizationEnabled = settings.ContextOptimizationEnabled ?? true;
+        contextOptimizationEnabled = settings.ContextOptimizationEnabled ?? false;
     }
 
     public async Task RunAsync()
