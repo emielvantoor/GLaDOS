@@ -15,7 +15,8 @@
     }
 
     function getMaxCompletionTokensLimit(contextSize = getContextSize()) {
-        return Math.max(minMaxCompletionTokens, Math.floor(contextSize / 2 / maxCompletionTokensStep) * maxCompletionTokensStep);
+        const practicalLimit = Math.min(8192, Math.floor(contextSize / 4));
+        return Math.max(minMaxCompletionTokens, Math.floor(practicalLimit / maxCompletionTokensStep) * maxCompletionTokensStep);
     }
 
     function updateTokenSettings() {

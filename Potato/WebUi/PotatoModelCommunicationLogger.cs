@@ -5,8 +5,10 @@ using Microsoft.Extensions.AI;
 
 namespace Potato.WebUi;
 
-internal sealed class PotatoModelCommunicationLogger(IChatClient innerClient) : DelegatingChatClient(innerClient)
+internal sealed class PotatoModelCommunicationLogger(IChatClient innerClient, int contextSize) : DelegatingChatClient(innerClient)
 {
+    private const int DefaultMaxOutputTokens = 4096;
+
     private long nextRequestId;
 
     public override async Task<ChatResponse> GetResponseAsync(
@@ -41,7 +43,7 @@ internal sealed class PotatoModelCommunicationLogger(IChatClient innerClient) : 
         RecordModelExchange(requestId, capturedMessages, options, response.ToString());
     }
 
-    private static void RecordModelExchange(
+    private void RecordModelExchange(
         long requestId,
         IReadOnlyList<ChatMessage> messages,
         ChatOptions? options,
@@ -54,7 +56,7 @@ internal sealed class PotatoModelCommunicationLogger(IChatClient innerClient) : 
             collapsed: true);
     }
 
-    private static void RecordModelExchange(
+    private void RecordModelExchange(
         long requestId,
         IReadOnlyList<ChatMessage> messages,
         ChatOptions? options,
@@ -67,7 +69,7 @@ internal sealed class PotatoModelCommunicationLogger(IChatClient innerClient) : 
             collapsed: true);
     }
 
-    private static string FormatModelExchange(
+    private string FormatModelExchange(
         long requestId,
         IReadOnlyList<ChatMessage> messages,
         ChatOptions? options,
@@ -82,7 +84,7 @@ internal sealed class PotatoModelCommunicationLogger(IChatClient innerClient) : 
         return FormatModelExchange(requestId, messages, options, responseText);
     }
 
-    private static string FormatModelExchange(
+    private string FormatModelExchange(
         long requestId,
         IReadOnlyList<ChatMessage> messages,
         ChatOptions? options,
@@ -93,6 +95,7 @@ internal sealed class PotatoModelCommunicationLogger(IChatClient innerClient) : 
         builder.AppendLine();
         builder.AppendLine("## Request");
         AppendOptions(builder, options);
+        AppendContextUsage(builder, messages, options, responseText);
         builder.AppendLine();
 
         for (int i = 0; i < messages.Count; i++)
@@ -107,6 +110,39 @@ internal sealed class PotatoModelCommunicationLogger(IChatClient innerClient) : 
         builder.AppendLine("## Response");
         builder.AppendLine(string.IsNullOrWhiteSpace(responseText) ? "(empty)" : responseText);
         return builder.ToString().TrimEnd();
+    }
+
+    private void AppendContextUsage(
+        StringBuilder builder,
+        IReadOnlyList<ChatMessage> messages,
+        ChatOptions? options,
+        string responseText)
+    {
+        if (contextSize <= 0)
+        {
+            return;
+        }
+
+        int promptTokens = EstimateMessageTokens(messages);
+        int responseTokens = EstimateTokenCount(responseText);
+        int maxOutputTokens = options?.MaxOutputTokens ?? DefaultMaxOutputTokens;
+        int availableBeforeOutput = Math.Max(0, contextSize - promptTokens);
+        int headroomAfterReservedOutput = Math.Max(0, contextSize - promptTokens - maxOutputTokens);
+        string outputSource = options?.MaxOutputTokens.HasValue == true ? "requested" : "default";
+
+        builder.AppendLine("## Context");
+        builder.AppendLine(
+            $"estimated prompt: {FormatNumber(promptTokens)} / {FormatNumber(contextSize)} tokens " +
+            $"({FormatPercent(promptTokens, contextSize)} used)");
+        builder.AppendLine($"available before output: {FormatNumber(availableBeforeOutput)} tokens");
+        builder.AppendLine($"reserved output ({outputSource}): {FormatNumber(maxOutputTokens)} tokens");
+        builder.AppendLine($"headroom after reserved output: {FormatNumber(headroomAfterReservedOutput)} tokens");
+        builder.AppendLine($"estimated response: {FormatNumber(responseTokens)} tokens");
+
+        if (promptTokens + maxOutputTokens > contextSize)
+        {
+            builder.AppendLine("warning: estimated prompt plus reserved output exceeds the configured context window.");
+        }
     }
 
     private static string FormatMessages(IList<ChatMessage> messages)
@@ -143,6 +179,39 @@ internal sealed class PotatoModelCommunicationLogger(IChatClient innerClient) : 
 
         string rendered = builder.ToString().TrimEnd();
         return string.IsNullOrWhiteSpace(rendered) ? "(empty)" : rendered;
+    }
+
+    private static int EstimateMessageTokens(IReadOnlyList<ChatMessage> messages)
+    {
+        int total = 0;
+        foreach (ChatMessage message in messages)
+        {
+            total += EstimateTokenCount($"{message.Role}\n{FormatMessageContent(message)}");
+        }
+
+        return total;
+    }
+
+    private static int EstimateTokenCount(string text)
+    {
+        if (string.IsNullOrEmpty(text))
+        {
+            return 0;
+        }
+
+        return (int)Math.Ceiling(text.Length / 4.0);
+    }
+
+    private static string FormatNumber(int value) => value.ToString("N0");
+
+    private static string FormatPercent(int used, int total)
+    {
+        if (total <= 0)
+        {
+            return "0%";
+        }
+
+        return $"{Math.Min(100.0, used * 100.0 / total):0.#}%";
     }
 
     private static void AppendContent(StringBuilder builder, AIContent content)

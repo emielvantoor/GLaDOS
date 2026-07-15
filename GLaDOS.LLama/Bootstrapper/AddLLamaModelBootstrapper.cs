@@ -62,7 +62,7 @@ public static class AddLLamaModelBootstrapper
             Created = created,
             OwnedBy = "local",
             ContextLength = contextSize.HasValue ? (int)contextSize.Value : 0,
-            MaxOutputTokens = -1,
+            MaxOutputTokens = 4096,
             Permission =
             [
                 new LanguageModelPermission

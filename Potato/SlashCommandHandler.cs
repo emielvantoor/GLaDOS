@@ -16,6 +16,7 @@ internal sealed class SlashCommandHandler(
     Action<string> continueSession,
     Func<string> getExecutionMode,
     Action<string> setExecutionMode,
+    Func<int> getContextSize,
     Func<IChatClient> getClient,
     Action<IChatClient> switchModel)
 {
@@ -208,7 +209,7 @@ internal sealed class SlashCommandHandler(
             }
         }
 
-        IChatClient selectedOpenAiClient = clientFactory.CreateOpenAiClient(gladosEndpoint, selectedModel);
+        IChatClient selectedOpenAiClient = clientFactory.CreateOpenAiClient(gladosEndpoint, selectedModel, getContextSize());
 
         switchModel(selectedOpenAiClient);
         setSelectedModel(selectedModel);

@@ -53,7 +53,7 @@ class Program
         string model = await modelSelector.SelectStartupModelAsync(gladosEndpoint, appSettings.SelectedModel);
         appSettingsStore.SetSelectedModel(model);
 
-        IChatClient openAiClient = clientFactory.CreateOpenAiClient(gladosEndpoint, model);
+        IChatClient openAiClient = clientFactory.CreateOpenAiClient(gladosEndpoint, model, options.ContextSize);
         provider.GetRequiredService<CurrentChatClientState>().SetOpenAiClient(openAiClient);
 
         await using var webUiReporter = new PotatoWebUiReporter(gladosEndpoint, model);

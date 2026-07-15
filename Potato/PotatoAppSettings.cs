@@ -12,6 +12,8 @@ public sealed class PotatoAppSettings
     public string? SelectedModel { get; init; }
 
     public string? ExecutionMode { get; init; }
+
+    public int? ContextSize { get; init; }
 }
 
 public sealed class PotatoAppSettingsStore
@@ -20,6 +22,7 @@ public sealed class PotatoAppSettingsStore
     private const string WebUiInputEnabledProperty = "WebUiInputEnabled";
     private const string SelectedModelProperty = "SelectedModel";
     private const string ExecutionModeProperty = "ExecutionMode";
+    private const string ContextSizeProperty = "ContextSize";
     private readonly string path;
 
     public PotatoAppSettingsStore(string path)
@@ -37,7 +40,8 @@ public sealed class PotatoAppSettingsStore
             UseCompiledDefaultPrompts = GetBool(root, UseCompiledDefaultPromptsProperty),
             WebUiInputEnabled = GetBool(root, WebUiInputEnabledProperty),
             SelectedModel = GetString(root, SelectedModelProperty),
-            ExecutionMode = NormalizeExecutionMode(GetString(root, ExecutionModeProperty))
+            ExecutionMode = NormalizeExecutionMode(GetString(root, ExecutionModeProperty)),
+            ContextSize = GetInt(root, ContextSizeProperty)
         };
     }
 
@@ -135,6 +139,24 @@ public sealed class PotatoAppSettingsStore
         {
             string value = node.ToString();
             return string.IsNullOrWhiteSpace(value) ? null : value;
+        }
+    }
+
+    private static int? GetInt(JsonObject root, string propertyName)
+    {
+        JsonNode? node = root[propertyName];
+        if (node is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            return node.GetValue<int>();
+        }
+        catch
+        {
+            return int.TryParse(node.ToString(), out int value) ? value : null;
         }
     }
 

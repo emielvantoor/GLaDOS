@@ -218,6 +218,9 @@ public static class LLamaHardwareConfigurator
         {
             SplitMode = GPUSplitMode.None,
             ContextSize = contextSize,
+            TypeK = GGMLType.GGML_TYPE_Q8_0,
+            TypeV = GGMLType.GGML_TYPE_Q8_0,
+            // FlashAttention = true,
             Threads = cpuCores,
             GpuLayerCount = _useGpu 
                 ? int.TryParse(configuration["GLaDOS:GpuLayerCount"], out var gpuLayerCount) 

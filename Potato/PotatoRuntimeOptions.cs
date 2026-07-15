@@ -2,6 +2,8 @@ namespace Potato;
 
 public sealed class PotatoRuntimeOptions
 {
+    private const int DefaultContextSize = 32768;
+
     public string PromptDirectory { get; init; } = Path.Combine(AppContext.BaseDirectory, "prompts");
 
     public bool UseCompiledDefaultPrompts { get; init; }
@@ -9,6 +11,8 @@ public sealed class PotatoRuntimeOptions
     public bool WebUiInputEnabled { get; init; }
 
     public string ExecutionMode { get; init; } = "react";
+
+    public int ContextSize { get; init; } = DefaultContextSize;
 
     public HashSet<string> AlwaysAllowedPermissionKeys { get; } = new(StringComparer.Ordinal);
 
@@ -19,8 +23,22 @@ public sealed class PotatoRuntimeOptions
             PromptDirectory = GetPromptDirectory(args),
             UseCompiledDefaultPrompts = appSettings.UseCompiledDefaultPrompts,
             WebUiInputEnabled = GetWebUiInputEnabled(appSettings),
-            ExecutionMode = appSettings.ExecutionMode ?? "react"
+            ExecutionMode = appSettings.ExecutionMode ?? "react",
+            ContextSize = GetContextSize(appSettings)
         };
+    }
+
+    private static int GetContextSize(PotatoAppSettings appSettings)
+    {
+        string? environmentValue = Environment.GetEnvironmentVariable("POTATO_CONTEXT_SIZE");
+        if (!string.IsNullOrWhiteSpace(environmentValue) &&
+            int.TryParse(environmentValue, out int environmentContextSize) &&
+            environmentContextSize > 0)
+        {
+            return environmentContextSize;
+        }
+
+        return appSettings.ContextSize is > 0 ? appSettings.ContextSize.Value : DefaultContextSize;
     }
 
     private static bool GetWebUiInputEnabled(PotatoAppSettings appSettings)

@@ -8,7 +8,7 @@ namespace Potato;
 
 internal sealed class GladosChatClientFactory
 {
-    public IChatClient CreateOpenAiClient(Uri gladosEndpoint, string model)
+    public IChatClient CreateOpenAiClient(Uri gladosEndpoint, string model, int contextSize)
     {
         IChatClient openAiClient = new ChatClient(
             model,
@@ -18,7 +18,7 @@ internal sealed class GladosChatClientFactory
                 Endpoint = gladosEndpoint
             }).AsIChatClient();
 
-        return new PotatoModelCommunicationLogger(openAiClient);
+        return new PotatoModelCommunicationLogger(openAiClient, contextSize);
     }
 
 }

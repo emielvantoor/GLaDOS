@@ -85,6 +85,7 @@ internal sealed class PipelineSession
             ContinueSession,
             GetExecutionMode,
             SetExecutionMode,
+            () => options.ContextSize,
             () => currentOpenAiClient,
             SwitchModel);
 

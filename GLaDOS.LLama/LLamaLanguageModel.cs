@@ -14,6 +14,10 @@ namespace GLaDOS.LLama;
 /// </summary>
 public class LLamaLanguageModel : LanguageModel, IDisposable
 {
+    private const int DefaultMaxOutputTokens = 2048;
+    private const int MinimumMaxOutputTokens = 256;
+    private const int PromptReserveTokens = 512;
+
     private Grammar? _grammer;
     private readonly ModelParams _params;
     private LLamaWeights? _weights;
@@ -59,9 +63,12 @@ public class LLamaLanguageModel : LanguageModel, IDisposable
         ChatOptions chatOptions,
         CancellationToken cancellationToken)
     {
+        var maxTokens = GetSafeMaxTokens(prompt, chatOptions.MaxTokenLength);
         var inferenceParams = new InferenceParams
         {
-            MaxTokens = chatOptions.MaxTokenLength ?? ModelMetaData.MaxOutputTokens,
+            MaxTokens = maxTokens,
+            OverflowStrategy = ContextOverflowStrategy.TruncateAndReprefill,
+            ContextTruncationPercentage = 0.1f,
             SamplingPipeline = new DefaultSamplingPipeline()
             {
                 Temperature = chatOptions.Temperature ?? 0.5f,
@@ -86,6 +93,32 @@ public class LLamaLanguageModel : LanguageModel, IDisposable
         executor.Context.Dispose();
 
         return fullResponseBuilder.ToString().Trim();
+    }
+
+    private int GetSafeMaxTokens(string prompt, int? requestedMaxTokens)
+    {
+        int requested = requestedMaxTokens.GetValueOrDefault(ModelMetaData.MaxOutputTokens);
+        if (requested <= 0)
+        {
+            requested = DefaultMaxOutputTokens;
+        }
+
+        int contextSize = _params.ContextSize.HasValue
+            ? (int)Math.Min(_params.ContextSize.Value, int.MaxValue)
+            : 0;
+        if (contextSize <= 0)
+        {
+            return Math.Max(MinimumMaxOutputTokens, requested);
+        }
+
+        int estimatedPromptTokens = Math.Max(1, (int)Math.Ceiling(prompt.Length / 4.0));
+        int availableOutputTokens = contextSize - estimatedPromptTokens - PromptReserveTokens;
+        if (availableOutputTokens < MinimumMaxOutputTokens)
+        {
+            availableOutputTokens = MinimumMaxOutputTokens;
+        }
+
+        return Math.Clamp(requested, MinimumMaxOutputTokens, availableOutputTokens);
     }
 
     protected override Task OnUnloadAsync()
