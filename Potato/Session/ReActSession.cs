@@ -393,45 +393,62 @@ internal sealed class ReActSession(
         string result = await ExecuteTextualToolCallAsync(toolCall, cancellationToken);
         
         // Intelligently compact the result
-        ContextCompactor.CompactionResult compaction = contextCompactor.Compact(
-            result,
-            DetectToolResultType(toolCall.Name),
-            MaxToolResultCharactersInHistory);
+        bool optimize = getContextOptimizationEnabled();
         
-        // Store full result in execution memory - gets assigned index
-        int memoryIndex = executionMemory.Add(
-            $"{toolCall.Name}",
-            result,
-            DetectToolResultType(toolCall.Name),
-            compaction.OriginalLength,
-            compaction.RetrievalHint,
-            contextKey: null);
-        
-        // Replace placeholder with actual index
-        string finalContent = compaction.TruncatedContent;
-        if (compaction.WasTruncated)
+        if (optimize)
         {
-            finalContent = finalContent.Replace("{{INDEX}}", memoryIndex.ToString());
+            ContextCompactor.CompactionResult compaction = contextCompactor.Compact(
+                result,
+                DetectToolResultType(toolCall.Name),
+                MaxToolResultCharactersInHistory);
             
-            // Track recent truncation to enforce GetCollectedContext before edits
-            recentTruncations.Enqueue((memoryIndex, toolCall.Name));
-            if (recentTruncations.Count > 5)
+            // Store full result in execution memory - gets assigned index
+            int memoryIndex = executionMemory.Add(
+                $"{toolCall.Name}",
+                result,
+                DetectToolResultType(toolCall.Name),
+                compaction.OriginalLength,
+                compaction.RetrievalHint,
+                contextKey: null);
+            
+            // Replace placeholder with actual index
+            string finalContent = compaction.TruncatedContent;
+            if (compaction.WasTruncated)
             {
-                recentTruncations.Dequeue();
+                finalContent = finalContent.Replace("{{INDEX}}", memoryIndex.ToString());
+                
+                // Track recent truncation to enforce GetCollectedContext before edits
+                recentTruncations.Enqueue((memoryIndex, toolCall.Name));
+                if (recentTruncations.Count > 5)
+                {
+                    recentTruncations.Dequeue();
+                }
             }
+            
+            await executionMemory.SummarizeLargeUnsummarizedItemsAsync(goal, chatClient, cancellationToken);
+            
+            // Add to chat history with correct index
+            reactHistory.Add(new ChatMessage(
+                ChatRole.User,
+                PromptLibrary.BuildReActObservationUserPrompt(
+                    goal,
+                    executionGuidance,
+                    toolCall.Name,
+                    finalContent,
+                    getContextOptimizationEnabled())));
         }
-        
-        await executionMemory.SummarizeLargeUnsummarizedItemsAsync(goal, chatClient, cancellationToken);
-        
-        // Add to chat history with correct index
-        reactHistory.Add(new ChatMessage(
-            ChatRole.User,
-            PromptLibrary.BuildReActObservationUserPrompt(
-                goal,
-                executionGuidance,
-                toolCall.Name,
-                finalContent,
-                getContextOptimizationEnabled())));
+        else
+        {
+            // Context optimization disabled: passthrough mode - add raw result directly
+            reactHistory.Add(new ChatMessage(
+                ChatRole.User,
+                PromptLibrary.BuildReActObservationUserPrompt(
+                    goal,
+                    executionGuidance,
+                    toolCall.Name,
+                    result,
+                    getContextOptimizationEnabled())));
+        }
         return true;
     }
 
