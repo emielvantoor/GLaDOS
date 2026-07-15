@@ -190,7 +190,7 @@ internal sealed class ReActSession(
                 continue;
             }
 
-            if (await TryExecuteTextualActionAsync(responseText, reactHistory, goal, executionGuidance, chatClient, cancellationToken))
+            if (await TryExecuteTextualActionAsync(responseText, reactHistory, goal, executionGuidance, chatClient, getContextOptimizationEnabled, cancellationToken))
             {
                 consecutiveInvalidResponses = 0;
                 continue;
@@ -377,6 +377,7 @@ internal sealed class ReActSession(
         string goal,
         string executionGuidance,
         IChatClient chatClient,
+        Func<bool> getContextOptimizationEnabled,
         CancellationToken cancellationToken)
     {
         TextualToolCall? toolCall = TryParseToolCall(responseText) ??
