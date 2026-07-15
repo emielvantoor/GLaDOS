@@ -30,6 +30,7 @@ internal sealed class ReActSession(
         string goal,
         string executionGuidance,
         IChatClient chatClient,
+        Func<bool> getContextOptimizationEnabled,
         CancellationToken cancellationToken)
     {
         executionMemory.Clear();
@@ -105,40 +106,54 @@ internal sealed class ReActSession(
                 }
                 
                 // Intelligently compact the result for chat history (uses placeholder {{INDEX}})
-                ContextCompactor.CompactionResult compaction = contextCompactor.Compact(
-                    result, 
-                    DetectToolResultType(functionCall.Name),
-                    MaxToolResultCharactersInHistory);
+                bool optimize = getContextOptimizationEnabled();
                 
-                // Store full result in execution memory - this assigns the actual index
-                int memoryIndex = executionMemory.Add(
-                    $"{functionCall.Name}",
-                    result,
-                    DetectToolResultType(functionCall.Name),
-                    compaction.OriginalLength,
-                    compaction.RetrievalHint,
-                    contextKey: null);
-                
-                // Replace placeholder index with actual memory index
-                string finalContent = compaction.TruncatedContent;
-                if (compaction.WasTruncated)
+                if (optimize)
                 {
-                    finalContent = finalContent.Replace("{{INDEX}}", memoryIndex.ToString());
+                    // Context optimization enabled: truncate, store, summarize
+                    ContextCompactor.CompactionResult compaction = contextCompactor.Compact(
+                        result, 
+                        DetectToolResultType(functionCall.Name),
+                        MaxToolResultCharactersInHistory);
                     
-                    // Track recent truncation to enforce GetCollectedContext before edits
-                    recentTruncations.Enqueue((memoryIndex, functionCall.Name));
-                    if (recentTruncations.Count > 5)
+                    // Store full result in execution memory - this assigns the actual index
+                    int memoryIndex = executionMemory.Add(
+                        $"{functionCall.Name}",
+                        result,
+                        DetectToolResultType(functionCall.Name),
+                        compaction.OriginalLength,
+                        compaction.RetrievalHint,
+                        contextKey: null);
+                    
+                    // Replace placeholder index with actual memory index
+                    string finalContent = compaction.TruncatedContent;
+                    if (compaction.WasTruncated)
                     {
-                        recentTruncations.Dequeue();
+                        finalContent = finalContent.Replace("{{INDEX}}", memoryIndex.ToString());
+                        
+                        // Track recent truncation to enforce GetCollectedContext before edits
+                        recentTruncations.Enqueue((memoryIndex, functionCall.Name));
+                        if (recentTruncations.Count > 5)
+                        {
+                            recentTruncations.Dequeue();
+                        }
                     }
+                    
+                    // Add compacted version to chat history
+                    reactHistory.Add(new ChatMessage(
+                        ChatRole.Tool,
+                        [new FunctionResultContent(functionCall.CallId, finalContent)]));
+                    
+                    await executionMemory.SummarizeLargeUnsummarizedItemsAsync(goal, chatClient, cancellationToken);
+                }
+                else
+                {
+                    // Context optimization disabled: passthrough mode - add raw result directly
+                    reactHistory.Add(new ChatMessage(
+                        ChatRole.Tool,
+                        [new FunctionResultContent(functionCall.CallId, result)]));
                 }
                 
-                // Add compacted version to chat history
-                reactHistory.Add(new ChatMessage(
-                    ChatRole.Tool,
-                    [new FunctionResultContent(functionCall.CallId, finalContent)]));
-                
-                await executionMemory.SummarizeLargeUnsummarizedItemsAsync(goal, chatClient, cancellationToken);
                 consecutiveInvalidResponses = 0;
                 continue;
             }

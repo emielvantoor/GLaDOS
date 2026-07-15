@@ -1,4 +1,4 @@
-/* Full GLaDOS UI styles from site.css */
+/* GLaDOS UI Styles extracted from index.html */
 
 :root {
     color-scheme: light;
@@ -60,4 +60,4 @@
     --shadow-soft: 0 18px 50px rgba(0, 0, 0, 0.45);
 }
 
-/* ... (rest of the CSS content from site.css) ... */
+/* ... (rest of the CSS) ... */

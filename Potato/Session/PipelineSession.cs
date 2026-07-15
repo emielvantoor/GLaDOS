@@ -35,6 +35,7 @@ internal sealed class PipelineSession
     private string? currentSessionSubject;
     private DateTime currentSessionStartedAt;
     private CancellationTokenSource? currentTaskCancellationSource;
+    private bool contextOptimizationEnabled = true;
 
     public PipelineSession(
         Uri gladosEndpoint,
@@ -87,7 +88,9 @@ internal sealed class PipelineSession
             SetExecutionMode,
             () => options.ContextSize,
             () => currentOpenAiClient,
-            SwitchModel);
+            SwitchModel,
+            SetContextOptimizationEnabled,
+            GetContextOptimizationEnabled);
 
         try
         {
@@ -198,7 +201,7 @@ internal sealed class PipelineSession
     private async Task HandleUserGoalWithReActAsync(string expandedGoal, CancellationToken cancellationToken)
     {
         string guidance = _planningService.BuildDirectExecutionGuidance(expandedGoal, Environment.CurrentDirectory);
-        string finalMessage = await _reActSession.ExecuteAsync(expandedGoal, guidance, currentOpenAiClient, cancellationToken);
+        string finalMessage = await _reActSession.ExecuteAsync(expandedGoal, guidance, currentOpenAiClient, GetContextOptimizationEnabled, cancellationToken);
         chatHistory.Add(new ChatMessage(ChatRole.Assistant, finalMessage));
         PotatoConsole.WriteAgentResponse(finalMessage);
         ResetConversationState();
@@ -796,6 +799,13 @@ internal sealed class PipelineSession
         Potato.Prompts.PromptLibrary.SetUseCompiledDefaultsOnly(useCompiledDefaultsOnly);
         ResetConversationState();
     }
+
+    private void SetContextOptimizationEnabled(bool enabled)
+    {
+        contextOptimizationEnabled = enabled;
+    }
+
+    private bool GetContextOptimizationEnabled() => contextOptimizationEnabled;
 
     private CancellationTokenSource BeginTaskCancellation()
     {
