@@ -35,7 +35,7 @@ internal sealed class PipelineSession
     private string? currentSessionSubject;
     private DateTime currentSessionStartedAt;
     private CancellationTokenSource? currentTaskCancellationSource;
-    private bool contextOptimizationEnabled = true;
+    private bool contextOptimizationEnabled;
 
     public PipelineSession(
         Uri gladosEndpoint,
@@ -64,6 +64,9 @@ internal sealed class PipelineSession
         _reActSession = reActSession;
         currentOpenAiClient = openAiClient;
         executionMode = ParseExecutionMode(options.ExecutionMode);
+        
+        PotatoAppSettings settings = appSettingsStore.Load();
+        contextOptimizationEnabled = settings.ContextOptimizationEnabled ?? true;
     }
 
     public async Task RunAsync()
@@ -803,6 +806,7 @@ internal sealed class PipelineSession
     private void SetContextOptimizationEnabled(bool enabled)
     {
         contextOptimizationEnabled = enabled;
+        appSettingsStore.SetContextOptimizationEnabled(enabled);
     }
 
     private bool GetContextOptimizationEnabled() => contextOptimizationEnabled;

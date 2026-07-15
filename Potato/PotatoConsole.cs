@@ -505,16 +505,17 @@ internal static class PotatoConsole
             "  /mode           Show or change execution mode: status, pipeline, react",
             "  /prompts        Show or change prompt source: status, defaults, external",
             "  /webui-input    Enable or disable GLaDOS WebUI input: enable, disable",
-            "  /sessions       List tracked sessions",
-            "  /continue       Continue the latest tracked session, or /continue <session>",
-            "  /transcript     Show or save a tracked session transcript",
-            "  /abort          Cancel the current task and return to the main prompt",
-            "  Ctrl+C          Abort the in-flight task; exits normally at the idle prompt",
-            "  Up/Down         Cycle through commands entered in this session",
-            "  exit, quit      Close Potato Code",
-            "  y, yes, ok      Approve the current specification",
-            "  execute         Approve a reviewed plan for execution",
-            "  abort           Cancel a reviewed plan before execution"
+           "  /context-optimization  Show or change context optimization: status, enable, disable, toggle",
+           "  /sessions       List tracked sessions",
+           "  /continue       Continue the latest tracked session, or /continue <session>",
+           "  /transcript     Show or save a tracked session transcript",
+           "  /abort          Cancel the current task and return to the main prompt",
+           "  Ctrl+C          Abort the in-flight task; exits normally at the idle prompt",
+           "  Up/Down         Cycle through commands entered in this session",
+           "  exit, quit      Close Potato Code",
+           "  y, yes, ok      Approve the current specification",
+           "  execute         Approve a reviewed plan for execution",
+           "  abort           Cancel a reviewed plan before execution"
         ]);
 
         EventSink?.Record("shortcuts", "status", shortcuts, collapsed: false);

@@ -14,6 +14,8 @@ public sealed class PotatoAppSettings
     public string? ExecutionMode { get; init; }
 
     public int? ContextSize { get; init; }
+
+    public bool? ContextOptimizationEnabled { get; init; }
 }
 
 public sealed class PotatoAppSettingsStore
@@ -23,6 +25,7 @@ public sealed class PotatoAppSettingsStore
     private const string SelectedModelProperty = "SelectedModel";
     private const string ExecutionModeProperty = "ExecutionMode";
     private const string ContextSizeProperty = "ContextSize";
+    private const string ContextOptimizationEnabledProperty = "ContextOptimizationEnabled";
     private readonly string path;
 
     public PotatoAppSettingsStore(string path)
@@ -41,7 +44,8 @@ public sealed class PotatoAppSettingsStore
             WebUiInputEnabled = GetBool(root, WebUiInputEnabledProperty),
             SelectedModel = GetString(root, SelectedModelProperty),
             ExecutionMode = NormalizeExecutionMode(GetString(root, ExecutionModeProperty)),
-            ContextSize = GetInt(root, ContextSizeProperty)
+            ContextSize = GetInt(root, ContextSizeProperty),
+            ContextOptimizationEnabled = GetBool(root, ContextOptimizationEnabledProperty, defaultValue: true)
         };
     }
 
@@ -70,6 +74,13 @@ public sealed class PotatoAppSettingsStore
     {
         JsonObject root = LoadRoot();
         root[ExecutionModeProperty] = NormalizeExecutionMode(mode) ?? "react";
+        SaveRoot(root);
+    }
+
+    public void SetContextOptimizationEnabled(bool value)
+    {
+        JsonObject root = LoadRoot();
+        root[ContextOptimizationEnabledProperty] = value;
         SaveRoot(root);
     }
 
@@ -104,12 +115,12 @@ public sealed class PotatoAppSettingsStore
             root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }) + Environment.NewLine);
     }
 
-    private static bool GetBool(JsonObject root, string propertyName)
+    private static bool GetBool(JsonObject root, string propertyName, bool defaultValue = false)
     {
         JsonNode? node = root[propertyName];
         if (node is null)
         {
-            return false;
+            return defaultValue;
         }
 
         try
@@ -118,7 +129,7 @@ public sealed class PotatoAppSettingsStore
         }
         catch
         {
-            return bool.TryParse(node.ToString(), out bool value) && value;
+            return bool.TryParse(node.ToString(), out bool value) && value ? true : defaultValue;
         }
     }
 
