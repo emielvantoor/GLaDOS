@@ -7,6 +7,7 @@ using Microsoft.Extensions.AI;
 using Potato.Models;
 using Potato.Prompts;
 using Potato.Tools;
+using Potato.WebUi;
 
 namespace Potato.Session;
 
@@ -61,6 +62,7 @@ internal sealed class ReActSession(
                 agentTools.BeginToolInvocationBatch(MaxToolCallsPerIteration);
                 try
                 {
+                    using IDisposable _ = PotatoModelCommunicationLogger.TrackMainPotatoChatContext();
                     response = await chatClient.GetResponseAsync(reactHistory, toolOptions, cancellationToken);
                 }
                 finally
@@ -88,6 +90,19 @@ internal sealed class ReActSession(
                 }
 
                 string result = await ExecuteFunctionCallAsync(functionCall, cancellationToken);
+                
+                // Special handling for GetCollectedContext (retrieval tool, not data-gathering)
+                // Retrieval tools should NOT be re-compacted, re-stored, or re-summarized
+                if (functionCall.Name == nameof(AgentTools.GetCollectedContext) && !result.StartsWith("Error"))
+                {
+                    // Add full retrieval result directly to chat history (no truncation)
+                    reactHistory.Add(new ChatMessage(
+                        ChatRole.Tool,
+                        [new FunctionResultContent(functionCall.CallId, result)]));
+                    
+                    consecutiveInvalidResponses = 0;
+                    continue;  // Skip normal truncation → storage → summarization flow
+                }
                 
                 // Intelligently compact the result for chat history (uses placeholder {{INDEX}})
                 ContextCompactor.CompactionResult compaction = contextCompactor.Compact(

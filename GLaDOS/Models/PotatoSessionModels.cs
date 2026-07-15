@@ -9,6 +9,7 @@ public sealed record PotatoSessionSummary(
     bool IsProcessing,
     string? CurrentProgress,
     string? CurrentInputPrompt,
+    PotatoContextUsage? ContextUsage,
     bool WebUiInputEnabled,
     DateTimeOffset StartedAt,
     DateTimeOffset LastActivityAt,
@@ -23,6 +24,7 @@ public sealed record PotatoSessionDetail(
     bool IsProcessing,
     string? CurrentProgress,
     string? CurrentInputPrompt,
+    PotatoContextUsage? ContextUsage,
     bool WebUiInputEnabled,
     DateTimeOffset StartedAt,
     DateTimeOffset LastActivityAt,
@@ -48,7 +50,17 @@ public sealed record PotatoSessionEventRequest(
     string Kind,
     string Role,
     string Content,
-    bool Collapsed);
+    bool Collapsed,
+    PotatoContextUsage? ContextUsage = null);
+
+public sealed record PotatoContextUsage(
+    int PromptTokens,
+    int ContextSize,
+    double Percentage,
+    int MaxOutputTokens,
+    int HeadroomAfterReservedOutput,
+    bool ExceedsContext,
+    string Summary);
 
 public sealed record PotatoSessionInputRequest(string Content);
 

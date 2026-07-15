@@ -289,6 +289,14 @@ h1 {
     overflow-wrap: anywhere;
 }
 
+.agent-session-context {
+    margin-top: 5px;
+    color: var(--text-muted);
+    font-size: 12px;
+    font-weight: 700;
+    line-height: 1.35;
+}
+
 .agent-session-controls {
     display: flex;
     flex: 0 0 auto;

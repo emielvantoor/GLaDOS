@@ -127,11 +127,16 @@
     function setPotatoHeader(session) {
         const title = document.getElementById('agentSessionTitle');
         const path = document.getElementById('agentSessionPath');
+        const context = document.getElementById('agentSessionContext');
         const status = document.getElementById('agentSessionStatus');
 
         if (!session) {
             if (title) title.textContent = 'No Potato session selected';
             if (path) path.textContent = 'Start Potato from a working directory to mirror it here.';
+            if (context) {
+                context.textContent = '';
+                context.classList.add('hidden');
+            }
             if (status) status.textContent = 'Idle';
             setAgentComposerState(false, 'Status: Select a Potato session');
             updateAgentPromptPlaceholder(null);
@@ -142,6 +147,7 @@
 
         if (title) title.textContent = session.displayName || 'Potato session';
         if (path) path.textContent = session.workingDirectory;
+        setPotatoContextUsageHeader(context, session.contextUsage);
         if (status) status.textContent = session.isProcessing ? 'thinking' : (session.status || 'active');
         updateAgentComposerVisibility(session);
         setAgentComposerState(Boolean(session.webUiInputEnabled), getAgentStatusText(session));
@@ -149,6 +155,51 @@
         if (session.webUiInputEnabled) {
             scheduleAgentCompletions();
         }
+    }
+
+    function setPotatoContextUsageHeader(element, usage) {
+        if (!element) return;
+
+        const text = formatPotatoContextUsage(usage);
+        element.textContent = text;
+        element.classList.toggle('hidden', !text);
+    }
+
+    function formatPotatoContextUsage(usage) {
+        if (!usage) return '';
+
+        if (usage.summary) {
+            return `Context: ${usage.summary}`;
+        }
+
+        const prompt = Number(usage.promptTokens || 0);
+        const total = Number(usage.contextSize || 0);
+        if (total <= 0) return '';
+
+        const percentage = Number.isFinite(Number(usage.percentage))
+            ? Number(usage.percentage)
+            : Math.min(100, (prompt / total) * 100);
+        const parts = [
+            `${formatAgentNumber(prompt)}/${formatAgentNumber(total)} ${percentage.toFixed(percentage >= 10 ? 0 : 1)}%`
+        ];
+
+        if (Number.isFinite(Number(usage.maxOutputTokens)) && Number(usage.maxOutputTokens) > 0) {
+            parts.push(`output ${formatAgentNumber(Number(usage.maxOutputTokens))}`);
+        }
+
+        if (Number.isFinite(Number(usage.headroomAfterReservedOutput))) {
+            parts.push(`headroom ${formatAgentNumber(Number(usage.headroomAfterReservedOutput))}`);
+        }
+
+        if (usage.exceedsContext) {
+            parts.push('warning');
+        }
+
+        return `Context: (${parts.join(', ')})`;
+    }
+
+    function formatAgentNumber(value) {
+        return Math.round(value).toLocaleString();
     }
 
     function getAgentStatusText(session) {
@@ -406,8 +457,7 @@
         const kind = event.kind || 'event';
         if (kind === 'model-exchange') {
             const title = getPotatoEventStepTitle(event.content) || 'step: model exchange';
-            const context = getPotatoEventContextSummary(event.content);
-            return context ? `${title} · ${context}` : title;
+            return title;
         }
         if (kind === 'model-request') return 'Potato model request';
         if (kind === 'model-response') return 'Potato model response';
@@ -422,20 +472,6 @@
     function getPotatoEventStepTitle(content) {
         const firstLine = (content || '').split(/\r?\n/, 1)[0]?.trim();
         return firstLine?.toLowerCase().startsWith('step: ') ? firstLine : '';
-    }
-
-    function getPotatoEventContextSummary(content) {
-        const text = content || '';
-        const promptMatch = text.match(/estimated prompt:\s*([0-9,.\s]+)\s*\/\s*([0-9,.\s]+)\s*tokens/i);
-        if (!promptMatch) return '';
-
-        const headroomMatch = text.match(/headroom after reserved output:\s*([0-9,.\s]+)\s*tokens/i);
-        const prompt = promptMatch[1].trim();
-        const total = promptMatch[2].trim();
-        const headroom = headroomMatch?.[1]?.trim();
-        return headroom
-            ? `context ${prompt}/${total}, headroom ${headroom}`
-            : `context ${prompt}/${total}`;
     }
 
     function handleAgentPromptKeyPress(event) {

@@ -55,6 +55,38 @@ internal sealed class PotatoWebUiReporter(Uri gladosEndpoint, string model) : Po
             collapsed)));
     }
 
+    public void RecordContextUsage(
+        int promptTokens,
+        int contextSize,
+        double percentage,
+        int maxOutputTokens,
+        int headroomAfterReservedOutput,
+        bool exceedsContext,
+        string summary)
+    {
+        string content = string.IsNullOrWhiteSpace(summary)
+            ? $"{promptTokens:N0}/{contextSize:N0} {percentage:0.#}%"
+            : summary;
+
+        string currentWorkingDirectory = Environment.CurrentDirectory;
+        _ = Task.Run(() => TryPostAsync(eventUri, new PotatoSessionEventPayload(
+            sessionId,
+            sessionWorkingDirectory,
+            currentWorkingDirectory,
+            "context-usage",
+            "status",
+            content,
+            Collapsed: true,
+            ContextUsage: new PotatoContextUsagePayload(
+                promptTokens,
+                contextSize,
+                percentage,
+                maxOutputTokens,
+                headroomAfterReservedOutput,
+                exceedsContext,
+                content))));
+    }
+
     public bool TryReadInput(out string? input)
     {
         input = null;
@@ -166,7 +198,17 @@ internal sealed class PotatoWebUiReporter(Uri gladosEndpoint, string model) : Po
         string Kind,
         string Role,
         string Content,
-        bool Collapsed);
+        bool Collapsed,
+        PotatoContextUsagePayload? ContextUsage = null);
+
+    private sealed record PotatoContextUsagePayload(
+        int PromptTokens,
+        int ContextSize,
+        double Percentage,
+        int MaxOutputTokens,
+        int HeadroomAfterReservedOutput,
+        bool ExceedsContext,
+        string Summary);
 
     private sealed record InputPayload(string Content);
 }

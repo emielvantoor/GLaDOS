@@ -43,6 +43,7 @@ public sealed class PotatoSessionStore
             session.IsProcessing = false;
             session.CurrentProgress = null;
             session.CurrentInputPrompt = null;
+            session.ContextUsage = null;
             session.StartedAt = now;
             session.LastActivityAt = now;
             session.Events.Clear();
@@ -68,7 +69,7 @@ public sealed class PotatoSessionStore
             UpdateWorkingDirectory(session, request.CurrentWorkingDirectory);
             session.Status = request.Kind.Equals("stopped", StringComparison.OrdinalIgnoreCase) ? "stopped" : "active";
             session.LastActivityAt = now;
-            if (TryApplySessionStateEvent(session, request.Kind, request.Content))
+            if (TryApplySessionStateEvent(session, request.Kind, request.Content, request.ContextUsage))
             {
                 return ToSummary(session);
             }
@@ -278,6 +279,7 @@ public sealed class PotatoSessionStore
             session.IsProcessing,
             session.CurrentProgress,
             session.CurrentInputPrompt,
+            session.ContextUsage,
             session.WebUiInputEnabled,
             session.StartedAt,
             session.LastActivityAt,
@@ -293,12 +295,17 @@ public sealed class PotatoSessionStore
             session.IsProcessing,
             session.CurrentProgress,
             session.CurrentInputPrompt,
+            session.ContextUsage,
             session.WebUiInputEnabled,
             session.StartedAt,
             session.LastActivityAt,
             session.Events.ToArray());
 
-    private static bool TryApplySessionStateEvent(StoredPotatoSession session, string kind, string content)
+    private static bool TryApplySessionStateEvent(
+        StoredPotatoSession session,
+        string kind,
+        string content,
+        PotatoContextUsage? contextUsage)
     {
         if (kind.Equals("progress-start", StringComparison.OrdinalIgnoreCase) ||
             kind.Equals("progress-update", StringComparison.OrdinalIgnoreCase))
@@ -340,6 +347,19 @@ public sealed class PotatoSessionStore
             session.WebUiInputEnabled = false;
             session.PendingInputs.Clear();
             return false;
+        }
+
+        if (kind.Equals("context-usage", StringComparison.OrdinalIgnoreCase))
+        {
+            session.ContextUsage = contextUsage ?? new PotatoContextUsage(
+                PromptTokens: 0,
+                ContextSize: 0,
+                Percentage: 0,
+                MaxOutputTokens: 0,
+                HeadroomAfterReservedOutput: 0,
+                ExceedsContext: false,
+                Summary: content.Trim());
+            return true;
         }
 
         return false;
@@ -605,6 +625,7 @@ public sealed class PotatoSessionStore
         public bool IsProcessing { get; set; }
         public string? CurrentProgress { get; set; }
         public string? CurrentInputPrompt { get; set; }
+        public PotatoContextUsage? ContextUsage { get; set; }
         public bool WebUiInputEnabled { get; set; }
         public DateTimeOffset StartedAt { get; set; } = startedAt;
         public DateTimeOffset LastActivityAt { get; set; } = startedAt;

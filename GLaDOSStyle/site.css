@@ -1,0 +1,63 @@
+/* Full GLaDOS UI styles from site.css */
+
+:root {
+    color-scheme: light;
+    --bg-color: #eef1f2;
+    --surface-color: #f9faf8;
+    --panel-color: #dfe4e3;
+    --composer-color: #f8faf9;
+    --text-main: #202625;
+    --text-muted: #5f6b69;
+    --border-color: #aab6b4;
+    --title-color: #151a19;
+    --status-color: #5f6b69;
+    --portal-orange: #e86f1c;
+    --portal-orange-hover: #c95a13;
+    --portal-blue: #00a1e4;
+    --portal-blue-hover: #087fb4;
+    --accent-color: #e86f1c;
+    --accent-hover: #c95a13;
+    --accent-secondary: #00a1e4;
+    --accent-secondary-hover: #087fb4;
+    --danger-color: #b72f24;
+    --warning-color: #b98718;
+    --chat-user-bg: #e7f6fc;
+    --chat-user-text: #17303a;
+    --chat-assistant-bg: transparent;
+    --chat-assistant-text: #202625;
+    --code-bg: #101412;
+    --code-text: #d9f3ff;
+    --shadow-soft: 0 14px 34px rgba(29, 35, 31, 0.16);
+}
+
+[data-theme="dark"] {
+    color-scheme: dark;
+    --bg-color: #0c1112;
+    --surface-color: #172022;
+    --panel-color: #101719;
+    --composer-color: #182123;
+    --text-main: #e5eceb;
+    --text-muted: #97a5a4;
+    --border-color: #344448;
+    --title-color: #f2f7f5;
+    --status-color: #a7b4b2;
+    --portal-orange: #f07a22;
+    --portal-orange-hover: #ff9a3c;
+    --portal-blue: #00a7e1;
+    --portal-blue-hover: #33c2f3;
+    --accent-color: #00a7e1;
+    --accent-hover: #33c2f3;
+    --accent-secondary: #f07a22;
+    --accent-secondary-hover: #ff9a3c;
+    --danger-color: #ff604f;
+    --warning-color: #d7a93e;
+    --chat-user-bg: #102e39;
+    --chat-user-text: #d8f5ff;
+    --chat-assistant-bg: transparent;
+    --chat-assistant-text: #e5eceb;
+    --code-bg: #080b0a;
+    --code-text: #c7f0ff;
+    --shadow-soft: 0 18px 50px rgba(0, 0, 0, 0.45);
+}
+
+/* ... (rest of the CSS content from site.css) ... */

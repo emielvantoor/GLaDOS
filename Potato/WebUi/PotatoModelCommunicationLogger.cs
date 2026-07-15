@@ -11,8 +11,15 @@ internal sealed class PotatoModelCommunicationLogger(
     ExecutionMemory? executionMemory = null) : DelegatingChatClient(innerClient)
 {
     private const int DefaultMaxOutputTokens = 4096;
+    private static readonly AsyncLocal<int> MainPotatoChatContextDepth = new();
 
     private long nextRequestId;
+
+    public static IDisposable TrackMainPotatoChatContext()
+    {
+        MainPotatoChatContextDepth.Value++;
+        return new MainPotatoChatContextScope();
+    }
 
     public override async Task<ChatResponse> GetResponseAsync(
         IEnumerable<ChatMessage> messages,
@@ -21,7 +28,7 @@ internal sealed class PotatoModelCommunicationLogger(
     {
         ChatMessage[] capturedMessages = messages.ToArray();
         long requestId = Interlocked.Increment(ref nextRequestId);
-        PotatoConsole.WriteStatus(FormatContextStatus(capturedMessages, options));
+        RecordMainPotatoChatContextUsage(capturedMessages, options);
 
         ChatResponse response = await base.GetResponseAsync(capturedMessages, options, cancellationToken);
         RecordModelExchange(requestId, capturedMessages, options, response);
@@ -35,7 +42,7 @@ internal sealed class PotatoModelCommunicationLogger(
     {
         ChatMessage[] capturedMessages = messages.ToArray();
         long requestId = Interlocked.Increment(ref nextRequestId);
-        PotatoConsole.WriteStatus(FormatContextStatus(capturedMessages, options));
+        RecordMainPotatoChatContextUsage(capturedMessages, options);
 
         var response = new StringBuilder();
         await foreach (ChatResponseUpdate update in base.GetStreamingResponseAsync(capturedMessages, options, cancellationToken)
@@ -46,6 +53,29 @@ internal sealed class PotatoModelCommunicationLogger(
         }
 
         RecordModelExchange(requestId, capturedMessages, options, response.ToString());
+    }
+
+    private void RecordMainPotatoChatContextUsage(IReadOnlyList<ChatMessage> messages, ChatOptions? options)
+    {
+        if (MainPotatoChatContextDepth.Value <= 0)
+        {
+            return;
+        }
+
+        ContextUsage? usage = GetContextUsage(messages, options, responseText: null);
+        if (usage is null)
+        {
+            return;
+        }
+
+        PotatoConsole.EventSink?.RecordContextUsage(
+            usage.PromptTokens,
+            usage.ContextSize,
+            FormatPercentValue(usage.PromptTokens, usage.ContextSize),
+            usage.MaxOutputTokens,
+            usage.HeadroomAfterReservedOutput,
+            usage.ExceedsContext,
+            FormatContextUsageSummary(usage));
     }
 
     private void RecordModelExchange(
@@ -123,6 +153,11 @@ internal sealed class PotatoModelCommunicationLogger(
         ChatOptions? options,
         string responseText)
     {
+        if (MainPotatoChatContextDepth.Value <= 0)
+        {
+            return;
+        }
+
         ContextUsage? usage = GetContextUsage(messages, options, responseText);
         if (usage is null)
         {
@@ -160,23 +195,6 @@ internal sealed class PotatoModelCommunicationLogger(
         {
             builder.AppendLine("warning: estimated prompt plus reserved output exceeds the configured context window.");
         }
-    }
-
-    private string FormatContextStatus(IReadOnlyList<ChatMessage> messages, ChatOptions? options)
-    {
-        ContextUsage? usage = GetContextUsage(messages, options, responseText: null);
-        if (usage is null)
-        {
-            return "Context estimate unavailable.";
-        }
-
-        string warning = usage.ExceedsContext ? " warning: prompt + output exceeds context" : string.Empty;
-        return
-            $"Context estimate: prompt {FormatNumber(usage.PromptTokens)} / {FormatNumber(usage.ContextSize)} tokens " +
-            $"({FormatPercent(usage.PromptTokens, usage.ContextSize)}), " +
-            $"available {FormatNumber(usage.AvailableBeforeOutput)}, " +
-            $"reserved output {FormatNumber(usage.MaxOutputTokens)}, " +
-            $"headroom {FormatNumber(usage.HeadroomAfterReservedOutput)}.{warning}";
     }
 
     private ContextUsage? GetContextUsage(
@@ -272,7 +290,34 @@ internal sealed class PotatoModelCommunicationLogger(
             return "0%";
         }
 
-        return $"{Math.Min(100.0, used * 100.0 / total):0.#}%";
+        return $"{FormatPercentValue(used, total):0.#}%";
+    }
+
+    private static double FormatPercentValue(int used, int total) =>
+        total <= 0 ? 0 : Math.Min(100.0, used * 100.0 / total);
+
+    private static string FormatContextUsageSummary(ContextUsage usage)
+    {
+        string warning = usage.ExceedsContext ? ", warning" : string.Empty;
+        return
+            $"({FormatNumber(usage.PromptTokens)}/{FormatNumber(usage.ContextSize)} {FormatPercent(usage.PromptTokens, usage.ContextSize)}, " +
+            $"output {FormatNumber(usage.MaxOutputTokens)}, headroom {FormatNumber(usage.HeadroomAfterReservedOutput)}{warning})";
+    }
+
+    private sealed class MainPotatoChatContextScope : IDisposable
+    {
+        private bool disposed;
+
+        public void Dispose()
+        {
+            if (disposed)
+            {
+                return;
+            }
+
+            disposed = true;
+            MainPotatoChatContextDepth.Value = Math.Max(0, MainPotatoChatContextDepth.Value - 1);
+        }
     }
 
     private sealed record ContextUsage(

@@ -168,9 +168,14 @@ public sealed class ExecutionMemory
 
     private static string FormatItem(ExecutionMemoryItem item, bool full)
     {
-        string content = full
-            ? Trim(item.Content, FullContentLimitCharacters)
-            : item.Summary ?? Trim(item.Content, FullContentLimitCharacters);
+        // When full=true, return just the raw content with no truncation or headers
+        if (full)
+        {
+            return item.Content;
+        }
+
+        // When full=false, return formatted with summary/headers
+        string content = item.Summary ?? Trim(item.Content, FullContentLimitCharacters);
 
         var descriptor = new System.Text.StringBuilder();
         descriptor.Append($"[{item.Index}] {item.Descriptor}\n");

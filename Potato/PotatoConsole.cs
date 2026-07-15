@@ -620,6 +620,14 @@ internal static class PotatoConsole
     internal interface IPotatoConsoleEventSink
     {
         void Record(string kind, string role, string content, bool collapsed);
+        void RecordContextUsage(
+            int promptTokens,
+            int contextSize,
+            double percentage,
+            int maxOutputTokens,
+            int headroomAfterReservedOutput,
+            bool exceedsContext,
+            string summary);
         bool TryReadInput(out string? input);
         Task SetWebUiInputEnabledAsync(bool enabled);
     }
