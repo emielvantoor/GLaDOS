@@ -23,6 +23,8 @@ internal sealed class ReActSession(
     private const int ReActMaxOutputTokens = 8192;
     private const int MaxToolResultCharactersInHistory = 12_000;
     private const int MaxAssistantResponseCharactersInHistory = 4_000;
+    private const int ContextUsageWarningThreshold = 70;  // Warn when context reaches 70% of limit
+    private const int EstimatedTokensPerCharacter = 4;    // Rough estimate: 4 characters ≈ 1 token
     
     private readonly Queue<(int index, string source)> recentTruncations = new(5);
 
@@ -76,6 +78,9 @@ internal sealed class ReActSession(
             string responseText = string.IsNullOrWhiteSpace(response.Text)
                 ? "No assistant response was returned."
                 : response.Text.Trim();
+
+            // Monitor context usage
+            MonitorContextUsage(reactHistory);
 
             IReadOnlyList<FunctionCallContent> functionCalls = GetFunctionCalls(response);
             if (functionCalls.Count > 0)
@@ -140,12 +145,12 @@ internal sealed class ReActSession(
                         }
                     }
                     
-                    // Add compacted version to chat history
+                    // Add compacted version to chat history (minified code goes directly, no summarization)
                     reactHistory.Add(new ChatMessage(
                         ChatRole.Tool,
                         [new FunctionResultContent(functionCall.CallId, finalContent)]));
                     
-                    await executionMemory.SummarizeLargeUnsummarizedItemsAsync(goal, chatClient, cancellationToken);
+                    // await executionMemory.SummarizeLargeUnsummarizedItemsAsync(goal, chatClient, cancellationToken);
                 }
                 else
                 {
@@ -176,7 +181,7 @@ internal sealed class ReActSession(
             }
 
             int toolCallsThisIteration = agentTools.ToolInvocationCount - toolCallsBefore;
-            await executionMemory.SummarizeLargeUnsummarizedItemsAsync(goal, chatClient, cancellationToken);
+            // await executionMemory.SummarizeLargeUnsummarizedItemsAsync(goal, chatClient, cancellationToken);
 
             if (toolCallsThisIteration > 0)
             {
@@ -425,9 +430,9 @@ internal sealed class ReActSession(
                 }
             }
             
-            await executionMemory.SummarizeLargeUnsummarizedItemsAsync(goal, chatClient, cancellationToken);
+            // await executionMemory.SummarizeLargeUnsummarizedItemsAsync(goal, chatClient, cancellationToken);
             
-            // Add to chat history with correct index
+            // Add to chat history with correct index (minified content goes directly, no summarization)
             reactHistory.Add(new ChatMessage(
                 ChatRole.User,
                 PromptLibrary.BuildReActObservationUserPrompt(
@@ -1131,4 +1136,38 @@ internal sealed class ReActSession(
     }
 
     private sealed record TextualToolCall(string Name, JsonObject Arguments);
+
+    /// <summary>
+    /// Monitor context usage and warn when approaching capacity.
+    /// Estimates token count from character count.
+    /// </summary>
+    private void MonitorContextUsage(List<ChatMessage> reactHistory, int estimatedLmTokenLimit = 100_000)
+    {
+        // Estimate total context size from chat history
+        int estimatedCharacters = reactHistory.Sum(msg =>
+        {
+            int charCount = 0;
+            foreach (var content in msg.Contents ?? [])
+            {
+                charCount += content switch
+                {
+                    TextContent tc => tc.Text?.Length ?? 0,
+                    FunctionResultContent frc => (frc.Result?.ToString() ?? "")?.Length ?? 0,
+                    _ => 0
+                };
+            }
+            return charCount;
+        });
+
+        int estimatedTokens = (estimatedCharacters / EstimatedTokensPerCharacter) + ReActMaxOutputTokens;
+        int usagePercentage = (int)((estimatedTokens / (double)estimatedLmTokenLimit) * 100);
+
+        if (usagePercentage >= ContextUsageWarningThreshold)
+        {
+            PotatoConsole.WriteStatus(
+                $"⚠️  Context usage at {usagePercentage}% ({estimatedTokens:N0} / {estimatedLmTokenLimit:N0} tokens). " +
+                $"Consider starting a new session or archiving old discussions.");
+        }
+    }
 }
+
