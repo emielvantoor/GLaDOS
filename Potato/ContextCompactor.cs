@@ -28,11 +28,13 @@ internal sealed class ContextCompactor
     /// <summary>
     /// Intelligently truncates tool results based on type.
     /// Returns compact content for chat history + metadata for tracking.
+    /// For code files, minifies content and extracts public API (no truncation).
     /// </summary>
     public CompactionResult Compact(
         string content,
         ToolResultType resultType,
-        int maxCharacters = 0)
+        int maxCharacters = 0,
+        string? filePath = null)
     {
         if (string.IsNullOrWhiteSpace(content))
         {
@@ -50,6 +52,18 @@ internal sealed class ContextCompactor
             maxCharacters = GetDefaultMaxCharacters(resultType);
         }
 
+        // Special handling for code files: minify without truncation
+        if (resultType == ToolResultType.FileContent && !string.IsNullOrEmpty(filePath) && CodeMinifier.IsCodeFile(filePath))
+        {
+            var (minified, hint) = MinifyCodeFile(trimmed, filePath!, maxCharacters);
+            return new CompactionResult(
+                TruncatedContent: minified,
+                ContextKey: GenerateContextKey(),
+                WasTruncated: false,  // Always return full minified content, never truncate
+                OriginalLength: trimmed.Length,
+                RetrievalHint: hint);
+        }
+
         // If content fits, no truncation needed
         if (trimmed.Length <= maxCharacters)
         {
@@ -62,9 +76,9 @@ internal sealed class ContextCompactor
         }
 
         // Content is too large; use type-specific strategy
-        var (truncated, hint) = resultType switch
+        var (truncated, hint2) = resultType switch
         {
-            ToolResultType.FileContent => TruncateFileContent(trimmed, maxCharacters),
+            ToolResultType.FileContent => TruncateFileContent(trimmed, maxCharacters, filePath),
             ToolResultType.ShellOutput => TruncateShellOutput(trimmed, maxCharacters),
             ToolResultType.SearchResults => TruncateSearchResults(trimmed, maxCharacters),
             ToolResultType.DirectoryListing => TruncateDirectoryListing(trimmed, maxCharacters),
@@ -80,14 +94,22 @@ internal sealed class ContextCompactor
             ContextKey: contextKey,
             WasTruncated: true,
             OriginalLength: trimmed.Length,
-            RetrievalHint: hint);
+            RetrievalHint: hint2);
     }
 
     /// <summary>
     /// File content: keep first N lines + last M lines to show structure while avoiding middle bloat.
+    /// Only called for non-code files or code files that weren't minified.
     /// </summary>
-    private static (string, string) TruncateFileContent(string content, int maxChars)
+    private static (string, string) TruncateFileContent(string content, int maxChars, string? filePath)
     {
+        // If we have a file path and it's code, minify and show API
+        if (!string.IsNullOrEmpty(filePath) && CodeMinifier.IsCodeFile(filePath))
+        {
+            return MinifyCodeFile(content, filePath, maxChars);
+        }
+
+        // Default: keep first N lines + last M lines
         string[] lines = content.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None);
         
         const int linesToKeepPerSide = 15;
@@ -108,6 +130,39 @@ internal sealed class ContextCompactor
 
         return (result.ToString().TrimEnd(),
                 $"File: {lines.Length} lines total, showing edges");
+    }
+
+    /// <summary>
+    /// Minify code file and extract public API summary.
+    /// Returns full minified content with API header (no truncation).
+    /// </summary>
+    private static (string, string) MinifyCodeFile(string content, string filePath, int maxChars)
+    {
+        // Minify the code
+        string minified = CodeMinifier.Minify(content, filePath);
+        
+        // Extract public API summary
+        string apiSummary = CodeAnalyzer.ExtractPublicApi(minified, filePath);
+        
+        // Build result: API summary first, then minified code
+        var result = new StringBuilder();
+        
+        if (!string.IsNullOrEmpty(apiSummary))
+        {
+            result.AppendLine(apiSummary);
+            result.AppendLine();
+        }
+        
+        result.Append(minified);
+        
+        string finalContent = result.ToString().TrimEnd();
+        int originalLines = content.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None).Length;
+        int minifiedLines = finalContent.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None).Length;
+        
+        // For code files: always return full minified content (no truncation)
+        // Mark as not truncated since the LM gets the complete minified code
+        return (finalContent,
+                $"Code file: {originalLines} → {minifiedLines} lines after minification");
     }
 
     /// <summary>
@@ -203,7 +258,6 @@ internal sealed class ContextCompactor
         var result = new StringBuilder();
         int currentHunks = 0;
         int keptLines = 0;
-        const int maxContextPerHunk = 8;
 
         foreach (string line in lines)
         {
