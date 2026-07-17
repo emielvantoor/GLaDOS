@@ -619,7 +619,7 @@ h1 {
     width: min(100%, 780px);
     min-height: 58px;
     display: flex;
-    align-items: flex-end;
+    align-items: center;
     gap: 10px;
     margin: 0 auto;
     padding: 9px 9px 9px 16px;
@@ -643,6 +643,9 @@ h1 {
     width: 42px;
     height: 42px;
     flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     border: 1px solid var(--border-color);
     border-radius: 6px;
     background: transparent;
@@ -675,6 +678,12 @@ textarea {
     overflow-y: auto;
 }
 
+.input-area textarea {
+    height: 42px;
+    min-height: 42px;
+    padding: 10px 0;
+}
+
 textarea::placeholder {
     color: var(--text-muted);
 }
@@ -683,6 +692,9 @@ button#submitBtn,
 button#agentSubmitBtn {
     min-width: 42px;
     height: 42px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     background-color: var(--accent-color);
     color: #14100d;
     border: none;
