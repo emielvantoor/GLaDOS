@@ -216,6 +216,11 @@ public sealed class ExecutionMemory
             return $"file content: {trimmedSource["ReadFileContent ".Length..]}";
         }
 
+        if (trimmedSource.Contains("ReadFileRange ", StringComparison.Ordinal))
+        {
+            return $"file range: {trimmedSource["ReadFileRange ".Length..]}";
+        }
+
         if (trimmedSource.Contains("ExecuteShellCommandAsync ", StringComparison.Ordinal))
         {
             return $"shell result: {trimmedSource["ExecuteShellCommandAsync ".Length..]}";

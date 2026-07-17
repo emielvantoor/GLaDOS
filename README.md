@@ -79,7 +79,7 @@ dotnet restore
 ### Build the Project
 
 ```bash
-dotnet build GLaDOS/GLaDOS.csproj --no-restore /p:AllowMissingPrunePackageData=true /p:NuGetAudit=false -m:1 -v:minimal
+dotnet build GLaDOS.sln --no-restore
 ```
 
 > ⚠️ This build command requires .NET SDK v8.0.100 with the following dependencies:

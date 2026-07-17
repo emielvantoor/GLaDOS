@@ -10,6 +10,7 @@ internal static partial class PromptLibrary
         Use available tools for inspection, edits, commands, and verification.
         Prefer read-only discovery before editing.
         Use SearchProjectMapAsync when a relevant file is likely but not confirmed.
+        Use ReadFileRange when you only need a bounded line window from a large file.
         For source edits, prefer ApplySearchReplaceAsync with exact SEARCH and REPLACE text copied from the latest file content; use CreateFileAsync for new files; use ApplyDiffPatchAsync only when search/replace is impractical.
         Preserve the user's requested output location exactly. If the user asks for a folder, create every requested artifact inside that folder unless they explicitly name a different path.
         Keep related generated assets together. If you create `Folder/site.css` and the user asks for `components.html`, create `Folder/components.html` and link `site.css` with a relative href from that same folder.
@@ -21,10 +22,14 @@ internal static partial class PromptLibrary
         After all requested files have been successfully written to the correct paths, return FINAL immediately with the created paths and any verification note. Do not continue looping just to restate the work.
         When the task is complete and verified, respond with FINAL: followed by a concise summary.
 
+        {{MinifiedSourcesSection}}
+
         {{ContextOptimizationSection}}
 
         If native tool calling is unavailable, emit exactly one textual tool call:
         <tool_call>{"name":"ReadFileContent","arguments":{"filePath":"path/to/file"}}</tool_call>
+        Or, for a bounded slice:
+        <tool_call>{"name":"ReadFileRange","arguments":{"filePath":"path/to/file","startLine":1,"endLine":120}}</tool_call>
         """);
 
     private static readonly PromptDefinition ReActInitialUser = new(
@@ -45,6 +50,8 @@ internal static partial class PromptLibrary
         - Treat the user's requested folder and file names as hard requirements.
         - If a requested folder does not exist, create files inside that folder with CreateFileAsync; do not place sibling files in the source folder you inspected.
         - For extracted static assets, use relative links that work when opening the generated HTML from its final folder.
+
+        {{MinifiedSourcesSection}}
 
         {{ContextOptimizationSection}}
 
@@ -75,8 +82,49 @@ internal static partial class PromptLibrary
     public static string BuildReActSystemPrompt(bool contextOptimizationEnabled) =>
         Render(ReActSystem, new Dictionary<string, string>
         {
+            ["MinifiedSourcesSection"] = BuildMinifiedSourcesSection(),
             ["ContextOptimizationSection"] = BuildContextOptimizationSection(contextOptimizationEnabled)
         });
+
+    private static string BuildMinifiedSourcesSection()
+    {
+        return """
+            **HANDLING MINIFIED SOURCE CODE**
+            Code files (C#, TypeScript, Python, CSS, HTML, JavaScript, Go, Rust, Ruby, Java, C++, etc.) may appear minified in context—compressed with reduced comments and whitespace to save tokens.
+            Minified code is marked with a reference like [ref#N] and the full original content is retained in collected context.
+
+            When you encounter minified code:
+            - It is valid and complete for analysis and extraction.
+            - You can use GetCollectedContext("N") to retrieve the original unminified version if needed for detailed understanding.
+            - When creating or modifying output files, always produce properly formatted, readable code with proper indentation and structure.
+
+            Do NOT treat minified code the same as truncated content. Minified code is COMPLETE—it's just reformatted. You don't need to retrieve it unless you specifically want the original spacing/comments.
+
+            Example: If you read minified TypeScript:
+            ```
+            interface User{id:string;name:string;email:string}export function getUser(id:string):User{return{id,name:'User '+id,email:id+'@example.com'}}
+            ```
+
+            You should generate properly formatted output:
+            ```typescript
+            interface User {
+              id: string;
+              name: string;
+              email: string;
+            }
+
+            export function getUser(id: string): User {
+              return {
+                id,
+                name: 'User ' + id,
+                email: id + '@example.com'
+              };
+            }
+            ```
+
+            Always de-minify and re-format extracted code before writing to output files. The output must be clean and readable.
+            """;
+    }
 
     private static string BuildContextOptimizationSection(bool contextOptimizationEnabled)
     {
@@ -120,6 +168,7 @@ internal static partial class PromptLibrary
             ["ExecutionGuidance"] = executionGuidance,
             ["WorkingDirectory"] = workingDirectory,
             ["ProjectMap"] = projectMap,
+            ["MinifiedSourcesSection"] = BuildMinifiedSourcesSection(),
             ["ContextOptimizationSection"] = BuildContextOptimizationSection(contextOptimizationEnabled)
         });
 

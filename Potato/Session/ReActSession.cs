@@ -116,11 +116,24 @@ internal sealed class ReActSession(
                 
                 if (optimize)
                 {
-                    // Context optimization enabled: truncate, store, summarize
-                    ContextCompactor.CompactionResult compaction = contextCompactor.Compact(
-                        result, 
-                        DetectToolResultType(functionCall.Name),
-                        MaxToolResultCharactersInHistory);
+                    ContextCompactor.CompactionResult compaction;
+                    
+                    if (functionCall.Name == nameof(AgentTools.ReadFileContent) && !result.StartsWith("Error"))
+                    {
+                        compaction = contextCompactor.Compact(
+                            result, 
+                            DetectToolResultType(functionCall.Name),
+                            MaxToolResultCharactersInHistory,
+                            functionCall.Arguments?["filePath"]?.ToString() ?? "");
+
+                    }
+                    else
+                    {
+                        compaction = contextCompactor.Compact(
+                            result, 
+                            DetectToolResultType(functionCall.Name),
+                            MaxToolResultCharactersInHistory);
+                    }
                     
                     // Store full result in execution memory - this assigns the actual index
                     int memoryIndex = executionMemory.Add(
@@ -311,6 +324,7 @@ internal sealed class ReActSession(
             [
                 AIFunctionFactory.Create(agentTools.GetCurrentTime),
                 AIFunctionFactory.Create(agentTools.ReadFileContent),
+                AIFunctionFactory.Create(agentTools.ReadFileRange),
                 AIFunctionFactory.Create(agentTools.ListFiles),
                 AIFunctionFactory.Create(agentTools.ListProjectFiles),
                 AIFunctionFactory.Create(SearchProjectMapAsync),
@@ -461,6 +475,7 @@ internal sealed class ReActSession(
         toolName switch
         {
             nameof(AgentTools.ReadFileContent) => ToolResultType.FileContent,
+            nameof(AgentTools.ReadFileRange) => ToolResultType.FileContent,
             nameof(AgentTools.ListFiles) or nameof(AgentTools.ListProjectFiles) => ToolResultType.DirectoryListing,
             nameof(AgentTools.SearchFiles) or nameof(AgentTools.SearchFileContents) or "SearchProjectMapAsync" => ToolResultType.SearchResults,
             nameof(AgentTools.ExecuteShellCommandAsync) => ToolResultType.ShellOutput,
@@ -573,6 +588,21 @@ internal sealed class ReActSession(
                         GetStringArgument(toolCall.Arguments, "file_path") ??
                         GetStringArgument(toolCall.Arguments, "path") ??
                         string.Empty),
+                    nameof(AgentTools.ReadFileRange) => agentTools.ReadFileRange(
+                        GetStringArgument(toolCall.Arguments, "filePath") ??
+                        GetStringArgument(toolCall.Arguments, "file_path") ??
+                        GetStringArgument(toolCall.Arguments, "path") ??
+                        string.Empty,
+                        GetIntArgument(toolCall.Arguments, "startLine") ??
+                        GetIntArgument(toolCall.Arguments, "start_line") ??
+                        GetIntArgument(toolCall.Arguments, "lineStart") ??
+                        GetIntArgument(toolCall.Arguments, "line_start") ??
+                        1,
+                        GetIntArgument(toolCall.Arguments, "endLine") ??
+                        GetIntArgument(toolCall.Arguments, "end_line") ??
+                        GetIntArgument(toolCall.Arguments, "lineEnd") ??
+                        GetIntArgument(toolCall.Arguments, "line_end") ??
+                        1),
                     nameof(AgentTools.ListFiles) => agentTools.ListFiles(
                         GetStringArgument(toolCall.Arguments, "directoryPath") ??
                         GetStringArgument(toolCall.Arguments, "directory_path"),
@@ -807,7 +837,7 @@ internal sealed class ReActSession(
         lowerText.Contains("apply_diff_patch", StringComparison.Ordinal);
 
     private static bool LooksLikeIncompleteToolJson(string text) =>
-        Regex.IsMatch(text, @"""(?:name|arguments|filePath|file_path|path|content|search|replace|patch)""\s*:\s*$", RegexOptions.IgnoreCase) ||
+        Regex.IsMatch(text, @"""(?:name|arguments|filePath|file_path|path|content|search|replace|patch|startLine|start_line|endLine|end_line|lineStart|line_start|lineEnd|line_end)""\s*:\s*$", RegexOptions.IgnoreCase) ||
         Regex.IsMatch(text, @"""(?:content|search|replace|patch)""\s*:\s*""[\s\S]*\z", RegexOptions.IgnoreCase);
 
     private static bool HasUnbalancedJson(string text)
@@ -1077,6 +1107,7 @@ internal sealed class ReActSession(
             "SearchProjectMap" or "search_project_map" or "project_map_search" or "search-project-map" => nameof(SearchProjectMapAsync),
             "SearchFileContents" or "SearchInFiles" or "search_in_files" or "search_file_contents" or "grep" => nameof(AgentTools.SearchFileContents),
             "search_files" or "find_files" or "search_file_names" or "find_file_names" => nameof(AgentTools.SearchFiles),
+            "read_file_range" or "readfilerange" or "view_range" or "read_range" => nameof(AgentTools.ReadFileRange),
             _ => normalized
         };
     }
@@ -1170,4 +1201,3 @@ internal sealed class ReActSession(
         }
     }
 }
-

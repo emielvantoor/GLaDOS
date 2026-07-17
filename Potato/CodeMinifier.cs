@@ -5,7 +5,7 @@ namespace Potato;
 
 /// <summary>
 /// Deterministic code minification using regex and string manipulation.
-/// Removes comments and excessive whitespace while preserving code structure and readability.
+/// Removes comments and collapses whitespace, including line breaks, where that is safe.
 /// Uses logic helpers only - no LM involvement.
 /// </summary>
 internal sealed class CodeMinifier
@@ -82,9 +82,7 @@ internal sealed class CodeMinifier
         content = Regex.Replace(content, @"//.*$", "", RegexOptions.Multiline);
         // Remove multi-line comments
         content = Regex.Replace(content, @"/\*.*?\*/", "", RegexOptions.Singleline);
-        // Collapse multiple blank lines
-        content = Regex.Replace(content, @"\n\s*\n(\s*\n)+", "\n\n", RegexOptions.Multiline);
-        return content.Trim();
+        return CollapseWhitespace(content);
     }
 
     private static string MinifyCpp(string content)
@@ -94,9 +92,7 @@ internal sealed class CodeMinifier
         // Remove multi-line comments
         content = Regex.Replace(content, @"/\*.*?\*/", "", RegexOptions.Singleline);
         // Remove preprocessor directives (optional, keep for now as they matter)
-        // Collapse multiple blank lines
-        content = Regex.Replace(content, @"\n\s*\n(\s*\n)+", "\n\n", RegexOptions.Multiline);
-        return content.Trim();
+        return CollapseWhitespace(content);
     }
 
     private static string MinifyJava(string content)
@@ -107,9 +103,7 @@ internal sealed class CodeMinifier
         content = Regex.Replace(content, @"//.*$", "", RegexOptions.Multiline);
         // Remove multi-line comments
         content = Regex.Replace(content, @"/\*.*?\*/", "", RegexOptions.Singleline);
-        // Collapse multiple blank lines
-        content = Regex.Replace(content, @"\n\s*\n(\s*\n)+", "\n\n", RegexOptions.Multiline);
-        return content.Trim();
+        return CollapseWhitespace(content);
     }
 
     private static string MinifyPython(string content)
@@ -148,10 +142,7 @@ internal sealed class CodeMinifier
                 result.AppendLine(trimmed);
         }
 
-        // Collapse multiple blank lines
-        string minified = result.ToString();
-        minified = Regex.Replace(minified, @"\n\s*\n(\s*\n)+", "\n\n", RegexOptions.Multiline);
-        return minified.Trim();
+        return result.ToString().Trim();
     }
 
     private static string MinifyJavaScript(string content)
@@ -160,9 +151,7 @@ internal sealed class CodeMinifier
         content = Regex.Replace(content, @"(?<!:)//(?!/).*$", "", RegexOptions.Multiline);
         // Remove multi-line comments
         content = Regex.Replace(content, @"/\*.*?\*/", "", RegexOptions.Singleline);
-        // Collapse multiple blank lines
-        content = Regex.Replace(content, @"\n\s*\n(\s*\n)+", "\n\n", RegexOptions.Multiline);
-        return content.Trim();
+        return CollapseWhitespace(content);
     }
 
     private static string MinifyTypeScript(string content)
@@ -177,9 +166,7 @@ internal sealed class CodeMinifier
         content = Regex.Replace(content, @"//.*$", "", RegexOptions.Multiline);
         // Remove multi-line comments
         content = Regex.Replace(content, @"/\*.*?\*/", "", RegexOptions.Singleline);
-        // Collapse multiple blank lines
-        content = Regex.Replace(content, @"\n\s*\n(\s*\n)+", "\n\n", RegexOptions.Multiline);
-        return content.Trim();
+        return CollapseWhitespace(content);
     }
 
     private static string MinifyRust(string content)
@@ -190,9 +177,7 @@ internal sealed class CodeMinifier
         content = Regex.Replace(content, @"///.*$", "", RegexOptions.Multiline);
         // Remove multi-line comments (basic; nested not handled)
         content = Regex.Replace(content, @"/\*.*?\*/", "", RegexOptions.Singleline);
-        // Collapse multiple blank lines
-        content = Regex.Replace(content, @"\n\s*\n(\s*\n)+", "\n\n", RegexOptions.Multiline);
-        return content.Trim();
+        return CollapseWhitespace(content);
     }
 
     private static string MinifyRuby(string content)
@@ -233,9 +218,7 @@ internal sealed class CodeMinifier
                 result.AppendLine(trimmed);
         }
 
-        string minified = result.ToString();
-        minified = Regex.Replace(minified, @"\n\s*\n(\s*\n)+", "\n\n", RegexOptions.Multiline);
-        return minified.Trim();
+        return result.ToString().Trim();
     }
 
     private static string MinifyXml(string content)
@@ -299,9 +282,7 @@ internal sealed class CodeMinifier
         content = Regex.Replace(content, @"--.*$", "", RegexOptions.Multiline);
         // Remove multi-line comments
         content = Regex.Replace(content, @"/\*.*?\*/", "", RegexOptions.Singleline);
-        // Collapse multiple blank lines
-        content = Regex.Replace(content, @"\n\s*\n(\s*\n)+", "\n\n", RegexOptions.Multiline);
-        return content.Trim();
+        return CollapseWhitespace(content);
     }
 
     private static string RemoveComments(string content, string ext)
@@ -310,7 +291,12 @@ internal sealed class CodeMinifier
         content = Regex.Replace(content, @"//.*$", "", RegexOptions.Multiline);
         content = Regex.Replace(content, @"/\*.*?\*/", "", RegexOptions.Singleline);
         content = Regex.Replace(content, @"#.*$", "", RegexOptions.Multiline);
-        content = Regex.Replace(content, @"\n\s*\n(\s*\n)+", "\n\n", RegexOptions.Multiline);
+        return CollapseWhitespace(content);
+    }
+
+    private static string CollapseWhitespace(string content)
+    {
+        content = Regex.Replace(content, @"\s+", " ");
         return content.Trim();
     }
 }

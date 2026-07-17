@@ -13,6 +13,7 @@ public class AgentTools(ExecutionMemory memory, CurrentChatClientState chatClien
     private const int MaxCommandTimeoutSeconds = 600;
     private const int MaxPatchCharacters = 200_000;
     private const int MaxPurposeInferenceCharacters = 12_000;
+    private const int MaxFileRangeLines = 200;
     private const long MaxSearchFileBytes = 1_000_000;
     private const int MaxSearchFiles = 5000;
 
@@ -136,6 +137,103 @@ public class AgentTools(ExecutionMemory memory, CurrentChatClientState chatClien
         }
 
         return StoreAndReturn($"{nameof(ReadFileContent)} {resolvedPath}", File.ReadAllText(resolvedPath));
+    }
+
+    [Description("Reads an inclusive line range from a specific text file without returning the whole file.")]
+    public string ReadFileRange(
+        [Description("The path to the file. Absolute paths are accepted; relative paths resolve from the current working directory.")] string filePath,
+        [Description("The first 1-based line number to include in the result.")] int startLine,
+        [Description("The last 1-based line number to include in the result.")] int endLine)
+    {
+        if (!TryReserveToolInvocation(nameof(ReadFileRange), out string rejectionReason))
+        {
+            return RejectToolInvocation(nameof(ReadFileRange), rejectionReason);
+        }
+
+        string? resolvedPath = ResolveReadableFilePath(filePath);
+        WriteToolCall(nameof(ReadFileRange),
+        [
+            ("filePath", filePath),
+            ("resolvedPath", resolvedPath ?? "(unresolved)"),
+            ("startLine", startLine.ToString()),
+            ("endLine", endLine.ToString())
+        ]);
+
+        if (IsPlaceholderPath(filePath) && resolvedPath is null)
+        {
+            return StoreAndReturn(nameof(ReadFileRange), "Error: The file path is a placeholder. Use a real path from the directory listing or attached file header.");
+        }
+
+        if (resolvedPath is null || !File.Exists(resolvedPath))
+        {
+            return StoreAndReturn(nameof(ReadFileRange), $"Error: File '{filePath}' does not exist. Current working directory: {Environment.CurrentDirectory}");
+        }
+
+        if (startLine < 1 || endLine < 1)
+        {
+            return StoreAndReturn(nameof(ReadFileRange), "Error: Line numbers must be 1 or greater.");
+        }
+
+        if (endLine < startLine)
+        {
+            return StoreAndReturn(nameof(ReadFileRange), "Error: endLine must be greater than or equal to startLine.");
+        }
+
+        int requestedLines = endLine - startLine + 1;
+        if (requestedLines > MaxFileRangeLines)
+        {
+            return StoreAndReturn(
+                nameof(ReadFileRange),
+                $"Error: Requested range is too large ({requestedLines} lines). Maximum supported range is {MaxFileRangeLines} lines.");
+        }
+
+        try
+        {
+            var builder = new StringBuilder();
+            int totalLines = 0;
+            int returnedLines = 0;
+
+            using var reader = new StreamReader(File.OpenRead(resolvedPath));
+            string? line;
+            while ((line = reader.ReadLine()) is not null)
+            {
+                totalLines++;
+                if (totalLines < startLine || totalLines > endLine)
+                {
+                    continue;
+                }
+
+                if (returnedLines == 0)
+                {
+                    builder.AppendLine($"File: {resolvedPath}");
+                    builder.AppendLine($"Requested range: {startLine}-{endLine}");
+                }
+
+                builder.AppendLine($"{totalLines}: {line}");
+                returnedLines++;
+            }
+
+            if (returnedLines == 0)
+            {
+                return StoreAndReturn(
+                    nameof(ReadFileRange),
+                    totalLines == 0
+                        ? $"Error: File '{resolvedPath}' is empty."
+                        : $"Error: Requested start line {startLine} is beyond the end of the file ({totalLines} total line(s)).");
+            }
+
+            builder.AppendLine($"Total lines in file: {totalLines}");
+            if (endLine > totalLines)
+            {
+                builder.AppendLine($"Note: returned through EOF at line {totalLines}.");
+            }
+
+            return StoreAndReturn($"{nameof(ReadFileRange)} {resolvedPath} [{startLine}-{endLine}]", builder.ToString().TrimEnd());
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or DecoderFallbackException)
+        {
+            return StoreAndReturn(nameof(ReadFileRange), $"Error: Could not read file range: {ex.Message}");
+        }
     }
 
     [Description("Lists non-hidden project files and directories without using the shell. Hidden folders and common build/dependency folders are skipped. Use this for read-only project discovery before choosing files to inspect.")]
@@ -1594,10 +1692,16 @@ public class AgentTools(ExecutionMemory memory, CurrentChatClientState chatClien
         string displayQuery = string.IsNullOrWhiteSpace(query)
             ? string.Empty
             : $" query: {Truncate(query, 120)}";
+        string? startLine = GetParameterValue(parameters, "startLine") ?? GetParameterValue(parameters, "lineStart");
+        string? endLine = GetParameterValue(parameters, "endLine") ?? GetParameterValue(parameters, "lineEnd");
+        string displayRange = string.IsNullOrWhiteSpace(startLine) || string.IsNullOrWhiteSpace(endLine)
+            ? string.Empty
+            : $" lines: {startLine}-{endLine}";
 
         string label = toolName switch
         {
             nameof(ReadFileContent) => "Read file",
+            nameof(ReadFileRange) => "Read file range",
             nameof(ListFiles) => "List files",
             nameof(ListProjectFiles) => "List project files",
             nameof(SearchFiles) => "Search files",
@@ -1619,13 +1723,13 @@ public class AgentTools(ExecutionMemory memory, CurrentChatClientState chatClien
         string prefix = waitsForResult ? "?" : "✓";
 
         Console.ForegroundColor = waitsForResult ? ConsoleColor.DarkGray : ConsoleColor.Green;
-        Console.WriteLine($"{prefix} {label}{displayPath}{displayQuery}");
+        Console.WriteLine($"{prefix} {label}{displayPath}{displayQuery}{displayRange}");
         Console.ResetColor();
 
         PotatoConsole.EventSink?.Record(
             "tool-call",
             "tool",
-            FormatToolEventContent(label, displayPath, displayQuery, parameters),
+            FormatToolEventContent(label, displayPath, displayQuery + displayRange, parameters),
             collapsed: true);
     }
 

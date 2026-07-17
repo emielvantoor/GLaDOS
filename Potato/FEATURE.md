@@ -124,6 +124,9 @@ The CLI exposes local tools to the agent:
 - `ReadFileContent`
   Reads a specific text file from disk. Absolute paths are accepted; relative paths resolve from the current working directory.
 
+- `ReadFileRange`
+  Reads an inclusive line range from a specific text file without returning the whole file.
+
 - `GetCollectedContext`
   Retrieves context collected during the current ReAct execution. Use `index: "list"` to see stored items with contextual descriptions, `index: "latest"` for the newest item, or a numeric index to retrieve one item. Large entries are summarized automatically for compact retrieval; pass `full: true` only when exact content is needed.
 

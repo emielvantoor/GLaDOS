@@ -77,6 +77,7 @@ Potato uses a tool registry to execute specific actions. Each tool has a unique 
 ### Built-in Tools
 
 - `ReadFileTask` — Reads a file and returns its content.
+- `ReadFileRange` — Reads a bounded line range from a text file.
 - `WriteCodeTask` — Writes code to a file.
 - `ApplyPatchTask` — Applies a patch to a file.
 - `InspectProjectTask` — Analyzes the project structure.
