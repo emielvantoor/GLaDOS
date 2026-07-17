@@ -57,9 +57,10 @@ internal sealed class ContextCompactor
         {
             var (minified, hint) = MinifyCodeFile(trimmed, filePath!, maxCharacters);
             return new CompactionResult(
-                TruncatedContent: $"{minified}\n[MINIFIED • ref#{{{{INDEX}}}} • use GetCollectedContext(\"{{{{INDEX}}}}\", full=true)]",
+                // TruncatedContent: $"{minified}\n[MINIFIED • ref#{{{{INDEX}}}} • use GetCollectedContext(\"{{{{INDEX}}}}\", full=true)]",
+                TruncatedContent: minified,
                 ContextKey: GenerateContextKey(),
-                WasTruncated: true,  // Always return full minified content, never truncate
+                WasTruncated: false,  // Always return full minified content, never truncate
                 OriginalLength: trimmed.Length,
                 RetrievalHint: hint);
         }

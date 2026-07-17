@@ -36,6 +36,8 @@ if (app.Environment.IsDevelopment())
 app.UseStaticFiles();
 
 app.MapOpenAiEndpoints();
+app.MapToolEndpoints();
+app.MapRuntimeEndpoints();
 app.MapFimEndpoints();
 app.MapPotatoEndpoints();
 app.Run("http://localhost:11434");
