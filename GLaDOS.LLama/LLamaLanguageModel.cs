@@ -91,6 +91,7 @@ public class LLamaLanguageModel : LanguageModel, IDisposable
         }
 
         executor.Context.Dispose();
+        Console.WriteLine($"Generated {fullResponseBuilder.Length}/{maxTokens} tokens");
 
         return fullResponseBuilder.ToString().Trim();
     }
