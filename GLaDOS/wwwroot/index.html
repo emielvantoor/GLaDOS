@@ -8,6 +8,8 @@
 </head>
 <body>
 
+<div class="background-tile-grid" aria-hidden="true"></div>
+
 <div class="container">
     <div class="header-wrapper">
         <h1><span class="aperture-logo" aria-hidden="true"></span> GLaDOS Client</h1>
@@ -238,6 +240,19 @@
 </div>
 
 <script src="js/tools/index.js"></script>
+<script>
+    // Send the flip from the bottom-right corner across the grid's rising diagonal.
+    document.querySelector('.background-tile-grid').replaceChildren(
+        ...Array.from({ length: 480 }, (_, index) => {
+            const tile = document.createElement('span');
+            const column = index % 24;
+            const row = Math.floor(index / 24);
+            const distanceFromBottomRight = (23 - column) + (19 - row);
+            tile.style.setProperty('--tile-delay', `${distanceFromBottomRight * 0.11}s`);
+            return tile;
+        })
+    );
+</script>
 <script src="js/app/state.js"></script>
 <script src="js/app/theme.js"></script>
 <script src="js/app/chats.js"></script>

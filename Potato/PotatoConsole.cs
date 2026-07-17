@@ -667,6 +667,21 @@ internal static class PotatoConsole
     {
         using var _ = SuspendProgress();
 
+        ToolPermissionChoice ResolvePermission(ToolPermissionChoice choice)
+        {
+            EventSink?.Record(
+                "permission-resolved",
+                "status",
+                choice switch
+                {
+                    ToolPermissionChoice.AllowOnce => "approved once",
+                    ToolPermissionChoice.AllowAlways => "approved always",
+                    _ => "denied"
+                },
+                collapsed: true);
+            return choice;
+        }
+
         Console.ForegroundColor = ConsoleColor.Magenta;
         Console.WriteLine(title);
         foreach (string detail in details)
@@ -700,7 +715,7 @@ internal static class PotatoConsole
                 TryParseWebPermissionChoice(webInput, out ToolPermissionChoice webChoice))
             {
                 Console.WriteLine(webInput);
-                return webChoice;
+                return ResolvePermission(webChoice);
             }
 
             if (!Console.KeyAvailable)
@@ -715,18 +730,18 @@ internal static class PotatoConsole
                 case ConsoleKey.D1:
                 case ConsoleKey.NumPad1:
                     Console.WriteLine("1");
-                    return ToolPermissionChoice.AllowOnce;
+                    return ResolvePermission(ToolPermissionChoice.AllowOnce);
 
                 case ConsoleKey.D2:
                 case ConsoleKey.NumPad2:
                     Console.WriteLine("2");
-                    return ToolPermissionChoice.AllowAlways;
+                    return ResolvePermission(ToolPermissionChoice.AllowAlways);
 
                 case ConsoleKey.D3:
                 case ConsoleKey.NumPad3:
                 case ConsoleKey.Escape:
                     Console.WriteLine(key.Key == ConsoleKey.Escape ? "esc" : "3");
-                    return ToolPermissionChoice.Deny;
+                    return ResolvePermission(ToolPermissionChoice.Deny);
 
                 case ConsoleKey.UpArrow:
                 case ConsoleKey.LeftArrow:
@@ -742,7 +757,7 @@ internal static class PotatoConsole
 
                 case ConsoleKey.Enter:
                     Console.WriteLine(selectedIndex + 1);
-                    return PermissionChoiceForIndex(selectedIndex);
+                    return ResolvePermission(PermissionChoiceForIndex(selectedIndex));
             }
         }
     }

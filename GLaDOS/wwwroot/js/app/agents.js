@@ -257,11 +257,14 @@
         }
 
         const newEvents = events.filter((event) => Number(event.sequence || 0) > lastSequence);
-        if (events.length < previousCount || (events.length > previousCount && newEvents.length === 0)) {
+        const hasPermissionStateChange = newEvents.some((event) =>
+            event.kind === 'permission-resolved' || isPotatoPermissionChoiceInput(event));
+        if (previousCount === 0 || events.length < previousCount || (events.length > previousCount && newEvents.length === 0) || hasPermissionStateChange) {
             chatBox.innerHTML = '';
             chatBox.dataset.lastSequence = '0';
+            const permissionStates = getPotatoPermissionStates(events);
             events.forEach((event) => {
-                appendPotatoEventElement(chatBox, event);
+                appendPotatoEventElement(chatBox, event, permissionStates.get(Number(event.sequence || 0)));
             });
             chatBox.dataset.lastSequence = String(Math.max(...events.map((event) => Number(event.sequence || 0))));
             chatBox.scrollTop = chatBox.scrollHeight;
@@ -282,13 +285,13 @@
         initializeCodeBlockActions();
     }
 
-    function appendPotatoEventElement(chatBox, event) {
+    function appendPotatoEventElement(chatBox, event, permissionState = null) {
         if (!shouldShowPotatoEvent(event)) return;
-        chatBox.appendChild(createPotatoEventElement(event));
+        chatBox.appendChild(createPotatoEventElement(event, permissionState));
     }
 
     function shouldShowPotatoEvent(event) {
-        return showPotatoSystemActions || !event.collapsed;
+        return event.kind !== 'permission-resolved' && (showPotatoSystemActions || !event.collapsed);
     }
 
     function togglePotatoSystemActions() {
@@ -358,9 +361,9 @@
         return div;
     }
 
-    function createPotatoEventElement(event) {
+    function createPotatoEventElement(event, permissionState = null) {
         if (event.kind === 'permission') {
-            return createPotatoPermissionElement(event);
+            return createPotatoPermissionElement(event, permissionState);
         }
 
         if (event.collapsed) {
@@ -388,17 +391,23 @@
         });
     }
 
-    function createPotatoPermissionElement(event) {
+    function createPotatoPermissionElement(event, permissionState = null) {
         const permDiv = document.createElement('div');
         permDiv.className = 'message tool-call permission-prompt potato-permission-prompt';
 
         const title = document.createElement('p');
         title.className = 'permission-text permission-title';
-        title.textContent = 'Permission required';
+        title.textContent = permissionState ? `Permission ${formatPotatoPermissionState(permissionState)}` : 'Permission required';
 
         const content = document.createElement('pre');
         content.className = 'potato-permission-content';
         content.textContent = event.content || 'Potato requested permission.';
+
+        if (permissionState) {
+            permDiv.classList.add('permission-choice-submitted', `permission-${permissionState.replace(/\s+/g, '-')}`);
+            permDiv.append(title, content);
+            return permDiv;
+        }
 
         const actions = document.createElement('div');
         actions.className = 'permission-actions';
@@ -420,6 +429,44 @@
         return permDiv;
     }
 
+    function getPotatoPermissionStates(events) {
+        const states = new Map();
+        const pendingPermissionSequences = [];
+
+        events.forEach((event) => {
+            if (event.kind === 'permission') {
+                pendingPermissionSequences.push(Number(event.sequence || 0));
+                return;
+            }
+
+            if (event.kind === 'permission-resolved') {
+                const sequence = pendingPermissionSequences.pop();
+                if (sequence) states.set(sequence, String(event.content || 'resolved').trim().toLowerCase());
+                return;
+            }
+
+            if (isPotatoPermissionChoiceInput(event)) {
+                const sequence = pendingPermissionSequences.at(-1);
+                if (sequence) states.set(sequence, `choice sent: ${event.content.trim().toLowerCase()}`);
+            }
+        });
+
+        return states;
+    }
+
+    function formatPotatoPermissionState(state) {
+        if (state.startsWith('choice sent: ')) return state;
+        return state === 'approved once' ? 'approved once'
+            : state === 'approved always' ? 'approved always'
+                : state === 'denied' ? 'denied'
+                    : state;
+    }
+
+    function isPotatoPermissionChoiceInput(event) {
+        if (event.kind !== 'input' || event.role !== 'user') return false;
+        return ['once', 'always', 'deny'].includes(String(event.content || '').trim().toLowerCase());
+    }
+
     async function sendPotatoPermissionChoice(choice, promptElement) {
         if (!activePotatoSessionId) return;
 
@@ -437,6 +484,8 @@
 
             if (!response.ok) throw new Error(`HTTP ${response.status}`);
             promptElement.classList.add('permission-choice-submitted');
+            const actions = promptElement.querySelector('.permission-actions');
+            if (actions) actions.textContent = `Choice sent: ${choice}. Waiting for Potato…`;
             setAgentComposerState(true, `Status: Permission choice sent (${choice})`);
             await refreshActivePotatoSession();
         } catch (error) {

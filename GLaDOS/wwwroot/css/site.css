@@ -127,6 +127,48 @@ body {
     transition: background-color 0.2s, color 0.2s;
 }
 
+.background-tile-grid {
+    position: fixed;
+    inset: -56px;
+    z-index: 0;
+    display: grid;
+    grid-template-columns: repeat(24, 1fr);
+    grid-auto-rows: 80px;
+    gap: 0;
+    overflow: hidden;
+    pointer-events: none;
+    perspective: 900px;
+}
+
+.background-tile-grid span {
+    border: 1px solid color-mix(in srgb, var(--border-color) 20%, transparent);
+    background: color-mix(in srgb, var(--surface-color) 7%, transparent);
+    transform-origin: center;
+    backface-visibility: hidden;
+    animation: aperture-tile-wave 5.8s cubic-bezier(.55, .05, .45, .95) var(--tile-delay) infinite both;
+}
+
+@keyframes aperture-tile-wave {
+    0% {
+        transform: rotate3d(1, -1, 0, 0deg) scale(1);
+        background-color: color-mix(in srgb, var(--surface-color) 7%, transparent);
+    }
+    6% {
+        transform: rotate3d(1, -1, 0, 90deg) scale(.9);
+        background-color: color-mix(in srgb, var(--portal-blue) 11%, transparent);
+    }
+    12%, 100% {
+        transform: rotate3d(1, -1, 0, 180deg) scale(1);
+        background-color: color-mix(in srgb, var(--portal-orange) 7%, transparent);
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .background-tile-grid span {
+        animation: none;
+    }
+}
+
 button,
 input,
 select,
@@ -135,6 +177,8 @@ textarea {
 }
 
 .container {
+    position: relative;
+    z-index: 1;
     height: 100vh;
     min-height: 100vh;
     display: grid;
