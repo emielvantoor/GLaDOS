@@ -25,7 +25,7 @@
         initializeCodeBlockActions();
         initializeChats();
         await GLaDOSTools.renderToolList(document.getElementById('tools-list'), { endpoint: baseEndpoint });
-        loadModels();
+        await loadModels();
         updateTokenSettings();
         refreshRuntimeMemoryUsage();
 

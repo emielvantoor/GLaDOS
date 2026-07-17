@@ -1,6 +1,6 @@
     function getContextSize() {
         const value = parseInt(document.getElementById('contextSize').value, 10);
-        return clampToStep(value, minContextSize, maxContextSize, contextSizeStep, defaultContextSize);
+        return clampToStep(value, minContextSize, getContextSizeLimit(), contextSizeStep, defaultContextSize);
     }
 
     function getMaxCompletionTokens() {
@@ -14,14 +14,32 @@
         return Math.round(clamped / step) * step;
     }
 
+    function getContextSizeLimit() {
+        const modelContextLength = typeof getSelectedModelContextLength === 'function'
+            ? getSelectedModelContextLength()
+            : null;
+        const normalizedModelLimit = Number.isFinite(modelContextLength) && modelContextLength > 0
+            ? Math.floor(modelContextLength / contextSizeStep) * contextSizeStep
+            : null;
+        return Math.max(minContextSize, normalizedModelLimit ?? maxContextSize);
+    }
+
     function getMaxCompletionTokensLimit(contextSize = getContextSize()) {
-        const practicalLimit = Math.min(8192, Math.floor(contextSize / 4));
+        const contextBasedLimit = Math.min(8192, Math.floor(contextSize / 4));
+        const modelBasedLimit = typeof getSelectedModelMaxOutputTokens === 'function'
+            ? getSelectedModelMaxOutputTokens()
+            : null;
+        const practicalLimit = Number.isFinite(modelBasedLimit) && modelBasedLimit > 0
+            ? Math.min(modelBasedLimit, contextBasedLimit)
+            : contextBasedLimit;
         return Math.max(minMaxCompletionTokens, Math.floor(practicalLimit / maxCompletionTokensStep) * maxCompletionTokensStep);
     }
 
     function updateTokenSettings() {
-        const contextSize = getContextSize();
         const contextInput = document.getElementById('contextSize');
+        const contextSizeLimit = getContextSizeLimit();
+        contextInput.max = contextSizeLimit;
+        const contextSize = getContextSize();
         const maxCompletionInput = document.getElementById('maxCompletionTokens');
         const maxCompletionLimit = getMaxCompletionTokensLimit(contextSize);
 
