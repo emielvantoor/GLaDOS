@@ -12,13 +12,13 @@
     </PropertyGroup>
 
     <ItemGroup>
-        <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.8"/>
+        <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.10"/>
     </ItemGroup>
 
     <ItemGroup>
       <ProjectReference Include="..\GLaDOS.Core\GLaDOS.Core.csproj" />
       <ProjectReference Include="..\GLaDOS.LLama\GLaDOS.LLama.csproj" />
-      <ProjectReference Include="..\GLaDOS.Onnx\GLaDOS.Onnx.csproj" />
+<!--      <ProjectReference Include="..\GLaDOS.Onnx\GLaDOS.Onnx.csproj" />-->
     </ItemGroup>
 
 </Project>

@@ -3,7 +3,6 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.AI;
-using Potato.Session.Tasks;
 
 namespace Potato.Session;
 
@@ -629,7 +628,7 @@ public sealed class ProjectMapBuilder
         };
 
         ChatResponse response = await chatClient.GetResponseAsync(
-            messages, AgentTaskBase.CreateChatOptions(0.0),
+            messages, new ChatOptions { Temperature = 0.0f },
             cancellationToken);
 
         return string.IsNullOrWhiteSpace(response.Text)

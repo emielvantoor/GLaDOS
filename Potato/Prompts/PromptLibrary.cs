@@ -33,38 +33,10 @@ internal static partial class PromptLibrary
 
     private static IEnumerable<PromptDefinition> GetPromptDefinitions()
     {
-        yield return PlannerSystem;
-        yield return PlannerUser;
-        yield return PlanningSpecSystem;
-        yield return PlanningSpecUser;
-        yield return DraftPlanSystem;
-        yield return DraftPlanUser;
-        yield return DraftPlanReviewSystem;
-        yield return DraftPlanReviewUser;
-        yield return PlanCompletenessReviewSystem;
-        yield return PlanCompletenessReviewUser;
-        yield return ArchitectRefactorSystem;
-        yield return ArchitectRefactorUser;
-        yield return DesignSystem;
-        yield return DesignUser;
-        yield return ApplyPatchSystem;
-        yield return ApplyPatchUser;
-        yield return WriteCodeSystem;
-        yield return WriteCodeUser;
-        yield return WriteDocumentationSystem;
-        yield return WriteDocumentationUser;
-        yield return UserTextSystem;
-        yield return UserTextUser;
-        yield return CodeReviewSystem;
-        yield return CodeReviewUser;
         yield return GreetingSystem;
         yield return SideQuestionSystem;
         yield return ProjectMapSystem;
         yield return ProjectMapUser;
-        yield return ExecutionPlanningSystem;
-        yield return ExecutionPlanningUser;
-        yield return ShellScriptSystem;
-        yield return ShellScriptUser;
         yield return ExecutionMemorySummaryUser;
         yield return FilePurposeUser;
         yield return GreetingUser;

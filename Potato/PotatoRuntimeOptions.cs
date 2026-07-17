@@ -10,8 +10,6 @@ public sealed class PotatoRuntimeOptions
 
     public bool WebUiInputEnabled { get; init; }
 
-    public string ExecutionMode { get; init; } = "react";
-
     public int ContextSize { get; init; } = DefaultContextSize;
 
     public HashSet<string> AlwaysAllowedPermissionKeys { get; } = new(StringComparer.Ordinal);
@@ -23,7 +21,6 @@ public sealed class PotatoRuntimeOptions
             PromptDirectory = GetPromptDirectory(args),
             UseCompiledDefaultPrompts = appSettings.UseCompiledDefaultPrompts,
             WebUiInputEnabled = GetWebUiInputEnabled(appSettings),
-            ExecutionMode = appSettings.ExecutionMode ?? "react",
             ContextSize = GetContextSize(appSettings)
         };
     }

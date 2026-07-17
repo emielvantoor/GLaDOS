@@ -1,15 +1,11 @@
 using System.Text;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.AI;
-using Potato.Models;
-using Potato.Session.extensions;
-using Potato.Session.Models;
-using Potato.Session.Tasks;
 using Potato.Tools;
 
 namespace Potato.Session;
 
-internal sealed class PipelineSession
+internal sealed class PotatoSession
 {
     private readonly Uri gladosEndpoint;
     private readonly GladosChatClientFactory clientFactory;
@@ -20,8 +16,7 @@ internal sealed class PipelineSession
     private readonly PotatoRuntimeOptions options;
     private readonly PotatoAppSettingsStore appSettingsStore;
     private readonly CurrentChatClientState chatClientState;
-    private readonly PlanningService _planningService;
-    private readonly ExecutionService _executionService;
+    private readonly PlanningService planningService;
     private readonly ReActSession _reActSession;
     private readonly List<string> inputHistory = [];
     private readonly List<SessionTranscript> archivedSessions = [];
@@ -29,7 +24,6 @@ internal sealed class PipelineSession
     private readonly object taskCancellationLock = new();
 
     private IChatClient currentOpenAiClient;
-    private ExecutionMode executionMode;
     private int nextSessionNumber = 1;
     private int currentSessionNumber;
     private string? currentSessionSubject;
@@ -37,7 +31,7 @@ internal sealed class PipelineSession
     private CancellationTokenSource? currentTaskCancellationSource;
     private bool contextOptimizationEnabled;
 
-    public PipelineSession(
+    public PotatoSession(
         Uri gladosEndpoint,
         IChatClient openAiClient,
         GladosChatClientFactory clientFactory,
@@ -48,7 +42,6 @@ internal sealed class PipelineSession
         ExecutionMemory executionMemory,
         CurrentChatClientState chatClientState,
         PlanningService planningService,
-        ExecutionService executionService,
         ReActSession reActSession)
     {
         this.gladosEndpoint = gladosEndpoint;
@@ -59,11 +52,9 @@ internal sealed class PipelineSession
         this.agentTools = agentTools;
         this.executionMemory = executionMemory;
         this.chatClientState = chatClientState;
-        _planningService = planningService;
-        _executionService = executionService;
+        this.planningService = planningService;
         _reActSession = reActSession;
         currentOpenAiClient = openAiClient;
-        executionMode = ParseExecutionMode(options.ExecutionMode);
         
         PotatoAppSettings settings = appSettingsStore.Load();
         contextOptimizationEnabled = settings.ContextOptimizationEnabled ?? false;
@@ -87,8 +78,6 @@ internal sealed class PipelineSession
             HandleTranscriptCommand,
             WriteSessions,
             ContinueSession,
-            GetExecutionMode,
-            SetExecutionMode,
             () => options.ContextSize,
             () => currentOpenAiClient,
             SwitchModel,
@@ -160,30 +149,7 @@ internal sealed class PipelineSession
 
         try
         {
-            if (executionMode == ExecutionMode.ReAct)
-            {
-                await HandleUserGoalWithReActAsync(contextualGoal, cancellationToken);
-                return;
-            }
-
-            List<AgentTask>? plan = await ReviewPlanAsync(contextualGoal, currentOpenAiClient, cancellationToken);
-            if (plan is null)
-            {
-                string abortedMessage = "Plan was aborted. No execution was started.";
-                chatHistory.Add(new ChatMessage(ChatRole.Assistant, abortedMessage));
-                PotatoConsole.WriteStatus(abortedMessage);
-                ResetConversationState();
-                return;
-            }
-
-            ExecutionResult result = await _executionService.ExecutePlanAsync(contextualGoal, plan, currentOpenAiClient, cancellationToken);
-            string finalMessage = result.Success
-                ? BuildSuccessSummary(result)
-                : BuildFailureSummary(result);
-
-            chatHistory.Add(new ChatMessage(ChatRole.Assistant, finalMessage));
-            PotatoConsole.WriteAgentResponse(finalMessage);
-            ResetConversationState();
+            await HandleUserGoalWithReActAsync(contextualGoal, cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -203,57 +169,11 @@ internal sealed class PipelineSession
 
     private async Task HandleUserGoalWithReActAsync(string expandedGoal, CancellationToken cancellationToken)
     {
-        string guidance = _planningService.BuildDirectExecutionGuidance(expandedGoal, Environment.CurrentDirectory);
+        string guidance = planningService.BuildDirectExecutionGuidance(expandedGoal, Environment.CurrentDirectory);
         string finalMessage = await _reActSession.ExecuteAsync(expandedGoal, guidance, currentOpenAiClient, GetContextOptimizationEnabled, cancellationToken);
         chatHistory.Add(new ChatMessage(ChatRole.Assistant, finalMessage));
         PotatoConsole.WriteAgentResponse(finalMessage);
         ResetConversationState();
-    }
-
-    private async Task<List<AgentTask>?> ReviewPlanAsync(
-        string expandedGoal,
-        IChatClient chatClient,
-        CancellationToken cancellationToken)
-    {
-        string planningGoal = expandedGoal;
-
-        while (true)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            List<AgentTask> plan = await _planningService.PlanAsync(planningGoal, chatClient, cancellationToken);
-            string formattedPlan = FormatTaskList(plan);
-            chatHistory.Add(new ChatMessage(ChatRole.Assistant, formattedPlan));
-            PotatoConsole.WriteAgentResponse(formattedPlan);
-            PotatoConsole.WriteStatus("Review plan: type execute/yes to run, type changes to re-plan, or abort to cancel.");
-
-            string? reviewInput = PotatoConsole.ReadPromptInput(inputHistory, "execute, changes, or abort", cancellationToken);
-            if (string.IsNullOrWhiteSpace(reviewInput))
-            {
-                continue;
-            }
-
-            AddInputHistory(reviewInput);
-            string trimmed = reviewInput.Trim();
-            if (IsAbortInput(trimmed))
-            {
-                return null;
-            }
-
-            if (ApprovalPolicy.IsUserExecutionApproval(trimmed))
-            {
-                return plan;
-            }
-
-            planningGoal = BuildReplanGoal(expandedGoal, formattedPlan, trimmed);
-            chatHistory.Add(new ChatMessage(ChatRole.User, $"Plan correction: {trimmed}"));
-            PotatoConsole.EventSink?.Record("message", "user", $"Plan correction: {trimmed}", collapsed: false);
-        }
-    }
-
-    private static bool IsAbortInput(string input)
-    {
-        string normalized = input.Trim().Trim('.', '!', '?').ToLowerInvariant();
-        return normalized is "abort" or "cancel" or "stop" or "no" or "n";
     }
 
     private static bool IsNonActionableUserInput(string input)
@@ -304,20 +224,6 @@ internal sealed class PipelineSession
 
         return builder.ToString().TrimEnd();
     }
-
-    private static string BuildReplanGoal(string originalGoal, string previousPlan, string correction) =>
-        $"""
-        Original request:
-        {originalGoal}
-
-        Previous plan that the user rejected:
-        {previousPlan}
-
-        User correction for the next plan:
-        {correction}
-
-        Create a new deterministic plan that follows the original request and the user correction. Do not repeat rejected target files or steps unless the correction explicitly asks for them.
-        """;
 
     // private static string SelectTargetCodeBlock(string fileContent, string patchArgument)
     // {
@@ -371,75 +277,6 @@ internal sealed class PipelineSession
     // }
 
 
-    private static string FormatTaskList(IReadOnlyList<AgentTask> tasks)
-    {
-        var builder = new StringBuilder();
-        builder.AppendLine("Planner produced this deterministic task list:");
-        foreach (AgentTask task in tasks)
-        {
-            builder.AppendLine($"{task.Step}. {task.Action}: {task.Argument}");
-            builder.AppendLine($"   Reason: {task.Reason}");
-        }
-
-        return builder.ToString().TrimEnd();
-    }
-
-
-    private static string BuildSuccessSummary(ExecutionResult result)
-    {
-        TaskObservation? userFacingObservation = result.Observations.LastOrDefault(observation =>
-            StringHelper.NormalizeAction(observation.Action) is "write-report");
-        if (userFacingObservation is not null)
-        {
-            return userFacingObservation.Result;
-        }
-
-        var builder = new StringBuilder();
-        builder.AppendLine("Execution completed.");
-        foreach (TaskObservation observation in result.Observations)
-        {
-            AppendObservationSummary(builder, observation);
-        }
-
-        return builder.ToString().TrimEnd();
-    }
-
-    private static void AppendObservationSummary(StringBuilder builder, TaskObservation observation)
-    {
-        if (StringHelper.NormalizeAction(observation.Action) == "shell-script")
-        {
-            builder.AppendLine($"- Step {observation.Step} {observation.Action}:");
-            foreach (string line in TrimObservationResult(observation.Result)
-                         .Replace("\r\n", "\n", StringComparison.Ordinal)
-                         .Split('\n'))
-            {
-                builder.AppendLine($"  {line}");
-            }
-
-            return;
-        }
-
-        builder.AppendLine($"- Step {observation.Step} {observation.Action}: {StringHelper.FirstLine(observation.Result)}");
-    }
-
-    private static string TrimObservationResult(string result)
-    {
-        const int maxCharacters = 4000;
-        string trimmed = result.TrimEnd();
-        return trimmed.Length <= maxCharacters
-            ? trimmed
-            : trimmed[..maxCharacters] + "\n...(truncated)";
-    }
-
-    private static string BuildFailureSummary(ExecutionResult result)
-    {
-        var builder = new StringBuilder();
-        builder.AppendLine("Execution stopped.");
-        builder.AppendLine(result.ErrorMessage ?? "A step failed.");
-        builder.AppendLine("Adaptive replanning was attempted when the failure was recoverable and budget remained.");
-        return builder.ToString().TrimEnd();
-    }
-
     private async Task WriteUntrackedGreetingAsync()
     {
         try
@@ -454,7 +291,7 @@ internal sealed class PipelineSession
             using (PotatoConsole.StartProgress("Loading welcome message..."))
             {
                 greeting = await currentOpenAiClient.GetResponseAsync(greetingMessages,
-                    AgentTaskBase.CreateChatOptions(0.7));
+                    new ChatOptions { Temperature = 0.7f });
             }
 
             PotatoConsole.WriteAgentResponse(greeting.Text);
@@ -469,24 +306,6 @@ internal sealed class PipelineSession
     {
         currentOpenAiClient = selectedOpenAiClient;
         chatClientState.SetOpenAiClient(selectedOpenAiClient);
-    }
-
-    private string GetExecutionMode() =>
-        executionMode == ExecutionMode.ReAct ? "react" : "pipeline";
-
-    private void SetExecutionMode(string mode)
-    {
-        executionMode = ParseExecutionMode(mode);
-        appSettingsStore.SetExecutionMode(GetExecutionMode());
-        ResetConversationState();
-    }
-
-    private static ExecutionMode ParseExecutionMode(string? mode)
-    {
-        string normalized = mode?.Trim().ToLowerInvariant() ?? string.Empty;
-        return normalized is "pipeline" or "plan" or "deterministic"
-            ? ExecutionMode.Pipeline
-            : ExecutionMode.ReAct;
     }
 
     private void EnsureCurrentSession(string firstUserInput)
@@ -860,9 +679,4 @@ internal sealed class PipelineSession
         DateTime StartedAt,
         IReadOnlyList<ChatMessage> Messages);
 
-    private enum ExecutionMode
-    {
-        Pipeline,
-        ReAct
-    }
 }

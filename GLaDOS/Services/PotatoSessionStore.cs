@@ -10,7 +10,6 @@ public sealed class PotatoSessionStore
         "/model",
         "/cd",
         "/ask",
-        "/mode",
         "/prompts",
         "/webui-input",
         "/sessions",

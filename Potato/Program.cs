@@ -1,7 +1,6 @@
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Potato.Session;
-using Potato.Session.Tasks;
 using Potato.Tools;
 using Potato.WebUi;
 
@@ -22,29 +21,12 @@ class Program
 
         services.AddSingleton(options);
         services.AddSingleton<CurrentChatClientState>();
-        services.AddSingleton<ExecutionService>();
         services.AddSingleton<ProjectMapBuilder>();
-        services.AddSingleton<PlanningArtifactGenerator>();
-        services.AddSingleton<PlanTaskNormalizer>();
-        services.AddSingleton<PlannerTaskGenerator>();
         services.AddSingleton<PlanningService>();
         services.AddSingleton<ContextCompactor>();
         services.AddSingleton<ReActSession>();
         services.AddSingleton<AgentTools>();
         services.AddSingleton<ExecutionMemory>();
-
-        services.AddSingleton<IAgentTask, CodeReviewTask>();
-        services.AddSingleton<IAgentTask, CreateNewFileTask>();
-        services.AddSingleton<IAgentTask, InspectProjectTask>();
-        services.AddSingleton<IAgentTask, ReadFileTask>();
-        services.AddSingleton<IAgentTask, WriteCodeTask>();
-        services.AddSingleton<IAgentTask, WriteDocumentationTask>();
-        services.AddSingleton<IAgentTask, WriteReportTask>();
-        services.AddSingleton<IAgentTask, ApplyPatchTask>();
-        services.AddSingleton<IAgentTask, ArchitectRefactorTask>();
-        services.AddSingleton<IAgentTask, DesignTask>();
-        services.AddSingleton<IAgentTask, SearchProjectMapTask>();
-        services.AddSingleton<IAgentTask, ShellScriptTask>();
 
         var provider = services.BuildServiceProvider();
 
@@ -64,7 +46,7 @@ class Program
 
         PotatoConsole.WriteStartupBanner(gladosEndpoint, model);
 
-        var session = new PipelineSession(
+        var session = new PotatoSession(
             gladosEndpoint,
             openAiClient,
             clientFactory,
@@ -75,7 +57,6 @@ class Program
             executionMemory,
             provider.GetRequiredService<CurrentChatClientState>(),
             provider.GetRequiredService<PlanningService>(),
-            provider.GetRequiredService<ExecutionService>(),
             provider.GetRequiredService<ReActSession>()
         );
 

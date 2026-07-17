@@ -11,8 +11,6 @@ public sealed class PotatoAppSettings
 
     public string? SelectedModel { get; init; }
 
-    public string? ExecutionMode { get; init; }
-
     public int? ContextSize { get; init; }
 
     public bool? ContextOptimizationEnabled { get; init; }
@@ -23,7 +21,6 @@ public sealed class PotatoAppSettingsStore
     private const string UseCompiledDefaultPromptsProperty = "UseCompiledDefaultPrompts";
     private const string WebUiInputEnabledProperty = "WebUiInputEnabled";
     private const string SelectedModelProperty = "SelectedModel";
-    private const string ExecutionModeProperty = "ExecutionMode";
     private const string ContextSizeProperty = "ContextSize";
     private const string ContextOptimizationEnabledProperty = "ContextOptimizationEnabled";
     private readonly string path;
@@ -43,7 +40,6 @@ public sealed class PotatoAppSettingsStore
             UseCompiledDefaultPrompts = GetBool(root, UseCompiledDefaultPromptsProperty),
             WebUiInputEnabled = GetBool(root, WebUiInputEnabledProperty),
             SelectedModel = GetString(root, SelectedModelProperty),
-            ExecutionMode = NormalizeExecutionMode(GetString(root, ExecutionModeProperty)),
             ContextSize = GetInt(root, ContextSizeProperty),
             ContextOptimizationEnabled = GetBool(root, ContextOptimizationEnabledProperty, defaultValue: true)
         };
@@ -67,13 +63,6 @@ public sealed class PotatoAppSettingsStore
     {
         JsonObject root = LoadRoot();
         root[SelectedModelProperty] = model;
-        SaveRoot(root);
-    }
-
-    public void SetExecutionMode(string mode)
-    {
-        JsonObject root = LoadRoot();
-        root[ExecutionModeProperty] = NormalizeExecutionMode(mode) ?? "react";
         SaveRoot(root);
     }
 
@@ -171,14 +160,4 @@ public sealed class PotatoAppSettingsStore
         }
     }
 
-    private static string? NormalizeExecutionMode(string? mode)
-    {
-        string normalized = mode?.Trim().ToLowerInvariant() ?? string.Empty;
-        return normalized switch
-        {
-            "react" or "re-act" or "loop" => "react",
-            "pipeline" or "plan" or "deterministic" => "pipeline",
-            _ => "react"
-        };
-    }
 }

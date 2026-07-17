@@ -14,8 +14,6 @@ internal sealed class SlashCommandHandler(
     Action<string> handleTranscriptCommand,
     Action writeSessions,
     Action<string> continueSession,
-    Func<string> getExecutionMode,
-    Action<string> setExecutionMode,
     Func<int> getContextSize,
     Func<IChatClient> getClient,
     Action<IChatClient> switchModel,
@@ -57,10 +55,6 @@ internal sealed class SlashCommandHandler(
                 HandlePromptsCommand(arguments);
                 return true;
 
-            case "/mode":
-                HandleModeCommand(arguments);
-                return true;
-
             case "/webui-input":
                 await HandleWebUiInputCommandAsync(arguments);
                 return true;
@@ -90,36 +84,6 @@ internal sealed class SlashCommandHandler(
                 PotatoConsole.WriteError($"Unknown command: {command}");
                 Console.WriteLine("Type ? for shortcuts.");
                 return true;
-        }
-    }
-
-    private void HandleModeCommand(string arguments)
-    {
-        string mode = arguments.Trim().ToLowerInvariant();
-        switch (mode)
-        {
-            case "":
-            case "status":
-                PotatoConsole.WriteStatus($"Execution mode: {getExecutionMode()}.");
-                return;
-
-            case "pipeline":
-            case "plan":
-            case "deterministic":
-                setExecutionMode("pipeline");
-                PotatoConsole.WriteSuccess("Execution mode: pipeline.");
-                return;
-
-            case "react":
-            case "re-act":
-            case "loop":
-                setExecutionMode("react");
-                PotatoConsole.WriteSuccess("Execution mode: ReAct loop.");
-                return;
-
-            default:
-                PotatoConsole.WriteStatus("Type /mode status, /mode pipeline, or /mode react.");
-                return;
         }
     }
 

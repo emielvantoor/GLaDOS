@@ -366,19 +366,6 @@ internal sealed class ReActSession(
         ApprovalPolicy.IsProjectChangeRequest(goal) &&
         agentTools.SuccessfulEditCount <= successfulEditsBeforeExecution;
 
-    private static string FormatTaskList(IReadOnlyList<AgentTask> tasks)
-    {
-        var builder = new StringBuilder();
-        builder.AppendLine("Planner produced this deterministic task list:");
-        foreach (AgentTask task in tasks)
-        {
-            builder.AppendLine($"{task.Step}. {task.Action}: {task.Argument}");
-            builder.AppendLine($"   Reason: {task.Reason}");
-        }
-
-        return builder.ToString().TrimEnd();
-    }
-
     private static bool IsFinalResponse(string responseText) =>
         Regex.IsMatch(responseText, @"\A\s*(?:#{1,6}\s*)?(?:\*\*)?\s*FINAL\s*:?\s*(?:\*\*)?", RegexOptions.IgnoreCase);
 

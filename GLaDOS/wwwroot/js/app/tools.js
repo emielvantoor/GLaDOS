@@ -16,7 +16,6 @@
         const statusText = document.getElementById('statusText');
         const normalizedToolCall = normalizeToolCall(toolCall, args);
         const toolName = normalizedToolCall.name;
-        const toolCallId = toolCall.id || `call_${Date.now()}`;
         const toolArgs = normalizedToolCall.args;
 
         statusText.innerText = `Status: Executing tool (${toolName})`;
@@ -38,6 +37,14 @@
 
         const result = await response.json();
         const output = result.output || "";
+        await completeToolCall(toolCall, toolArgs, output);
+    }
+
+    async function completeToolCall(toolCall, args, output) {
+        const normalizedToolCall = normalizeToolCall(toolCall, args);
+        const toolName = normalizedToolCall.name;
+        const toolArgs = normalizedToolCall.args;
+        const toolCallId = toolCall.id || `call_${Date.now()}`;
         const toolCallMessage = {
             _id: createMessageId(),
             role: "assistant",

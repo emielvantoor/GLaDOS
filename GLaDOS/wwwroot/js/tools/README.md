@@ -38,5 +38,6 @@ Available handler context:
 - `context.addToolMessage(message)` shows a tool message in the chat.
 - `context.requestToolPermission(tool, args)` shows the generic permission prompt.
 - `context.executeInternalTool(toolCall, args)` executes an approved server-side GLaDOS tool.
+- `context.completeToolCall(toolCall, args, output)` records a browser tool's result and continues the AI request.
 - `context.executeAiRequest()` continues the AI request flow.
 - `context.escapeHtml(text)` escapes HTML for safe display.

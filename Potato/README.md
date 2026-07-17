@@ -66,13 +66,13 @@ Potato supports a wide range of code and project manipulation tasks, including:
 - ✅ **Documentation Writing** — Generate or update documentation.
 - ✅ **Refactoring** — Architectural changes and code restructuring.
 - ✅ **Shell Command Execution** — Run system commands with explicit user approval.
-- ✅ **Execution Planning** — Break down tasks into executable steps with tool mappings.
+- ✅ **ReAct Execution** — Uses one tool at a time, incorporating each observation before continuing.
 
 ---
 
 ## 🧩 Tools & Commands
 
-Potato uses a tool registry to execute specific actions. Each tool has a unique name and is invoked through the ReAct loop.
+Potato exposes direct tools to the ReAct loop. Each tool has a unique name and is invoked as needed.
 
 ### Built-in Tools
 
@@ -132,12 +132,6 @@ For risky or multi-step tasks, Potato will ask for explicit approval before exec
 execute, run, do it, continue, proceed, go
 ```
 
-> For example, after the agent outlines steps, it will prompt:
-
-```text
-Ready to execute? [execute/yes]: execute
-```
-
 > Type `exit` or `quit` to close the CLI.
 
 ---
@@ -147,11 +141,9 @@ Ready to execute? [execute/yes]: execute
 Potato uses a modular prompt system stored in the `Prompts/` directory. Each prompt file corresponds to a task type:
 
 - `GreetingPrompts.cs` — For initial user greeting.
-- `ExecutionPlanningPrompts.cs` — For breaking down tasks.
-- `WriteCodePrompts.cs` — For code generation.
-- `WriteDocumentationPrompts.cs` — For documentation.
-- `ApplyPatchPrompts.cs` — For patching files.
-- `CodeReviewPrompts.cs` — For code reviews.
+- `ReActPrompts.cs` — Guides direct tool-driven execution.
+- `ProjectMapPrompts.cs` — Summarizes files for project-map indexing.
+- `SideQuestionPrompts.cs` — Handles questions outside the active task.
 
 These prompts are designed to guide the agent’s behavior and ensure consistent, safe execution.
 
@@ -180,9 +172,8 @@ Potato/
 
 Potato is designed to be testable and extensible. The `Session/` directory contains the core execution logic, including:
 
-- `PipelineSession.cs` — Manages the execution pipeline.
-- `PlanningService.cs` — Handles task planning and breakdown.
-- `ExecutionService.cs` — Executes approved steps.
+- `PotatoSession.cs` — Manages interactive sessions.
+- `PlanningService.cs` — Builds direct-execution guidance and project-map context.
 
 Testing is done via unit tests in the `Tests/` directory (not currently visible in the scan).
 

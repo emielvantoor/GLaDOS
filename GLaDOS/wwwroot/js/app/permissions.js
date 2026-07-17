@@ -63,6 +63,7 @@
                 addToolMessage,
                 requestToolPermission,
                 executeInternalTool,
+                completeToolCall,
                 executeAiRequest,
                 escapeHtml
             });
