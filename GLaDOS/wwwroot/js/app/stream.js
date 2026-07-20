@@ -37,7 +37,10 @@
         try {
             const response = await fetch(endpoint, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-GLaDOS-Session-Id': activeChatId || 'default'
+                },
                 body: JSON.stringify(requestBody)
             });
 
@@ -162,5 +165,6 @@
             }
         } finally {
             submitBtn.disabled = false;
+            await refreshServerContextUsage();
         }
     }

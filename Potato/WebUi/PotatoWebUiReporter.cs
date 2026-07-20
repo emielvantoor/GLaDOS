@@ -14,7 +14,10 @@ internal sealed class PotatoWebUiReporter(Uri gladosEndpoint, string model) : Po
     private readonly Uri eventUri = new(gladosEndpoint, "potato/sessions/events");
     private readonly CancellationTokenSource inputPollingCancellation = new();
     private Task? inputPollingTask;
+    private Task? heartbeatTask;
     private volatile bool allowInput;
+
+    public string SessionId => sessionId;
 
     public async Task StartAsync(bool allowInput = false)
     {
@@ -35,6 +38,7 @@ internal sealed class PotatoWebUiReporter(Uri gladosEndpoint, string model) : Po
         }
 
         inputPollingTask = PollInputAsync(inputPollingCancellation.Token);
+        heartbeatTask = SendHeartbeatsAsync(inputPollingCancellation.Token);
     }
 
     public void Record(string kind, string role, string content, bool collapsed)
@@ -89,8 +93,7 @@ internal sealed class PotatoWebUiReporter(Uri gladosEndpoint, string model) : Po
 
     public bool TryReadInput(out string? input)
     {
-        input = null;
-        return allowInput && inputChannel.Reader.TryRead(out input);
+        return inputChannel.Reader.TryRead(out input);
     }
 
     public async Task SetWebUiInputEnabledAsync(bool enabled)
@@ -129,6 +132,17 @@ internal sealed class PotatoWebUiReporter(Uri gladosEndpoint, string model) : Po
             }
         }
 
+        if (heartbeatTask is not null)
+        {
+            try
+            {
+                await heartbeatTask;
+            }
+            catch (OperationCanceledException)
+            {
+            }
+        }
+
         await TryPostAsync(eventUri, new PotatoSessionEventPayload(
             sessionId,
             sessionWorkingDirectory,
@@ -137,6 +151,8 @@ internal sealed class PotatoWebUiReporter(Uri gladosEndpoint, string model) : Po
             "status",
             "Potato session stopped.",
             Collapsed: true));
+
+        await TryReleaseInferenceSessionAsync();
 
         inputPollingCancellation.Dispose();
         httpClient.Dispose();
@@ -172,6 +188,29 @@ internal sealed class PotatoWebUiReporter(Uri gladosEndpoint, string model) : Po
         }
     }
 
+    private async Task SendHeartbeatsAsync(CancellationToken cancellationToken)
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(1));
+        while (await timer.WaitForNextTickAsync(cancellationToken))
+        {
+            try
+            {
+                using HttpResponseMessage _ = await httpClient.PostAsync(
+                    new Uri(gladosEndpoint, $"v1/runtime/sessions/{Uri.EscapeDataString(sessionId)}/heartbeat"),
+                    content: null,
+                    cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                break;
+            }
+            catch
+            {
+                // The server watchdog will release the context if it stays unreachable.
+            }
+        }
+    }
+
     private async Task TryPostAsync<TPayload>(Uri uri, TPayload payload)
     {
         try
@@ -181,6 +220,19 @@ internal sealed class PotatoWebUiReporter(Uri gladosEndpoint, string model) : Po
         catch
         {
             // Transient Web UI disconnects should not permanently detach this Potato session.
+        }
+    }
+
+    private async Task TryReleaseInferenceSessionAsync()
+    {
+        try
+        {
+            using HttpResponseMessage _ = await httpClient.DeleteAsync(
+                new Uri(gladosEndpoint, $"v1/runtime/sessions/{Uri.EscapeDataString(sessionId)}"));
+        }
+        catch
+        {
+            // GLaDOS may already be offline during Potato shutdown.
         }
     }
 

@@ -38,7 +38,8 @@ internal sealed class ReActSession(
         executionMemory.Clear();
         int successfulEditsBeforeExecution = agentTools.SuccessfulEditCount;
         int consecutiveInvalidResponses = 0;
-        ChatOptions toolOptions = CreateToolOptions();
+        bool fimAvailable = await agentTools.IsFimAvailableAsync(cancellationToken);
+        ChatOptions toolOptions = CreateToolOptions(fimAvailable);
         string projectMap = await planningService.BuildProjectMapHeaderAsync(Environment.CurrentDirectory, cancellationToken);
 
         executionMemory.Add("ProjectMap", projectMap);
@@ -186,7 +187,7 @@ internal sealed class ReActSession(
                 {
                     reactHistory.Add(new ChatMessage(
                         ChatRole.User,
-                        "You returned FINAL for a project change, but no edit tool has successfully changed a file in this execution. Inspect the relevant file if needed, then use ApplySearchReplaceAsync, CreateFileAsync, or ApplyDiffPatchAsync. Do not claim completion until an edit tool reports success."));
+                        "You returned FINAL for a project change, but no edit tool has successfully changed a file in this execution. Inspect the relevant file if needed, then use the available edit tool, CreateFileAsync, or ApplyDiffPatchAsync. Do not claim completion until an edit tool reports success."));
                     continue;
                 }
 
@@ -317,7 +318,7 @@ internal sealed class ReActSession(
         return functionCalls;
     }
 
-    private ChatOptions CreateToolOptions() =>
+    private ChatOptions CreateToolOptions(bool fimAvailable) =>
         new()
         {
             Tools =
@@ -334,6 +335,7 @@ internal sealed class ReActSession(
                 AIFunctionFactory.Create(agentTools.GetCollectedContext),
                 AIFunctionFactory.Create(agentTools.ExecuteShellCommandAsync),
                 AIFunctionFactory.Create(agentTools.ApplySearchReplaceAsync),
+                ..(fimAvailable ? new[] { AIFunctionFactory.Create(agentTools.ApplyFimEditAsync) } : []),
                 AIFunctionFactory.Create(agentTools.CreateFileAsync),
                 AIFunctionFactory.Create(agentTools.ApplyDiffPatchAsync)
             ],
@@ -367,14 +369,17 @@ internal sealed class ReActSession(
         agentTools.SuccessfulEditCount <= successfulEditsBeforeExecution;
 
     private static bool IsFinalResponse(string responseText) =>
-        Regex.IsMatch(responseText, @"\A\s*(?:#{1,6}\s*)?(?:\*\*)?\s*FINAL\s*:?\s*(?:\*\*)?", RegexOptions.IgnoreCase);
+        // Some models wrap their answer in headings (for example "## Response")
+        // before emitting the required FINAL marker. Treat a marker at the start
+        // of any line as final, while still avoiding incidental inline mentions.
+        Regex.IsMatch(responseText, @"^[ \t]*(?:#{1,6}[ \t]*)?(?:\*\*)?[ \t]*FINAL[ \t]*:?[ \t]*(?:\*\*)?(?=[ \t]|$)", RegexOptions.IgnoreCase | RegexOptions.Multiline);
 
     private static string RemoveFinalMarker(string responseText) =>
         Regex.Replace(
                 responseText,
-                @"\A\s*(?:#{1,6}\s*)?(?:\*\*)?\s*FINAL\s*:?\s*(?:\*\*)?",
+                @"^[ \t]*(?:#{1,6}[ \t]*)?(?:\*\*)?[ \t]*FINAL[ \t]*:?[ \t]*(?:\*\*)?",
                 string.Empty,
-                RegexOptions.IgnoreCase)
+                RegexOptions.IgnoreCase | RegexOptions.Multiline)
             .TrimStart();
 
     private async Task<bool> TryExecuteTextualActionAsync(
@@ -477,6 +482,7 @@ internal sealed class ReActSession(
         {
             nameof(AgentTools.CreateFileAsync) => true,
             nameof(AgentTools.ApplySearchReplaceAsync) => true,
+            nameof(AgentTools.ApplyFimEditAsync) => true,
             nameof(AgentTools.ApplyDiffPatchAsync) => true,
             _ => false
         };
@@ -654,6 +660,15 @@ internal sealed class ReActSession(
                         GetStringArgument(toolCall.Arguments, "patch") ?? string.Empty,
                         GetStringArgument(toolCall.Arguments, "workingDirectory") ??
                         GetStringArgument(toolCall.Arguments, "working_directory")),
+                    nameof(AgentTools.ApplyFimEditAsync) => await agentTools.ApplyFimEditAsync(
+                        GetStringArgument(toolCall.Arguments, "filePath") ??
+                        GetStringArgument(toolCall.Arguments, "file_path") ??
+                        GetStringArgument(toolCall.Arguments, "path") ?? string.Empty,
+                        GetIntArgument(toolCall.Arguments, "startLine") ??
+                        GetIntArgument(toolCall.Arguments, "start_line") ?? 0,
+                        GetIntArgument(toolCall.Arguments, "endLine") ??
+                        GetIntArgument(toolCall.Arguments, "end_line") ?? 0,
+                        GetStringArgument(toolCall.Arguments, "instruction") ?? string.Empty),
                     nameof(AgentTools.ApplySearchReplaceAsync) => await agentTools.ApplySearchReplaceAsync(
                         GetStringArgument(toolCall.Arguments, "filePath") ??
                         GetStringArgument(toolCall.Arguments, "file_path") ??
@@ -668,7 +683,15 @@ internal sealed class ReActSession(
                         GetStringArgument(toolCall.Arguments, "newString") ??
                         GetStringArgument(toolCall.Arguments, "new_string") ??
                         GetStringArgument(toolCall.Arguments, "REPLACE") ??
-                        string.Empty),
+                        string.Empty,
+                        GetStringArgument(toolCall.Arguments, "startAnchor") ??
+                        GetStringArgument(toolCall.Arguments, "start_anchor"),
+                        GetStringArgument(toolCall.Arguments, "endAnchor") ??
+                        GetStringArgument(toolCall.Arguments, "end_anchor"),
+                        GetIntArgument(toolCall.Arguments, "startLine") ??
+                        GetIntArgument(toolCall.Arguments, "start_line"),
+                        GetIntArgument(toolCall.Arguments, "endLine") ??
+                        GetIntArgument(toolCall.Arguments, "end_line")),
                     nameof(AgentTools.CreateFileAsync) => await agentTools.CreateFileAsync(
                         GetStringArgument(toolCall.Arguments, "filePath") ??
                         GetStringArgument(toolCall.Arguments, "file_path") ??
@@ -740,7 +763,26 @@ internal sealed class ReActSession(
 
         if (!match.Success)
         {
-            return null;
+            Match compactMatch = Regex.Match(
+                responseText,
+                """<tool_?call\s+[^>]*\bname\s*=\s*['\"](?<name>[^'\"]+)['\"][^>]*\barguments\s*=\s*['\"](?<arguments>\{[\s\S]*?\})['\"][^>]*/\s*>""",
+                RegexOptions.IgnoreCase);
+            if (!compactMatch.Success)
+            {
+                return null;
+            }
+
+            try
+            {
+                JsonNode? arguments = JsonNode.Parse(compactMatch.Groups["arguments"].Value);
+                return new TextualToolCall(
+                    compactMatch.Groups["name"].Value,
+                    arguments as JsonObject ?? []);
+            }
+            catch
+            {
+                return null;
+            }
         }
 
         try
@@ -770,7 +812,8 @@ internal sealed class ReActSession(
         if ((lower.Contains("<tool_call", StringComparison.Ordinal) ||
              lower.Contains("<toolcall", StringComparison.Ordinal)) &&
             !(lower.Contains("</tool_call>", StringComparison.Ordinal) ||
-              lower.Contains("</toolcall>", StringComparison.Ordinal)))
+              lower.Contains("</toolcall>", StringComparison.Ordinal) ||
+              Regex.IsMatch(trimmed, @"<tool_?call\b[^>]*/\s*>", RegexOptions.IgnoreCase)))
         {
             return true;
         }

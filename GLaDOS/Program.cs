@@ -17,6 +17,7 @@ LLamaHardwareConfigurator.Configure(builder.Configuration);
 builder.Services.AddCoreServices();
 builder.Services.AddLLamaModels(builder.Configuration);
 builder.Services.AddSingleton<PotatoSessionStore>();
+builder.Services.AddHostedService<InferenceSessionCleanupService>();
 
 builder.Services.ConfigureHttpJsonOptions(options =>
 {

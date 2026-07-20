@@ -6,6 +6,7 @@ public sealed class CurrentChatClientState
 {
     private readonly object syncRoot = new();
     private IChatClient? openAiClient;
+    private string model = "local-model";
 
     public IChatClient OpenAiClient
     {
@@ -24,5 +25,15 @@ public sealed class CurrentChatClientState
         {
             openAiClient = selectedOpenAiClient;
         }
+    }
+
+    public string Model
+    {
+        get { lock (syncRoot) { return model; } }
+    }
+
+    public void SetModel(string selectedModel)
+    {
+        lock (syncRoot) { model = selectedModel; }
     }
 }

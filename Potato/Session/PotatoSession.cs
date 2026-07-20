@@ -302,10 +302,11 @@ internal sealed class PotatoSession
         }
     }
 
-    private void SwitchModel(IChatClient selectedOpenAiClient)
+    private void SwitchModel(IChatClient selectedOpenAiClient, string selectedModel)
     {
         currentOpenAiClient = selectedOpenAiClient;
         chatClientState.SetOpenAiClient(selectedOpenAiClient);
+        chatClientState.SetModel(selectedModel);
     }
 
     private void EnsureCurrentSession(string firstUserInput)

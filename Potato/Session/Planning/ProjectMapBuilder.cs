@@ -312,14 +312,28 @@ public sealed class ProjectMapBuilder
 
     private static IEnumerable<FileInfo> EnumerateProjectMapFiles(DirectoryInfo directory)
     {
-        foreach (FileInfo file in directory.EnumerateFiles())
+        // Repositories can contain package caches, mounts, or generated folders
+        // that are visible but not readable by the current user. A project map is
+        // best-effort discovery, so skip those subtrees rather than failing the
+        // entire search.
+        foreach (FileInfo file in GetFilesSafely(directory))
         {
             yield return file;
         }
 
-        foreach (DirectoryInfo childDirectory in directory.EnumerateDirectories())
+        foreach (DirectoryInfo childDirectory in GetDirectoriesSafely(directory))
         {
-            if (ShouldSkipProjectMapDirectory(childDirectory))
+            bool shouldSkip;
+            try
+            {
+                shouldSkip = ShouldSkipProjectMapDirectory(childDirectory);
+            }
+            catch (Exception ex) when (ex is UnauthorizedAccessException or IOException)
+            {
+                continue;
+            }
+
+            if (shouldSkip)
             {
                 continue;
             }
@@ -328,6 +342,30 @@ public sealed class ProjectMapBuilder
             {
                 yield return file;
             }
+        }
+    }
+
+    private static FileInfo[] GetFilesSafely(DirectoryInfo directory)
+    {
+        try
+        {
+            return directory.GetFiles();
+        }
+        catch (Exception ex) when (ex is UnauthorizedAccessException or IOException)
+        {
+            return [];
+        }
+    }
+
+    private static DirectoryInfo[] GetDirectoriesSafely(DirectoryInfo directory)
+    {
+        try
+        {
+            return directory.GetDirectories();
+        }
+        catch (Exception ex) when (ex is UnauthorizedAccessException or IOException)
+        {
+            return [];
         }
     }
 

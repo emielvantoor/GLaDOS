@@ -4,6 +4,11 @@ public record AgentMessage(AgentRole Role, string Content, string? ToolCallName 
 
 public class ChatOptions
 {
+    /// <summary>
+    /// Identifies the conversation that owns any stateful model context.
+    /// </summary>
+    public string? SessionId { get; set; }
+
     public float? Temperature { get; set; }
 
     public int? ContextSize { get; set; }

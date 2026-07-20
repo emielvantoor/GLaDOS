@@ -85,6 +85,29 @@
         meterFill.classList.toggle('danger', percent >= 90);
     }
 
+    async function refreshServerContextUsage() {
+        if (!baseEndpoint || !activeChatId) return;
+
+        try {
+            const response = await fetch(`${baseEndpoint}/v1/runtime/sessions/${encodeURIComponent(activeChatId)}`);
+            if (!response.ok) return;
+
+            const usage = await response.json();
+            const used = Number(usage.estimatedTokens ?? usage.estimated_tokens ?? 0);
+            const total = Number(usage.contextSize ?? usage.context_size ?? getContextSize());
+            const percent = total > 0 ? Math.min((used / total) * 100, 100) : 0;
+            const usageElement = document.getElementById('contextUsage');
+            const meterFill = document.getElementById('contextMeterFill');
+
+            usageElement.innerText = `${formatNumber(used)} / ${formatNumber(total)} tokens used (server session)`;
+            meterFill.style.width = `${percent}%`;
+            meterFill.classList.toggle('warning', percent >= 75 && percent < 90);
+            meterFill.classList.toggle('danger', percent >= 90);
+        } catch {
+            // The local prompt estimate remains visible when the server has no session data.
+        }
+    }
+
     async function refreshRuntimeMemoryUsage() {
         const memoryElement = document.getElementById('contextMemoryUsage');
         if (!memoryElement || !baseEndpoint) return;

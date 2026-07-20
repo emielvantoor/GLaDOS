@@ -21,6 +21,7 @@ class Program
 
         services.AddSingleton(options);
         services.AddSingleton<CurrentChatClientState>();
+        services.AddSingleton<FimClient>();
         services.AddSingleton<ProjectMapBuilder>();
         services.AddSingleton<PlanningService>();
         services.AddSingleton<ContextCompactor>();
@@ -32,15 +33,15 @@ class Program
 
         Uri gladosEndpoint = GladosConfiguration.GetEndpoint();
         var executionMemory = provider.GetRequiredService<ExecutionMemory>();
-        var clientFactory = new GladosChatClientFactory(executionMemory);
         var modelSelector = new ModelSelector();
         string model = await modelSelector.SelectStartupModelAsync(gladosEndpoint, appSettings.SelectedModel);
         appSettingsStore.SetSelectedModel(model);
 
+        await using var webUiReporter = new PotatoWebUiReporter(gladosEndpoint, model);
+        using var clientFactory = new GladosChatClientFactory(executionMemory, webUiReporter.SessionId);
         IChatClient openAiClient = clientFactory.CreateOpenAiClient(gladosEndpoint, model, options.ContextSize);
         provider.GetRequiredService<CurrentChatClientState>().SetOpenAiClient(openAiClient);
-
-        await using var webUiReporter = new PotatoWebUiReporter(gladosEndpoint, model);
+        provider.GetRequiredService<CurrentChatClientState>().SetModel(model);
         await webUiReporter.StartAsync(options.WebUiInputEnabled);
         PotatoConsole.EventSink = webUiReporter;
 

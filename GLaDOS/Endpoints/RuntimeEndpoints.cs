@@ -1,6 +1,8 @@
 using System.Diagnostics;
 using System.Globalization;
 using GLaDOS.Models;
+using GLaDOS.Core.Interfaces;
+using GLaDOS.Core.Models;
 
 namespace GLaDOS.Endpoints;
 
@@ -8,7 +10,12 @@ public static class RuntimeEndpoints
 {
     public static void MapRuntimeEndpoints(this IEndpointRouteBuilder app)
     {
-        app.MapGroup("/v1").MapGet("/runtime/memory", GetRuntimeMemoryUsage);
+        var group = app.MapGroup("/v1/runtime");
+        group.MapGet("/memory", GetRuntimeMemoryUsage);
+        group.MapGet("/sessions/{sessionId}", GetSessionUsage);
+        group.MapPost("/sessions/{sessionId}/heartbeat", TouchSession);
+        group.MapDelete("/sessions/{sessionId}", ReleaseSession);
+        group.MapPost("/sessions/cleanup", ReleaseInactiveSessions);
     }
 
     private static IResult GetRuntimeMemoryUsage()
@@ -42,6 +49,45 @@ public static class RuntimeEndpoints
         }
 
         return Results.Ok(response);
+    }
+
+    private static IResult GetSessionUsage(string sessionId, IEnumerable<LanguageModel> models)
+    {
+        ModelSessionUsage? usage = models
+            .OfType<IModelSessionUsageProvider>()
+            .Select(model => model.GetSessionUsage(sessionId))
+            .FirstOrDefault(value => value is not null);
+
+        return usage is null ? Results.NotFound() : Results.Ok(usage);
+    }
+
+    private static IResult ReleaseSession(string sessionId, IEnumerable<LanguageModel> models)
+    {
+        bool released = models
+            .OfType<IModelSessionUsageProvider>()
+            .Any(model => model.ReleaseSession(sessionId));
+
+        return released ? Results.NoContent() : Results.NotFound();
+    }
+
+    private static IResult TouchSession(string sessionId, IEnumerable<LanguageModel> models)
+    {
+        _ = models
+            .OfType<IModelSessionUsageProvider>()
+            .Any(model => model.TouchSession(sessionId));
+
+        // A heartbeat can arrive before the first inference has allocated the
+        // interactive context. That is still healthy, so keep the endpoint quiet.
+        return Results.NoContent();
+    }
+
+    private static IResult ReleaseInactiveSessions(IEnumerable<LanguageModel> models)
+    {
+        int released = models
+            .OfType<IModelSessionUsageProvider>()
+            .Sum(model => model.ReleaseInactiveSessions());
+
+        return Results.Ok(new { released });
     }
 
     private static bool TryGetSystemMemory(out double usedMb, out double totalMb)

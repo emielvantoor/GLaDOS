@@ -26,6 +26,13 @@ public static class FimEndpoints
     public static void MapFimEndpoints(this IEndpointRouteBuilder app)
     {
         var v1Group = app.MapGroup("/v1");
+        v1Group.MapGet("/fim/capabilities", () => Results.Ok(new
+        {
+            available = true,
+            format = "qwen-fim",
+            supportsInstruction = true,
+            maxEditLines = 200
+        }));
         v1Group.MapPost("/fim/completions", HandleFimCompletions);
     }
 

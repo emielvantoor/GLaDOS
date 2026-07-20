@@ -76,6 +76,7 @@ public static class OpenAiEndpoints
 
         var agentResultStream = agent.RunAsync(model, domainMessages, new ChatOptions
         {
+            SessionId = context.Request.Headers["X-GLaDOS-Session-Id"].FirstOrDefault(),
             Temperature = request.Temperature,
             ContextSize = request.ContextSize,
             MaxTokenLength = request.MaxCompletionTokens ?? request.MaxTokenLength

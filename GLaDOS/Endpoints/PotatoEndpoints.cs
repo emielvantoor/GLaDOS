@@ -15,6 +15,7 @@ public static class PotatoEndpoints
         group.MapPost("/sessions", StartSession);
         group.MapPost("/sessions/events", AddEvent);
         group.MapPost("/sessions/{id}/input", AddInput);
+        group.MapPost("/sessions/{id}/permission", AddPermissionChoice);
         group.MapPost("/sessions/{id}/completions", GetCompletions);
         group.MapGet("/sessions/input/next", GetNextInput);
     }
@@ -65,6 +66,21 @@ public static class PotatoEndpoints
         return store.EnqueueInput(id, request.Content)
             ? Results.Accepted()
             : Results.NotFound(new { error = "Potato session not found." });
+    }
+
+    private static IResult AddPermissionChoice(
+        [FromServices] PotatoSessionStore store,
+        string id,
+        [FromBody] PotatoSessionInputRequest? request)
+    {
+        if (request is null || string.IsNullOrWhiteSpace(request.Content))
+        {
+            return Results.BadRequest(new { error = "Permission choice is required." });
+        }
+
+        return store.EnqueuePermissionChoice(id, request.Content)
+            ? Results.Accepted()
+            : Results.NotFound(new { error = "Potato session was not found or the permission choice is invalid." });
     }
 
     private static IResult GetNextInput(

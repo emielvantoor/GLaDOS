@@ -7,13 +7,16 @@ using Microsoft.Extensions.AI;
 
 namespace Potato.Tools;
 
-public class AgentTools(ExecutionMemory memory, CurrentChatClientState chatClientState, PotatoRuntimeOptions options)
+public class AgentTools(ExecutionMemory memory, CurrentChatClientState chatClientState, PotatoRuntimeOptions options, FimClient fimClient)
 {
     private const int DefaultCommandTimeoutSeconds = 60;
     private const int MaxCommandTimeoutSeconds = 600;
     private const int MaxPatchCharacters = 200_000;
     private const int MaxPurposeInferenceCharacters = 12_000;
     private const int MaxFileRangeLines = 200;
+    private const int MaxFimEditLines = 60;
+    private const int MaxFimContextLines = 60;
+    private const int MaxFimContextCharacters = 12_000;
     private const long MaxSearchFileBytes = 1_000_000;
     private const int MaxSearchFiles = 5000;
 
@@ -62,6 +65,9 @@ public class AgentTools(ExecutionMemory memory, CurrentChatClientState chatClien
 
     internal string RejectExternalToolInvocation(string toolName, string reason) =>
         RejectToolInvocation(toolName, reason);
+
+    public Task<bool> IsFimAvailableAsync(CancellationToken cancellationToken) =>
+        fimClient.IsAvailableAsync(cancellationToken);
 
     private bool TryReserveToolInvocation(string toolName, out string rejectionReason)
     {
@@ -730,10 +736,10 @@ public class AgentTools(ExecutionMemory memory, CurrentChatClientState chatClien
             return StoreAndReturn(nameof(ExecuteShellCommandAsync), "Error: No command was provided.");
         }
 
-        if (LooksLikeCompoundShellCommand(command))
-        {
-            return StoreAndReturn($"{nameof(ExecuteShellCommandAsync)} {command}", "Rejected compound shell command. Run exactly one shell operation at a time; do not combine commands with &&, ||, ;, pipes, redirection, or multiple lines.");
-        }
+        // if (LooksLikeCompoundShellCommand(command))
+        // {
+        //     return StoreAndReturn($"{nameof(ExecuteShellCommandAsync)} {command}", "Rejected compound shell command. Run exactly one shell operation at a time; do not combine commands with &&, ||, ;, pipes, redirection, or multiple lines.");
+        // }
 
         if (LooksLikeShellFileEditCommand(command))
         {
@@ -942,11 +948,15 @@ public class AgentTools(ExecutionMemory memory, CurrentChatClientState chatClien
         }
     }
 
-    [Description("Applies an exact Qwen/Aider-style SEARCH/REPLACE edit to one file after showing the change to the user and asking for permission.")]
+    [Description("Applies a focused replacement to one file after showing the change to the user and asking for permission. For small edits use exact search. For large edits use unique startAnchor and endAnchor; only the text between them is replaced. As a last option use an inclusive line range.")]
     public async Task<string> ApplySearchReplaceAsync(
         [Description("The path to the file. Absolute paths are accepted; relative paths resolve from the current working directory.")] string filePath,
-        [Description("The exact existing text to find in the file.")] string search,
-        [Description("The replacement text to write in place of the search text.")] string replace)
+        [Description("The exact existing text to find in the file. Use for a small exact replacement; leave empty when using anchors or lines.")] string search = "",
+        [Description("The replacement text to write in place of the resolved text.")] string replace = "",
+        [Description("Unique text immediately before a large replacement. The anchor itself is preserved.")] string? startAnchor = null,
+        [Description("Unique text immediately after a large replacement. The anchor itself is preserved.")] string? endAnchor = null,
+        [Description("First line to replace, inclusive. Provide together with endLine instead of search or anchors.")] int? startLine = null,
+        [Description("Last line to replace, inclusive. Provide together with startLine instead of search or anchors.")] int? endLine = null)
     {
         if (!TryReserveToolInvocation(nameof(ApplySearchReplaceAsync), out string rejectionReason))
         {
@@ -959,7 +969,9 @@ public class AgentTools(ExecutionMemory memory, CurrentChatClientState chatClien
             ("filePath", filePath),
             ("resolvedPath", resolvedPath ?? "(unresolved)"),
             ("searchCharacters", search?.Length.ToString() ?? "0"),
-            ("replaceCharacters", replace?.Length.ToString() ?? "0")
+            ("replaceCharacters", replace?.Length.ToString() ?? "0"),
+            ("startLine", startLine?.ToString() ?? string.Empty),
+            ("endLine", endLine?.ToString() ?? string.Empty)
         ]);
 
         if (IsPlaceholderPath(filePath) && resolvedPath is null)
@@ -973,56 +985,81 @@ public class AgentTools(ExecutionMemory memory, CurrentChatClientState chatClien
         }
 
         string content = await File.ReadAllTextAsync(resolvedPath, CurrentCancellationToken);
-        if (string.IsNullOrEmpty(search))
-        {
-            if (content.Length > 0)
-            {
-                return StoreAndReturn(nameof(ApplySearchReplaceAsync), "Error: SEARCH text cannot be empty unless the target file is empty.");
-            }
+        if (!TryResolveReplacementSpan(content, search ?? string.Empty, startAnchor, endAnchor, startLine, endLine, out int replacementStart, out int replacementLength, out string resolutionError))
+            return StoreAndReturn(nameof(ApplySearchReplaceAsync), resolutionError);
 
-            string emptyFileReplacement = replace ?? string.Empty;
-            ToolPermissionChoice emptyFileApproval = RequestPermission(
-                PermissionKey(nameof(ApplySearchReplaceAsync), resolvedPath),
-                $"WriteFile Writing to empty file {PathResolver.FormatPathForDisplay(resolvedPath)}",
-                FormatSearchReplacePreview(string.Empty, emptyFileReplacement));
-            if (emptyFileApproval == ToolPermissionChoice.Deny)
-            {
-                WriteCompactToolResult(false, "WriteFile denied", resolvedPath);
-                return StoreAndReturn(nameof(ApplySearchReplaceAsync), "SEARCH/REPLACE edit denied by user.");
-            }
-
-            await File.WriteAllTextAsync(resolvedPath, emptyFileReplacement, CurrentCancellationToken);
-            SuccessfulEditCount++;
-            WriteCompactToolResult(true, "WriteFile wrote", resolvedPath);
-            return StoreAndReturn(nameof(ApplySearchReplaceAsync), $"SEARCH/REPLACE edit applied successfully to {resolvedPath}.");
-        }
-
-        int matchCount = CountOccurrences(content, search);
-        if (matchCount == 0)
-        {
-            return StoreAndReturn(nameof(ApplySearchReplaceAsync), "Error: SEARCH text was not found exactly in the target file.");
-        }
-
-        if (matchCount > 1)
-        {
-            return StoreAndReturn(nameof(ApplySearchReplaceAsync), $"Error: SEARCH text matched {matchCount} times. Provide a larger unique SEARCH block.");
-        }
+        string resolvedSearch = content.Substring(replacementStart, replacementLength);
 
         ToolPermissionChoice approval = RequestPermission(
             PermissionKey(nameof(ApplySearchReplaceAsync), resolvedPath),
             $"WriteFile Writing to {PathResolver.FormatPathForDisplay(resolvedPath)}",
-            FormatSearchReplacePreview(search ?? string.Empty, replace ?? string.Empty));
+            FormatSearchReplacePreview(resolvedSearch, replace ?? string.Empty));
         if (approval == ToolPermissionChoice.Deny)
         {
             WriteCompactToolResult(false, "WriteFile denied", resolvedPath);
             return StoreAndReturn(nameof(ApplySearchReplaceAsync), "SEARCH/REPLACE edit denied by user.");
         }
 
-        string updatedContent = content.Replace(search!, replace ?? string.Empty, StringComparison.Ordinal);
+        string updatedContent = content.Remove(replacementStart, replacementLength).Insert(replacementStart, replace ?? string.Empty);
         await File.WriteAllTextAsync(resolvedPath, updatedContent, CurrentCancellationToken);
         SuccessfulEditCount++;
         WriteCompactToolResult(true, "WriteFile wrote", resolvedPath);
         return StoreAndReturn(nameof(ApplySearchReplaceAsync), $"SEARCH/REPLACE edit applied successfully to {resolvedPath}.");
+    }
+
+    [Description("Uses Fill-in-the-Middle to replace an inclusive line range after showing the generated change and asking for permission. Use this for a focused edit when FIM is available; provide a concise instruction and do not copy the existing file text into the call.")]
+    public async Task<string> ApplyFimEditAsync(
+        [Description("The path to the existing file.")] string filePath,
+        [Description("First line to replace, inclusive.")] int startLine,
+        [Description("Last line to replace, inclusive.")] int endLine,
+        [Description("Concise description of the desired replacement.")] string instruction)
+    {
+        if (!TryReserveToolInvocation(nameof(ApplyFimEditAsync), out string rejectionReason))
+            return RejectToolInvocation(nameof(ApplyFimEditAsync), rejectionReason);
+
+        string? resolvedPath = ResolveReadableFilePath(filePath);
+        WriteToolCall(nameof(ApplyFimEditAsync), [("filePath", filePath), ("resolvedPath", resolvedPath ?? "(unresolved)"), ("startLine", startLine.ToString()), ("endLine", endLine.ToString())]);
+        if (resolvedPath is null || !File.Exists(resolvedPath))
+            return StoreAndReturn(nameof(ApplyFimEditAsync), $"Error: File '{filePath}' does not exist.");
+        if (!await fimClient.IsAvailableAsync(CurrentCancellationToken))
+            return StoreAndReturn(nameof(ApplyFimEditAsync), "Error: FIM is unavailable. Use ApplySearchReplaceAsync instead.");
+
+        string content = await File.ReadAllTextAsync(resolvedPath, CurrentCancellationToken);
+        string newline = content.Contains("\r\n", StringComparison.Ordinal) ? "\r\n" : "\n";
+        string[] lines = content.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
+        if (startLine < 1 || endLine < startLine || endLine > lines.Length || endLine - startLine + 1 > MaxFimEditLines)
+            return StoreAndReturn(nameof(ApplyFimEditAsync), $"Error: FIM is only reliable for an inclusive range within lines 1-{lines.Length} of at most {MaxFimEditLines} lines. Split a larger edit into focused changes.");
+
+        int prefixStart = Math.Max(0, startLine - 1 - MaxFimContextLines);
+        int suffixEnd = Math.Min(lines.Length, endLine + MaxFimContextLines);
+        string before = string.Join(newline, lines[prefixStart..(startLine - 1)]);
+        string after = string.Join(newline, lines[endLine..suffixEnd]);
+        before = TrimFimContextFromStart(before);
+        after = TrimFimContextFromEnd(after);
+        string prefix = $"{before}{newline}<!-- Potato edit instruction: {instruction.Trim()} -->{newline}";
+        int maxCompletionTokens = Math.Clamp((string.Join(newline, lines[(startLine - 1)..endLine]).Length * 2) / 3, 96, 1024);
+        string generated = await fimClient.GenerateAsync(chatClientState.Model, prefix, after, maxCompletionTokens, CurrentCancellationToken);
+        if (generated.StartsWith("Error:", StringComparison.Ordinal))
+            return StoreAndReturn(nameof(ApplyFimEditAsync), generated);
+        if (string.IsNullOrWhiteSpace(generated))
+            return StoreAndReturn(nameof(ApplyFimEditAsync), "Error: FIM returned an empty replacement.");
+
+        // The instruction is prompt-only; never retain it in the edited file.
+        string replacement = generated.Replace("<!-- Potato edit instruction: " + instruction.Trim() + " -->" + newline, string.Empty, StringComparison.Ordinal);
+        string search = string.Join(newline, lines[(startLine - 1)..endLine]);
+        ToolPermissionChoice approval = RequestPermission(PermissionKey(nameof(ApplyFimEditAsync), resolvedPath),
+            $"WriteFile FIM editing {PathResolver.FormatPathForDisplay(resolvedPath)}", FormatSearchReplacePreview(search, replacement));
+        if (approval == ToolPermissionChoice.Deny)
+        {
+            WriteCompactToolResult(false, "WriteFile denied", resolvedPath);
+            return StoreAndReturn(nameof(ApplyFimEditAsync), "FIM edit denied by user.");
+        }
+
+        string updated = string.Join(newline, lines[..(startLine - 1)]) + (startLine > 1 ? newline : string.Empty) + replacement.TrimEnd('\r', '\n') + (endLine < lines.Length ? newline : string.Empty) + string.Join(newline, lines[endLine..]);
+        await File.WriteAllTextAsync(resolvedPath, updated, CurrentCancellationToken);
+        SuccessfulEditCount++;
+        WriteCompactToolResult(true, "WriteFile wrote", resolvedPath);
+        return StoreAndReturn(nameof(ApplyFimEditAsync), $"FIM edit applied successfully to {resolvedPath}.");
     }
 
     [Description("Creates a new text file after showing the full content to the user and asking for permission. Creates missing parent directories after approval. Fails if the file already exists.")]
@@ -1600,6 +1637,134 @@ public class AgentTools(ExecutionMemory memory, CurrentChatClientState chatClien
         return count;
     }
 
+    private static bool TryResolveReplacementSpan(
+        string content,
+        string search,
+        string? startAnchor,
+        string? endAnchor,
+        int? startLine,
+        int? endLine,
+        out int replacementStart,
+        out int replacementLength,
+        out string error)
+    {
+        replacementStart = 0;
+        replacementLength = 0;
+        error = string.Empty;
+        bool hasAnchors = !string.IsNullOrEmpty(startAnchor) || !string.IsNullOrEmpty(endAnchor);
+        bool hasLines = startLine.HasValue || endLine.HasValue;
+        bool hasSearch = !string.IsNullOrEmpty(search);
+
+        if ((hasAnchors && (string.IsNullOrEmpty(startAnchor) || string.IsNullOrEmpty(endAnchor))) ||
+            (hasLines && (!startLine.HasValue || !endLine.HasValue)) ||
+            (new[] { hasSearch, hasAnchors, hasLines }.Count(value => value) != 1))
+        {
+            error = "Error: provide exactly one selector: non-empty search, both startAnchor and endAnchor, or both startLine and endLine.";
+            return false;
+        }
+
+        if (hasSearch)
+        {
+            int matchCount = CountOccurrences(content, search);
+            if (matchCount == 0)
+            {
+                error = BuildSearchNotFoundDiagnostic(content, search);
+                return false;
+            }
+
+            if (matchCount > 1)
+            {
+                error = $"Error: SEARCH text matched {matchCount} times. Provide a larger unique SEARCH block, or use unique startAnchor and endAnchor.";
+                return false;
+            }
+
+            replacementStart = content.IndexOf(search, StringComparison.Ordinal);
+            replacementLength = search.Length;
+            return true;
+        }
+
+        if (hasAnchors)
+        {
+            int startCount = CountOccurrences(content, startAnchor!);
+            int endCount = CountOccurrences(content, endAnchor!);
+            if (startCount != 1 || endCount != 1)
+            {
+                error = $"Error: anchors must each be unique. startAnchor matched {startCount} time(s); endAnchor matched {endCount} time(s). Use more surrounding text.";
+                return false;
+            }
+
+            int startIndex = content.IndexOf(startAnchor!, StringComparison.Ordinal) + startAnchor!.Length;
+            int endIndex = content.IndexOf(endAnchor!, StringComparison.Ordinal);
+            if (endIndex < startIndex)
+            {
+                error = "Error: endAnchor occurs before startAnchor. Choose anchors that enclose the intended replacement.";
+                return false;
+            }
+
+            replacementStart = startIndex;
+            replacementLength = endIndex - startIndex;
+            return true;
+        }
+
+        string newline = content.Contains("\r\n", StringComparison.Ordinal) ? "\r\n" : "\n";
+        string[] lines = content.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
+        if (startLine < 1 || endLine < startLine || endLine > lines.Length)
+        {
+            error = $"Error: choose an inclusive range within lines 1-{lines.Length}.";
+            return false;
+        }
+
+        int firstLine = startLine!.Value;
+        int lastLine = endLine!.Value;
+        replacementStart = firstLine == 1
+            ? 0
+            : string.Join(newline, lines[..(firstLine - 1)]).Length + newline.Length;
+        replacementLength = string.Join(newline, lines[(firstLine - 1)..lastLine]).Length;
+        return true;
+    }
+
+    private static string BuildSearchNotFoundDiagnostic(string content, string search)
+    {
+        string normalizedContent = NormalizeSearchText(content);
+        string normalizedSearch = NormalizeSearchText(search);
+        if (normalizedContent.Contains(normalizedSearch, StringComparison.Ordinal))
+        {
+            return "Error: SEARCH text was not found exactly, but it matches after normalizing line endings and trailing whitespace. Re-read the file and use the exact current text.";
+        }
+
+        string? anchor = search
+            .Replace("\r\n", "\n", StringComparison.Ordinal)
+            .Split('\n')
+            .Select(line => line.Trim())
+            .FirstOrDefault(line => line.Length > 0);
+        if (string.IsNullOrWhiteSpace(anchor))
+        {
+            return "Error: SEARCH text was not found exactly. The SEARCH block has no non-empty line to use as a diagnostic anchor.";
+        }
+
+        int anchorIndex = content.IndexOf(anchor, StringComparison.Ordinal);
+        if (anchorIndex < 0)
+        {
+            return $"Error: SEARCH text was not found exactly, and its first non-empty line was not found: '{Truncate(anchor, 160)}'. Re-read the target file before retrying.";
+        }
+
+        int lineNumber = 1 + content[..anchorIndex].Count(character => character == '\n');
+        return $"Error: SEARCH text was not found exactly. Its first non-empty line occurs at line {lineNumber}; the rest of the block differs. Re-read lines around {lineNumber} and use an exact unique SEARCH block.";
+    }
+
+    private static string NormalizeSearchText(string text) =>
+        string.Join('\n', text
+            .Replace("\r\n", "\n", StringComparison.Ordinal)
+            .Replace('\r', '\n')
+            .Split('\n')
+            .Select(line => line.TrimEnd()));
+
+    private static string TrimFimContextFromStart(string value) =>
+        value.Length <= MaxFimContextCharacters ? value : value[^MaxFimContextCharacters..];
+
+    private static string TrimFimContextFromEnd(string value) =>
+        value.Length <= MaxFimContextCharacters ? value : value[..MaxFimContextCharacters];
+
     private static bool LooksLikeShellFileEditCommand(string command)
     {
         string normalized = command.ToLowerInvariant();
@@ -1709,6 +1874,7 @@ public class AgentTools(ExecutionMemory memory, CurrentChatClientState chatClien
             nameof(SummarizeFilePurpose) => "Summarize file",
             nameof(GetCollectedContext) => "Read context",
             nameof(ApplySearchReplaceAsync) => "WriteFile",
+            nameof(ApplyFimEditAsync) => "WriteFile",
             nameof(CreateFileAsync) => "WriteFile",
             nameof(OverwriteFileAsync) => "WriteFile",
             nameof(ApplyDiffPatchAsync) => "Apply patch",
@@ -1716,6 +1882,7 @@ public class AgentTools(ExecutionMemory memory, CurrentChatClientState chatClien
             _ => toolName
         };
         bool waitsForResult = toolName is nameof(ApplySearchReplaceAsync) or
+            nameof(ApplyFimEditAsync) or
             nameof(CreateFileAsync) or
             nameof(OverwriteFileAsync) or
             nameof(ApplyDiffPatchAsync) or
@@ -1781,13 +1948,34 @@ public class AgentTools(ExecutionMemory memory, CurrentChatClientState chatClien
 
     private string StoreAndReturn(string source, string result)
     {
-        if (!toolResultWritten && IsFailureResult(result))
+        if (IsFailureResult(result))
         {
-            WriteCompactToolResult(false, "Tool failed", source);
+            if (!toolResultWritten)
+            {
+                WriteCompactToolResult(false, "Tool failed", source);
+            }
+
+            WriteToolFailureReason(result);
         }
 
         memory.Add(source, result);
         return result;
+    }
+
+    private static void WriteToolFailureReason(string result)
+    {
+        string reason = Truncate(FirstLine(result).Trim(), 400);
+        if (string.IsNullOrWhiteSpace(reason))
+        {
+            return;
+        }
+
+        using var _ = PotatoConsole.SuspendProgress();
+        Console.ForegroundColor = ConsoleColor.DarkRed;
+        Console.WriteLine($"  Reason: {reason}");
+        Console.ResetColor();
+
+        PotatoConsole.EventSink?.Record("tool-error", "tool", reason, collapsed: false);
     }
 
     private static bool IsFailureResult(string result)

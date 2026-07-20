@@ -136,6 +136,30 @@ public sealed class PotatoSessionStore
         }
     }
 
+    public bool EnqueuePermissionChoice(string id, string choice)
+    {
+        string normalizedChoice = choice.Trim().ToLowerInvariant();
+        if (normalizedChoice is not ("once" or "always" or "deny"))
+        {
+            return false;
+        }
+
+        lock (sync)
+        {
+            if (!sessions.TryGetValue(id, out StoredPotatoSession? session))
+            {
+                return false;
+            }
+
+            // Permissions are deliberately available even when the Web UI is
+            // observe-only. This does not open arbitrary prompt input.
+            session.PendingInputs.Enqueue(normalizedChoice);
+            session.LastActivityAt = DateTimeOffset.UtcNow;
+            AddEvent(session, session.LastActivityAt, "input", "user", normalizedChoice, collapsed: true);
+            return true;
+        }
+    }
+
     public string? DequeueInput(string workingDirectory)
     {
         string normalizedWorkingDirectory = NormalizeWorkingDirectory(workingDirectory);
@@ -157,12 +181,6 @@ public sealed class PotatoSessionStore
 
             session.Status = "active";
             session.LastActivityAt = now;
-            if (!session.WebUiInputEnabled)
-            {
-                session.PendingInputs.Clear();
-                return null;
-            }
-
             return session.PendingInputs.TryDequeue(out string? input) ? input : null;
         }
     }

@@ -10,14 +10,16 @@ internal static partial class PromptLibrary
         Use available tools for inspection, edits, commands, and verification.
         Prefer read-only discovery before editing.
         Use SearchProjectMapAsync when a relevant file is likely but not confirmed.
-        Use ReadFileRange when you only need a bounded line window from a large file.
-        For source edits, prefer ApplySearchReplaceAsync with exact SEARCH and REPLACE text copied from the latest file content; use CreateFileAsync for new files; use ApplyDiffPatchAsync only when search/replace is impractical.
+        Read files with ReadFileContent by default. Use ReadFileRange only when you are already sure of the exact relevant line range—for example, from a prior search result or a confirmed line reference. Do not guess a range merely because a file is large.
+        For source edits, prefer ApplySearchReplaceAsync. Use exact search only for small substitutions. For a large replacement, provide unique startAnchor and endAnchor and replacement text; the anchors are preserved, so do not copy the old middle text. Use its inclusive line range only when stable anchors are unavailable. When ApplyFimEditAsync is available, reserve it for small, strongly implied local completions. Use CreateFileAsync for new files; use ApplyDiffPatchAsync only when needed.
         Preserve the user's requested output location exactly. If the user asks for a folder, create every requested artifact inside that folder unless they explicitly name a different path.
         Keep related generated assets together. If you create `Folder/site.css` and the user asks for `components.html`, create `Folder/components.html` and link `site.css` with a relative href from that same folder.
         Before writing multi-file output, decide the final file paths from the user's request and keep using those paths. Do not drift into a nearby project folder just because source files were read from there.
         Generated showcase/demo files must use class names and structure that match the CSS you create or extract. Do not invent unrelated HTML unless you also define the required styles in the same extracted stylesheet.
         After each successful write, compare the observation path against the requested path. If a file was written to the wrong path, create or move the correct file before returning FINAL.
         Do not edit files through shell redirection, sed -i, tee, or similar shell commands.
+        After changing source files, verify the result before returning FINAL. Use ExecuteShellCommandAsync (which asks the user for permission) for the smallest relevant check: use `dotnet build <solution-or-project> --no-restore` for C#, `node --check <file>` for JavaScript, and an existing project lint/validation command (for example `npm run lint --if-present`) when the repository provides one. Inspect HTML and CSS directly for correct element, class, ID, and asset references; do not claim a parser or linter passed unless you actually ran one. Do not install packages or download validators merely to perform verification.
+        If no applicable validator is available, say so in FINAL and describe the static checks you did perform.
         Use exactly one tool call per turn, then wait for the observation.
         After all requested files have been successfully written to the correct paths, return FINAL immediately with the created paths and any verification note. Do not continue looping just to restate the work.
         When the task is complete and verified, respond with FINAL: followed by a concise summary.
@@ -50,6 +52,7 @@ internal static partial class PromptLibrary
         - Treat the user's requested folder and file names as hard requirements.
         - If a requested folder does not exist, create files inside that folder with CreateFileAsync; do not place sibling files in the source folder you inspected.
         - For extracted static assets, use relative links that work when opening the generated HTML from its final folder.
+        - Read the full target file with ReadFileContent unless an earlier observation establishes the exact line range needed for ReadFileRange.
 
         {{MinifiedSourcesSection}}
 

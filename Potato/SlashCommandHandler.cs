@@ -16,7 +16,7 @@ internal sealed class SlashCommandHandler(
     Action<string> continueSession,
     Func<int> getContextSize,
     Func<IChatClient> getClient,
-    Action<IChatClient> switchModel,
+    Action<IChatClient, string> switchModel,
     Action<bool> setContextOptimizationEnabled,
     Func<bool> getContextOptimizationEnabled)
 {
@@ -181,7 +181,7 @@ internal sealed class SlashCommandHandler(
 
         IChatClient selectedOpenAiClient = clientFactory.CreateOpenAiClient(gladosEndpoint, selectedModel, getContextSize());
 
-        switchModel(selectedOpenAiClient);
+        switchModel(selectedOpenAiClient, selectedModel);
         setSelectedModel(selectedModel);
         PotatoConsole.WriteSuccess($"Selected model: {selectedModel}");
     }

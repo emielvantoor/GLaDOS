@@ -140,6 +140,7 @@
     function deleteActiveChat() {
         if (document.getElementById('submitBtn').disabled || !activeChatId) return;
 
+        const deletedChatId = activeChatId;
         chats = chats.filter((chat) => chat.id !== activeChatId);
         if (chats.length === 0) {
             chats.push(createChat());
@@ -152,6 +153,12 @@
         saveChats();
         updateContextUsage();
         document.getElementById('statusText').innerText = 'Status: Chat deleted.';
+
+        if (baseEndpoint) {
+            void fetch(`${baseEndpoint}/v1/runtime/sessions/${encodeURIComponent(deletedChatId)}`, {
+                method: 'DELETE'
+            });
+        }
     }
 
     function renderChatList() {
