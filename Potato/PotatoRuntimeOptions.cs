@@ -12,6 +12,10 @@ public sealed class PotatoRuntimeOptions
 
     public int ContextSize { get; init; } = DefaultContextSize;
 
+    public bool AcpMode { get; init; }
+
+    public string? Model { get; init; }
+
     public HashSet<string> AlwaysAllowedPermissionKeys { get; } = new(StringComparer.Ordinal);
 
     public static PotatoRuntimeOptions FromArgs(string[] args, PotatoAppSettings appSettings)
@@ -21,7 +25,9 @@ public sealed class PotatoRuntimeOptions
             PromptDirectory = GetPromptDirectory(args),
             UseCompiledDefaultPrompts = appSettings.UseCompiledDefaultPrompts,
             WebUiInputEnabled = GetWebUiInputEnabled(appSettings),
-            ContextSize = GetContextSize(appSettings)
+            ContextSize = GetContextSize(appSettings),
+            AcpMode = args.Any(arg => arg.Equals("--acp", StringComparison.OrdinalIgnoreCase)),
+            Model = GetModel(args, appSettings.SelectedModel)
         };
     }
 
@@ -71,6 +77,25 @@ public sealed class PotatoRuntimeOptions
         return string.IsNullOrWhiteSpace(environmentPath)
             ? Path.Combine(AppContext.BaseDirectory, "prompts")
             : Path.GetFullPath(environmentPath);
+    }
+
+    private static string? GetModel(string[] args, string? savedModel)
+    {
+        for (int i = 0; i < args.Length; i++)
+        {
+            if (args[i].Equals("--model", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
+            {
+                return args[i + 1].Trim();
+            }
+
+            const string prefix = "--model=";
+            if (args[i].StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            {
+                return args[i][prefix.Length..].Trim();
+            }
+        }
+
+        return string.IsNullOrWhiteSpace(savedModel) ? null : savedModel;
     }
 
 }

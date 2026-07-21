@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Potato.Session;
 using Potato.Tools;
 using Potato.WebUi;
+using Potato.Acp;
 
 namespace Potato;
 
@@ -34,7 +35,9 @@ class Program
         Uri gladosEndpoint = GladosConfiguration.GetEndpoint();
         var executionMemory = provider.GetRequiredService<ExecutionMemory>();
         var modelSelector = new ModelSelector();
-        string model = await modelSelector.SelectStartupModelAsync(gladosEndpoint, appSettings.SelectedModel);
+        string model = options.AcpMode
+            ? await modelSelector.SelectAcpModelAsync(gladosEndpoint, options.Model)
+            : await modelSelector.SelectStartupModelAsync(gladosEndpoint, appSettings.SelectedModel);
         appSettingsStore.SetSelectedModel(model);
 
         await using var webUiReporter = new PotatoWebUiReporter(gladosEndpoint, model);
@@ -44,6 +47,27 @@ class Program
         provider.GetRequiredService<CurrentChatClientState>().SetModel(model);
         await webUiReporter.StartAsync(options.WebUiInputEnabled);
         PotatoConsole.EventSink = webUiReporter;
+
+        if (options.AcpMode)
+        {
+            try
+            {
+                var acpServer = new AcpAgentServer(
+                    openAiClient,
+                    model,
+                    webUiReporter,
+                    gladosEndpoint,
+                    clientFactory,
+                    options.ContextSize);
+                await acpServer.RunAsync(CancellationToken.None);
+            }
+            finally
+            {
+                PotatoConsole.EventSink = null;
+            }
+
+            return;
+        }
 
         PotatoConsole.WriteStartupBanner(gladosEndpoint, model);
 

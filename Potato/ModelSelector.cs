@@ -5,6 +5,23 @@ namespace Potato;
 
 internal sealed class ModelSelector
 {
+    public async Task<string> SelectAcpModelAsync(Uri gladosEndpoint, string? selectedModel)
+    {
+        if (!string.IsNullOrWhiteSpace(selectedModel))
+        {
+            return selectedModel.Trim();
+        }
+
+        List<string> models = await GetAvailableModelsAsync(gladosEndpoint);
+        if (models.Count > 0)
+        {
+            return models[0];
+        }
+
+        throw new InvalidOperationException(
+            "ACP mode needs a model. Pass --model <model-id>, save a SelectedModel, or start GLaDOS so Potato can discover one.");
+    }
+
     public async Task<string> SelectStartupModelAsync(Uri gladosEndpoint, string? selectedModel)
     {
         Console.ForegroundColor = ConsoleColor.DarkGray;

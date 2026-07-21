@@ -191,7 +191,7 @@ textarea {
 }
 
 .header-wrapper {
-    height: 58px;
+    min-height: 58px;
     display: flex;
     justify-content: space-between;
     align-items: center;
@@ -223,6 +223,46 @@ h1 {
     display: inline-flex;
     align-items: center;
     gap: 12px;
+}
+
+.header-usage {
+    display: flex;
+    flex: 1 1 auto;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 16px;
+    min-width: 0;
+    margin: 0 20px;
+}
+
+.header-context-usage {
+    width: min(220px, 22vw);
+    min-width: 145px;
+}
+
+.header-usage-label {
+    margin-right: 5px;
+    color: var(--portal-blue);
+    font-size: 11px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+
+.header-usage .context-usage,
+.header-usage .context-memory {
+    margin: 0;
+    white-space: nowrap;
+}
+
+.header-usage .context-memory {
+    overflow: hidden;
+    max-width: min(520px, 34vw);
+    text-overflow: ellipsis;
+}
+
+.header-usage .context-meter {
+    margin-top: 3px;
 }
 
 .top-tabs {
@@ -1555,11 +1595,48 @@ pre {
     .chat-box {
         min-height: 55vh;
     }
+
+    .header-usage {
+        gap: 10px;
+        margin: 0 12px;
+    }
+
+    .header-usage .context-memory {
+        max-width: 230px;
+    }
 }
 
 @media (max-width: 680px) {
     .header-wrapper {
+        min-height: 58px;
         padding: 0 14px;
+    }
+
+    .header-usage {
+        gap: 8px;
+        margin: 0 8px;
+    }
+
+    .header-context-usage {
+        min-width: 112px;
+        width: 112px;
+    }
+
+    .header-usage .context-usage {
+        font-size: 10px;
+    }
+
+    .header-usage .context-memory {
+        max-width: 105px;
+        font-size: 10px;
+    }
+
+    .header-actions {
+        gap: 6px;
+    }
+
+    .top-tab {
+        min-width: 48px;
     }
 
     h1 {

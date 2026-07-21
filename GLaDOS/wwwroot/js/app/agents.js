@@ -110,7 +110,7 @@
             chatBox.dataset.eventCount = '0';
             chatBox.dataset.lastSequence = '0';
             chatBox.dataset.sessionId = '';
-            chatBox.appendChild(createMessageElement('assistant', 'Active Potato sessions will appear in the left pane.', { actions: false }));
+            chatBox.appendChild(createMessageElement('assistant', 'Active Potato and ACP sessions will appear in the left pane.', { actions: false }));
             updatePotatoThinkingIndicator(null);
             return;
         }
@@ -132,7 +132,7 @@
 
         if (!session) {
             if (title) title.textContent = 'No Potato session selected';
-            if (path) path.textContent = 'Start Potato from a working directory to mirror it here.';
+            if (path) path.textContent = 'Start Potato, or connect an ACP client, from a working directory to mirror it here.';
             if (context) {
                 context.textContent = '';
                 context.classList.add('hidden');

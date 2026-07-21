@@ -126,8 +126,11 @@
                 ? `VRAM: ${formatMegabytes(data.gpu_vram_used_mb)} / ${formatMegabytes(data.gpu_vram_total_mb)} MB${data.gpu_name ? ` (${data.gpu_name})` : ""}`
                 : "VRAM: unavailable";
 
-            memoryElement.innerText = `${ramText} | ${processText} | ${heapText} | ${gpuText}`;
+            const memoryUsageText = `${ramText} | ${processText} | ${heapText} | ${gpuText}`;
+            memoryElement.innerText = memoryUsageText;
+            memoryElement.title = memoryUsageText;
         } catch {
             memoryElement.innerText = "Memory: unavailable";
+            memoryElement.title = "Memory: unavailable";
         }
     }

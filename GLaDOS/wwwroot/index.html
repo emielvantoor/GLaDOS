@@ -13,6 +13,16 @@
 <div class="container">
     <div class="header-wrapper">
         <h1><span class="aperture-logo" aria-hidden="true"></span> GLaDOS Client</h1>
+        <div class="header-usage" aria-label="Runtime usage">
+            <div class="header-context-usage">
+                <span class="header-usage-label">Context</span>
+                <span class="context-usage" id="contextUsage">0 / 32,768 tokens used</span>
+                <div class="context-meter" aria-hidden="true">
+                    <div class="context-meter-fill" id="contextMeterFill"></div>
+                </div>
+            </div>
+            <div class="context-memory" id="contextMemoryUsage" title="Memory: loading...">Memory: loading...</div>
+        </div>
         <div class="header-actions">
             <div class="top-tabs" role="tablist" aria-label="Primary views">
                 <button type="button" class="top-tab active" id="chatTab" aria-selected="true">Chat</button>
@@ -45,7 +55,7 @@
             <div class="agent-session-header">
                 <div>
                     <div class="agent-session-title" id="agentSessionTitle">No Potato session selected</div>
-                    <div class="agent-session-path" id="agentSessionPath">Start Potato from a working directory to mirror it here.</div>
+                    <div class="agent-session-path" id="agentSessionPath">Start Potato, or connect an ACP client, from a working directory to mirror it here.</div>
                     <div class="agent-session-context hidden" id="agentSessionContext"></div>
                 </div>
                 <div class="agent-session-controls">
@@ -55,7 +65,7 @@
             </div>
             <div class="chat-box agent-chat-box" id="agentChatBox">
                 <div class="message assistant">
-                    <div class="message-content">Active Potato sessions will appear in the left pane.</div>
+                    <div class="message-content">Active Potato and ACP sessions will appear in the left pane.</div>
                 </div>
             </div>
             <div class="composer agent-composer">
@@ -157,11 +167,6 @@
                             <span id="contextSizeValue" class="range-value">32,768</span>
                         </div>
                         <input type="range" id="contextSize" min="1024" max="32768" step="1024" value="32768" class="range-control">
-                        <div class="context-usage" id="contextUsage">0 / 32,768 tokens used</div>
-                        <div class="context-memory" id="contextMemoryUsage">Memory: loading...</div>
-                        <div class="context-meter" aria-hidden="true">
-                            <div class="context-meter-fill" id="contextMeterFill"></div>
-                        </div>
                     </div>
                 </div>
             </div>
