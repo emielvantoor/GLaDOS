@@ -21,6 +21,7 @@ internal sealed class ReActSession(
     private const int MaxToolCallsPerIteration = 1;
     private const int MaxConsecutiveInvalidReActResponses = 2;
     private const int ReActMaxOutputTokens = 8192;
+    private const int NativeToolSelectionMaxOutputTokens = ReActMaxOutputTokens;
     private const int MaxToolResultCharactersInHistory = 12_000;
     private const int MaxAssistantResponseCharactersInHistory = 4_000;
     private const int ContextUsageWarningThreshold = 70;  // Warn when context reaches 70% of limit
@@ -33,13 +34,15 @@ internal sealed class ReActSession(
         string executionGuidance,
         IChatClient chatClient,
         Func<bool> getContextOptimizationEnabled,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool useNativeToolCalls = true,
+        bool allowInteractiveUserIntervention = true)
     {
         executionMemory.Clear();
         int successfulEditsBeforeExecution = agentTools.SuccessfulEditCount;
         int consecutiveInvalidResponses = 0;
-        bool fimAvailable = await agentTools.IsFimAvailableAsync(cancellationToken);
-        ChatOptions toolOptions = CreateToolOptions(fimAvailable);
+        bool fimAvailable = useNativeToolCalls && await agentTools.IsFimAvailableAsync(cancellationToken);
+        ChatOptions toolOptions = CreateToolOptions(fimAvailable, useNativeToolCalls);
         string projectMap = await planningService.BuildProjectMapHeaderAsync(Environment.CurrentDirectory, cancellationToken);
 
         executionMemory.Add("ProjectMap", projectMap);
@@ -223,11 +226,16 @@ internal sealed class ReActSession(
             }
 
             consecutiveInvalidResponses++;
-            if (TryReadUserIntervention(responseText, cancellationToken, out string userAnswer))
+            if (allowInteractiveUserIntervention && TryReadUserIntervention(responseText, cancellationToken, out string userAnswer))
             {
                 consecutiveInvalidResponses = 0;
                 reactHistory.Add(new ChatMessage(ChatRole.User, $"User answered the model question:\n{userAnswer}"));
                 continue;
+            }
+
+            if (!allowInteractiveUserIntervention && LooksLikeUserQuestion(responseText))
+            {
+                return responseText;
             }
 
             if (LooksLikeUnavailableToolClaim(responseText))
@@ -318,10 +326,11 @@ internal sealed class ReActSession(
         return functionCalls;
     }
 
-    private ChatOptions CreateToolOptions(bool fimAvailable) =>
+    private ChatOptions CreateToolOptions(bool fimAvailable, bool useNativeToolCalls) =>
         new()
         {
-            Tools =
+            Tools = useNativeToolCalls
+                ?
             [
                 AIFunctionFactory.Create(agentTools.GetCurrentTime),
                 AIFunctionFactory.Create(agentTools.ReadFileContent),
@@ -338,9 +347,13 @@ internal sealed class ReActSession(
                 ..(fimAvailable ? new[] { AIFunctionFactory.Create(agentTools.ApplyFimEditAsync) } : []),
                 AIFunctionFactory.Create(agentTools.CreateFileAsync),
                 AIFunctionFactory.Create(agentTools.ApplyDiffPatchAsync)
-            ],
+            ]
+                : [],
             Temperature = 0.0f,
-            MaxOutputTokens = ReActMaxOutputTokens
+            // Native tool turns only need a function name and JSON arguments. Keeping
+            // them short prevents local models from continuing to generate prose before
+            // GLaDOS can return the tool call to Potato.
+            MaxOutputTokens = useNativeToolCalls ? NativeToolSelectionMaxOutputTokens : ReActMaxOutputTokens
         };
 
     [Description("Searches Potato's cached ProjectMap for likely relevant source, test, documentation, or project files. Use this for targeted repository discovery before exact file reads when the file path is not already known.")]
@@ -1120,6 +1133,17 @@ internal sealed class ReActSession(
         PotatoConsole.WriteAgentResponse(modelQuestion);
         userAnswer = PotatoConsole.ReadInterventionInput(cancellationToken);
         return true;
+    }
+
+    private static bool LooksLikeUserQuestion(string responseText)
+    {
+        string normalized = responseText.Trim().ToLowerInvariant();
+        return normalized.Contains("?", StringComparison.Ordinal) &&
+               (normalized.EndsWith("?", StringComparison.Ordinal) ||
+                normalized.Contains("do you want", StringComparison.Ordinal) ||
+                normalized.Contains("please confirm", StringComparison.Ordinal) ||
+                normalized.Contains("which ", StringComparison.Ordinal) ||
+                normalized.Contains("what ", StringComparison.Ordinal));
     }
 
     private static string NormalizeTextualToolName(string name)

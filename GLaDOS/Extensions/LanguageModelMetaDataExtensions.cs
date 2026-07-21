@@ -55,7 +55,9 @@ public static class LanguageModelMetaDataExtensions
         };
     }
 
-    public static AgentMessage ToDomainModel(this ChatMessage message)
+    public static AgentMessage ToDomainModel(
+        this ChatMessage message,
+        IReadOnlyDictionary<string, string>? toolNamesByCallId = null)
     {
         var role = ToDomainRole(message.Role);
 
@@ -71,10 +73,18 @@ public static class LanguageModelMetaDataExtensions
 
         if (role == AgentRole.Tool)
         {
+            string? toolName = message.Name;
+            if (string.IsNullOrWhiteSpace(toolName) &&
+                !string.IsNullOrWhiteSpace(message.ToolCallId) &&
+                toolNamesByCallId is not null)
+            {
+                toolNamesByCallId.TryGetValue(message.ToolCallId, out toolName);
+            }
+
             return new AgentMessage(
                 role,
                 message.Content ?? string.Empty,
-                message.Name);
+                toolName);
         }
 
         return new AgentMessage(ToDomainRole(message.Role), message.Content ?? string.Empty);

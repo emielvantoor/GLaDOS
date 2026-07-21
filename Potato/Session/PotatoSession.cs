@@ -169,7 +169,7 @@ internal sealed class PotatoSession
 
     private async Task HandleUserGoalWithReActAsync(string expandedGoal, CancellationToken cancellationToken)
     {
-        string guidance = planningService.BuildDirectExecutionGuidance(expandedGoal, Environment.CurrentDirectory);
+        string guidance = planningService.BuildDirectExecutionGuidance(Environment.CurrentDirectory);
         string finalMessage = await _reActSession.ExecuteAsync(expandedGoal, guidance, currentOpenAiClient, GetContextOptimizationEnabled, cancellationToken);
         chatHistory.Add(new ChatMessage(ChatRole.Assistant, finalMessage));
         PotatoConsole.WriteAgentResponse(finalMessage);

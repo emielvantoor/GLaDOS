@@ -754,7 +754,7 @@ public class AgentTools(ExecutionMemory memory, CurrentChatClientState chatClien
         var shell = GetShell();
         timeoutSeconds = Math.Clamp(timeoutSeconds, 1, MaxCommandTimeoutSeconds);
 
-        ToolPermissionChoice approval = RequestPermission(
+        ToolPermissionChoice approval = await RequestPermissionAsync(
             PermissionKey(nameof(ExecuteShellCommandAsync), command),
             "Tool permission requested: execute shell command",
             [
@@ -872,7 +872,7 @@ public class AgentTools(ExecutionMemory memory, CurrentChatClientState chatClien
             return StoreAndReturn(nameof(ApplyDiffPatchAsync), $"Error: Working directory '{effectiveWorkingDirectory}' does not exist.");
         }
 
-        ToolPermissionChoice approval = RequestPermission(
+        ToolPermissionChoice approval = await RequestPermissionAsync(
             PermissionKey(nameof(ApplyDiffPatchAsync), effectiveWorkingDirectory),
             "Tool permission requested: apply diff patch",
             [
@@ -990,8 +990,8 @@ public class AgentTools(ExecutionMemory memory, CurrentChatClientState chatClien
 
         string resolvedSearch = content.Substring(replacementStart, replacementLength);
 
-        ToolPermissionChoice approval = RequestPermission(
-            PermissionKey(nameof(ApplySearchReplaceAsync), resolvedPath),
+        ToolPermissionChoice approval = await RequestPermissionAsync(
+            WritePermissionKey(resolvedPath),
             $"WriteFile Writing to {PathResolver.FormatPathForDisplay(resolvedPath)}",
             FormatSearchReplacePreview(resolvedSearch, replace ?? string.Empty));
         if (approval == ToolPermissionChoice.Deny)
@@ -1047,7 +1047,7 @@ public class AgentTools(ExecutionMemory memory, CurrentChatClientState chatClien
         // The instruction is prompt-only; never retain it in the edited file.
         string replacement = generated.Replace("<!-- Potato edit instruction: " + instruction.Trim() + " -->" + newline, string.Empty, StringComparison.Ordinal);
         string search = string.Join(newline, lines[(startLine - 1)..endLine]);
-        ToolPermissionChoice approval = RequestPermission(PermissionKey(nameof(ApplyFimEditAsync), resolvedPath),
+        ToolPermissionChoice approval = await RequestPermissionAsync(WritePermissionKey(resolvedPath),
             $"WriteFile FIM editing {PathResolver.FormatPathForDisplay(resolvedPath)}", FormatSearchReplacePreview(search, replacement));
         if (approval == ToolPermissionChoice.Deny)
         {
@@ -1098,8 +1098,8 @@ public class AgentTools(ExecutionMemory memory, CurrentChatClientState chatClien
 
         string sanitizedContent = SanitizeGeneratedFileContent(resolvedPath, content);
         bool parentDirectoryExists = Directory.Exists(parentDirectory);
-        ToolPermissionChoice approval = RequestPermission(
-            PermissionKey(nameof(CreateFileAsync), resolvedPath),
+        ToolPermissionChoice approval = await RequestPermissionAsync(
+            WritePermissionKey(resolvedPath),
             $"WriteFile Creating {PathResolver.FormatPathForDisplay(resolvedPath)}",
             FormatCreateFilePreview(sanitizedContent, parentDirectoryExists ? null : parentDirectory));
         if (approval == ToolPermissionChoice.Deny)
@@ -1147,8 +1147,8 @@ public class AgentTools(ExecutionMemory memory, CurrentChatClientState chatClien
         string sanitizedContent = SanitizeGeneratedFileContent(resolvedPath, content);
         bool fileExisted = File.Exists(resolvedPath);
         string action = fileExisted ? "Overwriting" : "Creating";
-        ToolPermissionChoice approval = RequestPermission(
-            PermissionKey(nameof(OverwriteFileAsync), resolvedPath),
+        ToolPermissionChoice approval = await RequestPermissionAsync(
+            WritePermissionKey(resolvedPath),
             $"WriteFile {action} {PathResolver.FormatPathForDisplay(resolvedPath)}",
             FormatCreateFilePreview(sanitizedContent));
         if (approval == ToolPermissionChoice.Deny)
@@ -1898,6 +1898,7 @@ public class AgentTools(ExecutionMemory memory, CurrentChatClientState chatClien
             "tool",
             FormatToolEventContent(label, displayPath, displayQuery + displayRange, parameters),
             collapsed: true);
+        PotatoConsole.RecordToolActivity("tool-call", FormatToolEventContent(label, displayPath, displayQuery + displayRange, parameters));
     }
 
     private static string? GetParameterValue(IReadOnlyList<(string Name, string Value)> parameters, string name)
@@ -1925,6 +1926,7 @@ public class AgentTools(ExecutionMemory memory, CurrentChatClientState chatClien
             "tool",
             $"{(success ? "Success" : "Failed")}: {label}{displayDetail}",
             collapsed: true);
+        PotatoConsole.RecordToolActivity("tool-result", $"{(success ? "Success" : "Failed")}: {label}{displayDetail}");
     }
 
     private static string FormatToolEventContent(
@@ -1995,7 +1997,7 @@ public class AgentTools(ExecutionMemory memory, CurrentChatClientState chatClien
         return lineEnd < 0 ? normalized : normalized[..lineEnd];
     }
 
-    private ToolPermissionChoice RequestPermission(
+    private async Task<ToolPermissionChoice> RequestPermissionAsync(
         string permissionKey,
         string title,
         IReadOnlyList<string> details,
@@ -2006,7 +2008,7 @@ public class AgentTools(ExecutionMemory memory, CurrentChatClientState chatClien
             return ToolPermissionChoice.AllowAlways;
         }
 
-        ToolPermissionChoice choice = PotatoConsole.RequestToolPermission(title, details, prompt);
+        ToolPermissionChoice choice = await PotatoConsole.RequestToolPermissionAsync(permissionKey, title, details, prompt);
         if (choice == ToolPermissionChoice.AllowAlways)
         {
             options.AlwaysAllowedPermissionKeys.Add(permissionKey);
@@ -2017,6 +2019,9 @@ public class AgentTools(ExecutionMemory memory, CurrentChatClientState chatClien
 
     private static string PermissionKey(string toolName, string scope) =>
         $"{toolName}:{scope}";
+
+    private static string WritePermissionKey(string filePath) =>
+        $"write:{Path.GetFullPath(filePath)}";
 
     private static IReadOnlyList<string> FormatSearchReplacePreview(string search, string replace)
     {

@@ -9,6 +9,8 @@ internal static class PotatoConsole
     private const string PromptText = "> ";
     private const string DefaultPromptPlaceholder = "Type your message or @path/to/file";
     private static readonly object ProgressLock = new();
+    private static readonly AsyncLocal<Func<string, string, IReadOnlyList<string>, string, Task<ToolPermissionChoice>>?> PermissionRequestHandler = new();
+    private static readonly AsyncLocal<Action<string, string>?> ActivityHandler = new();
     private static ProgressSpinner? ActiveProgress;
     private static string? activeProgressMessage;
     private static readonly string[] ProgressJokes =
@@ -582,6 +584,7 @@ internal static class PotatoConsole
     public static void WriteStatus(string message)
     {
         EventSink?.Record("status", "status", message, collapsed: true);
+        ActivityHandler.Value?.Invoke("thought", message);
         Console.ForegroundColor = ConsoleColor.DarkGray;
         Console.WriteLine(message);
         Console.ResetColor();
@@ -610,6 +613,7 @@ internal static class PotatoConsole
     private static void RecordProgressEvent(string kind, string? message = null)
     {
         EventSink?.Record(kind, "status", string.IsNullOrWhiteSpace(message) ? kind : message, collapsed: true);
+        ActivityHandler.Value?.Invoke("thought", string.IsNullOrWhiteSpace(message) ? kind : message);
     }
 
     private static void RecordInputPromptEvent(string kind, string? message = null)
@@ -760,6 +764,53 @@ internal static class PotatoConsole
                     return ResolvePermission(PermissionChoiceForIndex(selectedIndex));
             }
         }
+    }
+
+    public static async Task<ToolPermissionChoice> RequestToolPermissionAsync(
+        string permissionKey,
+        string title,
+        IReadOnlyList<string> details,
+        string prompt = "Apply this change?")
+    {
+        Func<string, string, IReadOnlyList<string>, string, Task<ToolPermissionChoice>>? handler = PermissionRequestHandler.Value;
+        if (handler is null)
+        {
+            return RequestToolPermission(title, details, prompt);
+        }
+
+        EventSink?.Record("permission", "status", FormatPermissionEventContent(title, details, prompt), collapsed: false);
+        ToolPermissionChoice choice = await handler(permissionKey, title, details, prompt);
+        EventSink?.Record(
+            "permission-resolved",
+            "status",
+            choice switch
+            {
+                ToolPermissionChoice.AllowOnce => "approved once",
+                ToolPermissionChoice.AllowAlways => "approved always",
+                _ => "denied"
+            },
+            collapsed: true);
+        return choice;
+    }
+
+    public static IDisposable PushPermissionRequestHandler(
+        Func<string, string, IReadOnlyList<string>, string, Task<ToolPermissionChoice>> handler)
+    {
+        Func<string, string, IReadOnlyList<string>, string, Task<ToolPermissionChoice>>? previous = PermissionRequestHandler.Value;
+        PermissionRequestHandler.Value = handler;
+        return new CallbackDisposable(() => PermissionRequestHandler.Value = previous);
+    }
+
+    public static IDisposable PushActivityHandler(Action<string, string> handler)
+    {
+        Action<string, string>? previous = ActivityHandler.Value;
+        ActivityHandler.Value = handler;
+        return new CallbackDisposable(() => ActivityHandler.Value = previous);
+    }
+
+    public static void RecordToolActivity(string kind, string content)
+    {
+        ActivityHandler.Value?.Invoke(kind, content);
     }
 
     private static string FormatPermissionEventContent(string title, IReadOnlyList<string> details, string prompt)
@@ -1830,6 +1881,11 @@ internal static class PotatoConsole
             disposed = true;
             spinner.Resume();
         }
+    }
+
+    private sealed class CallbackDisposable(Action callback) : IDisposable
+    {
+        public void Dispose() => callback();
     }
 
     private sealed class NoopDisposable : IProgressReporter

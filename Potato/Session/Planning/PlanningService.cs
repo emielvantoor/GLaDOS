@@ -4,7 +4,7 @@ namespace Potato.Session;
 
 public class PlanningService(ProjectMapBuilder projectMapBuilder)
 {
-    public string BuildDirectExecutionGuidance(string goal, string currentDirectory) =>
+    public string BuildDirectExecutionGuidance(string currentDirectory) =>
         $"""
         Direct execution guidance:
         - Work in small ReAct steps: choose one tool, read the observation, then choose the next tool.
@@ -14,9 +14,6 @@ public class PlanningService(ProjectMapBuilder projectMapBuilder)
         - For edits, read the latest file content first, then use ApplySearchReplaceAsync. Prefer short unique start/end anchors for large edits and exact search only for small substitutions. Use CreateFileAsync or ApplyDiffPatchAsync only when appropriate.
         - Do not use shell commands to edit text files. Use shell only for explicit command requests or verification commands.
         - Return FINAL only after the requested work is complete and, for project changes, at least one edit tool has reported success.
-
-        User goal:
-        {goal}
         """;
 
     public Task<string> BuildProjectMapHeaderAsync(string targetDirectory, CancellationToken cancellationToken) =>

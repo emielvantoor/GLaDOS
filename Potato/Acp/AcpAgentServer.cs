@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.Extensions.AI;
+using Potato.Session;
 using Potato.WebUi;
 
 namespace Potato.Acp;
@@ -17,11 +18,19 @@ internal sealed class AcpAgentServer(
     PotatoWebUiReporter webUiReporter,
     Uri gladosEndpoint,
     GladosChatClientFactory clientFactory,
-    int contextSize)
+    int contextSize,
+    ReActSession reActSession,
+    PlanningService planningService)
 {
     private const int ProtocolVersion = 1;
+    private static readonly TimeSpan PermissionResponseTimeout = TimeSpan.FromMinutes(2);
     private readonly ConcurrentDictionary<string, AcpSession> sessions = new(StringComparer.Ordinal);
     private readonly SemaphoreSlim outputLock = new(1, 1);
+    private readonly ConcurrentDictionary<string, TaskCompletionSource<JsonElement>> pendingClientRequests = new(StringComparer.Ordinal);
+    // ReAct and its tools currently resolve relative paths from Environment.CurrentDirectory
+    // and share execution memory. Serialize ACP executions while that runtime contract exists.
+    private readonly SemaphoreSlim reactGate = new(1, 1);
+    private long nextClientRequestId;
 
     public async Task RunAsync(CancellationToken cancellationToken)
     {
@@ -52,6 +61,12 @@ internal sealed class AcpAgentServer(
         using (document)
         {
             JsonElement request = document.RootElement;
+            if (!request.TryGetProperty("method", out _) && request.TryGetProperty("id", out JsonElement responseId))
+            {
+                CompleteClientRequest(responseId, request);
+                return;
+            }
+
             string? method = request.TryGetProperty("method", out JsonElement methodElement)
                 ? methodElement.GetString()
                 : null;
@@ -124,9 +139,13 @@ internal sealed class AcpAgentServer(
             ["agentInfo"] = new JsonObject { ["name"] = "Potato", ["version"] = "ACP v1", ["title"] = model },
             ["agentCapabilities"] = new JsonObject
             {
-                // Potato's permissioned local tools are intentionally not advertised until
-                // their ACP permission bridge is available. Prompt-only ACP remains safe.
-                ["loadSession"] = false
+                ["loadSession"] = false,
+                ["promptCapabilities"] = new JsonObject
+                {
+                    ["embeddedContext"] = true,
+                    ["image"] = false,
+                    ["audio"] = false
+                }
             }
         };
     }
@@ -155,15 +174,15 @@ internal sealed class AcpAgentServer(
             throw new AcpRequestException(-32602, "Unknown ACP session.");
         }
 
-        string prompt = GetPromptText(parameters);
-        if (string.IsNullOrWhiteSpace(prompt))
+        AcpPromptContext context = ParsePromptContext(parameters);
+        if (string.IsNullOrWhiteSpace(context.UserText) && context.Attachments.Count == 0)
         {
-            throw new AcpRequestException(-32602, "session/prompt requires a text content block.");
+            throw new AcpRequestException(-32602, "session/prompt requires text or supported embedded context.");
         }
 
-        if (prompt.StartsWith("/", StringComparison.Ordinal))
+        if (context.UserText.StartsWith("/", StringComparison.Ordinal) && context.Attachments.Count == 0)
         {
-            string commandResponse = await ExecuteCommandAsync(session, prompt, serverCancellationToken);
+            string commandResponse = await ExecuteCommandAsync(session, context.UserText, serverCancellationToken);
             await NotifyAsync(sessionId, "agent_message_chunk", commandResponse);
             webUiReporter.Record("message", "assistant", commandResponse, collapsed: false);
             return new JsonObject { ["stopReason"] = "end_turn" };
@@ -175,14 +194,20 @@ internal sealed class AcpAgentServer(
             using CancellationTokenSource linkedCancellation = CancellationTokenSource.CreateLinkedTokenSource(
                 serverCancellationToken,
                 session.StartPromptCancellation());
-            webUiReporter.Record("message", "user", prompt, collapsed: false);
+            string contextSummary = context.Describe();
+            webUiReporter.Record("message", "user", context.UserText, collapsed: false);
             await NotifyAsync(sessionId, "agent_thought_chunk", "Potato is processing the ACP prompt.");
+            if (context.Attachments.Count > 0)
+            {
+                await NotifyAsync(sessionId, "agent_thought_chunk", contextSummary);
+                webUiReporter.Record("status", "status", contextSummary, collapsed: true);
+            }
 
-            List<ChatMessage> history = session.History;
-            history.Add(new ChatMessage(ChatRole.User, prompt));
-            ChatResponse response = await session.ChatClient.GetResponseAsync(history, new ChatOptions(), linkedCancellation.Token);
-            string text = string.IsNullOrWhiteSpace(response.Text) ? "No response was returned." : response.Text.Trim();
-            history.Add(new ChatMessage(ChatRole.Assistant, text));
+            string executionDirectory = context.GetExecutionDirectory(session.WorkingDirectory);
+            string goal = context.BuildModelMessage(executionDirectory);
+            string text = await ExecuteReActAsync(session, goal, executionDirectory, linkedCancellation.Token);
+            session.History.Add(new ChatMessage(ChatRole.User, context.UserText));
+            session.History.Add(new ChatMessage(ChatRole.Assistant, text));
             webUiReporter.Record("message", "assistant", text, collapsed: false);
             await NotifyAsync(sessionId, "agent_message_chunk", text);
 
@@ -192,6 +217,163 @@ internal sealed class AcpAgentServer(
         {
             session.Gate.Release();
         }
+    }
+
+    private async Task<string> ExecuteReActAsync(
+        AcpSession session,
+        string goal,
+        string executionDirectory,
+        CancellationToken cancellationToken)
+    {
+        await reactGate.WaitAsync(cancellationToken);
+        string originalWorkingDirectory = Environment.CurrentDirectory;
+        try
+        {
+            Environment.CurrentDirectory = executionDirectory;
+            string guidance = planningService.BuildDirectExecutionGuidance(executionDirectory);
+            using IDisposable permissionHandler = PotatoConsole.PushPermissionRequestHandler(
+                (permissionKey, title, details, prompt) => RequestPermissionAsync(session, permissionKey, title, details, prompt, cancellationToken));
+            using IDisposable activityHandler = PotatoConsole.PushActivityHandler(
+                (kind, content) => PublishReActActivity(session.Id, kind, content));
+            return await reActSession.ExecuteAsync(
+                goal,
+                guidance,
+                session.ChatClient,
+                getContextOptimizationEnabled: () => false,
+                cancellationToken,
+                useNativeToolCalls: true,
+                allowInteractiveUserIntervention: false);
+        }
+        finally
+        {
+            Environment.CurrentDirectory = originalWorkingDirectory;
+            reactGate.Release();
+        }
+    }
+
+    private void PublishReActActivity(string sessionId, string kind, string content)
+    {
+        _ = kind == "tool-call"
+            ? NotifyToolCallAsync(sessionId, content)
+            : NotifyAsync(sessionId, "agent_thought_chunk", content);
+    }
+
+    private Task NotifyToolCallAsync(string sessionId, string content) =>
+        WriteAsync(new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["method"] = "session/update",
+            ["params"] = new JsonObject
+            {
+                ["sessionId"] = sessionId,
+                ["update"] = new JsonObject
+                {
+                    ["sessionUpdate"] = "tool_call",
+                    ["toolCallId"] = Guid.NewGuid().ToString("N"),
+                    ["title"] = content.Split('\n', 2)[0],
+                    ["kind"] = "other",
+                    ["status"] = "in_progress",
+                    ["rawInput"] = content
+                }
+            }
+        });
+
+    private async Task<ToolPermissionChoice> RequestPermissionAsync(
+        AcpSession session,
+        string permissionKey,
+        string title,
+        IReadOnlyList<string> details,
+        string prompt,
+        CancellationToken cancellationToken)
+    {
+        if (session.AlwaysAllowedPermissionKeys.Contains(permissionKey))
+        {
+            return ToolPermissionChoice.AllowAlways;
+        }
+
+        string sessionId = session.Id;
+        string requestId = Interlocked.Increment(ref nextClientRequestId).ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var completion = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (!pendingClientRequests.TryAdd(requestId, completion)) return ToolPermissionChoice.Deny;
+
+        try
+        {
+            await NotifyAsync(sessionId, "agent_thought_chunk", "Potato is waiting for Rider to approve this tool call.");
+            await WriteAsync(new JsonObject
+            {
+                ["jsonrpc"] = "2.0",
+                ["id"] = requestId,
+                ["method"] = "session/request_permission",
+                ["params"] = new JsonObject
+                {
+                    ["sessionId"] = sessionId,
+                    ["toolCall"] = new JsonObject
+                    {
+                        ["toolCallId"] = Guid.NewGuid().ToString("N"),
+                        ["title"] = title,
+                        ["kind"] = title.StartsWith("WriteFile", StringComparison.Ordinal) ? "edit" : "execute",
+                        ["status"] = "pending",
+                        ["rawInput"] = string.Join(Environment.NewLine, details)
+                    },
+                    ["options"] = new JsonArray
+                    {
+                        PermissionOption("once", "Allow once", "allow_once"),
+                        PermissionOption("always", "Always allow", "allow_always"),
+                        PermissionOption("deny", "Deny", "reject_once")
+                    }
+                }
+            });
+
+            try
+            {
+                JsonElement response = await completion.Task.WaitAsync(PermissionResponseTimeout, cancellationToken);
+                ToolPermissionChoice choice = ParsePermissionChoice(response);
+                if (choice == ToolPermissionChoice.AllowAlways)
+                {
+                    session.AlwaysAllowedPermissionKeys.Add(permissionKey);
+                }
+
+                return choice;
+            }
+            catch (TimeoutException)
+            {
+                await NotifyAsync(sessionId, "agent_thought_chunk", "Rider did not respond to the ACP permission request within two minutes; Potato denied the tool call to avoid waiting indefinitely.");
+                return ToolPermissionChoice.Deny;
+            }
+        }
+        finally
+        {
+            pendingClientRequests.TryRemove(requestId, out _);
+        }
+    }
+
+    private static JsonObject PermissionOption(string optionId, string name, string kind) => new()
+    {
+        ["optionId"] = optionId,
+        ["name"] = name,
+        ["kind"] = kind
+    };
+
+    private void CompleteClientRequest(JsonElement id, JsonElement response)
+    {
+        string requestId = id.ValueKind == JsonValueKind.String ? id.GetString()! : id.GetRawText();
+        if (pendingClientRequests.TryGetValue(requestId, out TaskCompletionSource<JsonElement>? completion)) completion.TrySetResult(response.Clone());
+    }
+
+    private static ToolPermissionChoice ParsePermissionChoice(JsonElement response)
+    {
+        if (!response.TryGetProperty("result", out JsonElement result) ||
+            !result.TryGetProperty("outcome", out JsonElement outcome) ||
+            !outcome.TryGetProperty("outcome", out JsonElement outcomeKind) ||
+            !string.Equals(outcomeKind.GetString(), "selected", StringComparison.Ordinal) ||
+            !outcome.TryGetProperty("optionId", out JsonElement optionId)) return ToolPermissionChoice.Deny;
+
+        return optionId.GetString() switch
+        {
+            "once" or "allow_once" => ToolPermissionChoice.AllowOnce,
+            "always" or "allow_always" => ToolPermissionChoice.AllowAlways,
+            _ => ToolPermissionChoice.Deny
+        };
     }
 
     private JsonObject Cancel(JsonElement parameters)
@@ -477,16 +659,110 @@ internal sealed class AcpAgentServer(
             ? result
             : throw new AcpRequestException(-32602, $"'{name}' is required.");
 
-    private static string GetPromptText(JsonElement parameters)
+    private static AcpPromptContext ParsePromptContext(JsonElement parameters)
     {
         if (parameters.ValueKind != JsonValueKind.Object || !parameters.TryGetProperty("prompt", out JsonElement prompt) || prompt.ValueKind != JsonValueKind.Array)
-            return string.Empty;
+            return AcpPromptContext.Empty;
 
-        return string.Join("\n", prompt.EnumerateArray()
-            .Where(item => item.TryGetProperty("type", out JsonElement type) && type.GetString() == "text")
-            .Select(item => item.TryGetProperty("text", out JsonElement text) ? text.GetString() : null)
-            .Where(text => !string.IsNullOrWhiteSpace(text))!);
+        var textParts = new List<string>();
+        var attachments = new List<AcpContextAttachment>();
+        int remainingCharacters = AcpPromptContext.MaxAttachmentCharacters;
+
+        foreach (JsonElement item in prompt.EnumerateArray())
+        {
+            if (!item.TryGetProperty("type", out JsonElement type)) continue;
+            switch (type.GetString())
+            {
+                case "text" when item.TryGetProperty("text", out JsonElement text):
+                    if (!string.IsNullOrWhiteSpace(text.GetString())) textParts.Add(text.GetString()!);
+                    break;
+                case "resource":
+                    AddEmbeddedResource(item, attachments, ref remainingCharacters);
+                    break;
+                case "resource_link":
+                    AddResourceLink(item, attachments, ref remainingCharacters);
+                    break;
+            }
+        }
+
+        return new AcpPromptContext(string.Join("\n", textParts), attachments);
     }
+
+    private static void AddEmbeddedResource(JsonElement item, ICollection<AcpContextAttachment> attachments, ref int remainingCharacters)
+    {
+        if (!item.TryGetProperty("resource", out JsonElement resource) || resource.ValueKind != JsonValueKind.Object) return;
+
+        string uri = GetOptionalString(resource, "uri") ?? "embedded resource";
+        string? text = GetOptionalString(resource, "text");
+        if (string.IsNullOrEmpty(text))
+        {
+            attachments.Add(AcpContextAttachment.Unsupported(uri, "binary resource"));
+            return;
+        }
+
+        int length = Math.Min(text.Length, Math.Max(0, remainingCharacters));
+        bool truncated = length < text.Length;
+        if (length > 0)
+        {
+            attachments.Add(AcpContextAttachment.Embedded(uri, text[..length], truncated));
+            remainingCharacters -= length;
+        }
+        else
+        {
+            attachments.Add(AcpContextAttachment.Unsupported(uri, "context limit reached"));
+        }
+    }
+
+    private static void AddResourceLink(JsonElement item, ICollection<AcpContextAttachment> attachments, ref int remainingCharacters)
+    {
+        string uriText = GetOptionalString(item, "uri") ?? "resource link";
+        string? name = GetOptionalString(item, "name") ?? GetOptionalString(item, "title");
+
+        // Rider sends an attached editor file as a resource_link rather than an inline
+        // resource. A link alone gives ReAct no file contents to act on, causing it to
+        // rediscover the file through the project map. Treat a locally attached file as
+        // supplied context and keep the existing bounded-context contract.
+        if (Uri.TryCreate(uriText, UriKind.Absolute, out Uri? uri) && uri.IsFile)
+        {
+            try
+            {
+                string filePath = uri.LocalPath;
+                if (!File.Exists(filePath))
+                {
+                    attachments.Add(AcpContextAttachment.Unsupported(uriText, "linked local file was not found"));
+                    return;
+                }
+
+                int capacity = Math.Max(0, remainingCharacters);
+                if (capacity == 0)
+                {
+                    attachments.Add(AcpContextAttachment.Unsupported(uriText, "context limit reached"));
+                    return;
+                }
+
+                using var reader = new StreamReader(filePath);
+                char[] buffer = new char[capacity + 1];
+                int read = reader.ReadBlock(buffer, 0, buffer.Length);
+                bool truncated = read > capacity;
+                string content = new(buffer, 0, Math.Min(read, capacity));
+                attachments.Add(AcpContextAttachment.Embedded(uriText, content, truncated));
+                remainingCharacters -= content.Length;
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or NotSupportedException)
+            {
+                attachments.Add(AcpContextAttachment.Unsupported(uriText, "linked local file could not be read"));
+            }
+
+            return;
+        }
+
+        attachments.Add(AcpContextAttachment.Link(uriText, name));
+    }
+
+    private static string? GetOptionalString(JsonElement element, string propertyName) =>
+        element.TryGetProperty(propertyName, out JsonElement property) && property.ValueKind == JsonValueKind.String
+            ? property.GetString()
+            : null;
 
     private sealed class AcpSession(string id, string workingDirectory, IChatClient chatClient, string model) : IDisposable
     {
@@ -497,6 +773,7 @@ internal sealed class AcpAgentServer(
         public IChatClient ChatClient { get; set; } = chatClient;
         public string Model { get; set; } = model;
         public List<ChatMessage> History { get; } = [];
+        public HashSet<string> AlwaysAllowedPermissionKeys { get; } = new(StringComparer.Ordinal);
         public SemaphoreSlim Gate { get; } = new(1, 1);
 
         public CancellationToken StartPromptCancellation()
@@ -532,5 +809,114 @@ internal sealed class AcpAgentServer(
     private sealed class AcpRequestException(int code, string message) : Exception(message)
     {
         public int Code { get; } = code;
+    }
+
+    private sealed class AcpPromptContext(string userText, IReadOnlyList<AcpContextAttachment> attachments)
+    {
+        public const int MaxAttachmentCharacters = 48_000;
+        public static AcpPromptContext Empty { get; } = new(string.Empty, []);
+        public string UserText { get; } = userText;
+        public IReadOnlyList<AcpContextAttachment> Attachments { get; } = attachments;
+
+        public string GetExecutionDirectory(string fallbackDirectory)
+        {
+            foreach (AcpContextAttachment attachment in Attachments)
+            {
+                if (attachment.Kind != AcpContextAttachmentKind.Embedded ||
+                    !Uri.TryCreate(attachment.Uri, UriKind.Absolute, out Uri? uri) ||
+                    !uri.IsFile)
+                {
+                    continue;
+                }
+
+                string? projectDirectory = FindProjectDirectory(Path.GetDirectoryName(uri.LocalPath));
+                if (projectDirectory is not null)
+                {
+                    return projectDirectory;
+                }
+            }
+
+            return fallbackDirectory;
+        }
+
+        public string Describe()
+        {
+            int embedded = Attachments.Count(value => value.Kind == AcpContextAttachmentKind.Embedded);
+            int links = Attachments.Count(value => value.Kind == AcpContextAttachmentKind.Link);
+            int skipped = Attachments.Count(value => value.Kind == AcpContextAttachmentKind.Unsupported);
+            var parts = new List<string>();
+            if (embedded > 0) parts.Add($"{embedded} embedded attachment{(embedded == 1 ? string.Empty : "s")}");
+            if (links > 0) parts.Add($"{links} resource link{(links == 1 ? string.Empty : "s")}");
+            if (skipped > 0) parts.Add($"{skipped} unsupported attachment{(skipped == 1 ? string.Empty : "s")}");
+            return parts.Count == 0 ? "No IDE context was attached." : $"IDE context received: {string.Join(", ", parts)}.";
+        }
+
+        public string BuildModelMessage(string workingDirectory)
+        {
+            var builder = new System.Text.StringBuilder();
+            builder.AppendLine($"ACP workspace: {workingDirectory}");
+            builder.AppendLine();
+            builder.AppendLine("User request:");
+            builder.AppendLine(string.IsNullOrWhiteSpace(UserText) ? "Use the attached IDE context." : UserText);
+
+            if (Attachments.Any(value => value.Kind == AcpContextAttachmentKind.Embedded))
+            {
+                builder.AppendLine();
+                builder.AppendLine("Attached local files are authoritative, current source context. Treat each as a confirmed target: use its supplied contents to make the requested change and do not search the project map or call ReadFileContent merely to rediscover it. A complete attachment satisfies the required initial file read; only re-read an attachment if it is marked truncated or after writing to verify the result. Relative output paths are relative to the attached file's project directory shown above.");
+            }
+
+            foreach (AcpContextAttachment attachment in Attachments)
+            {
+                builder.AppendLine();
+                builder.AppendLine($"IDE context: {attachment.Uri}");
+                if (attachment.Kind == AcpContextAttachmentKind.Embedded)
+                {
+                    builder.AppendLine("```text");
+                    builder.AppendLine(attachment.Content);
+                    builder.AppendLine("```");
+                    if (attachment.Truncated) builder.AppendLine("[Attachment truncated to fit Potato's ACP context limit.]");
+                }
+                else
+                {
+                    builder.AppendLine($"[{attachment.Content}]");
+                }
+            }
+
+            return builder.ToString().TrimEnd();
+        }
+
+        private static string? FindProjectDirectory(string? startingDirectory)
+        {
+            for (string? directory = startingDirectory; !string.IsNullOrEmpty(directory); directory = Directory.GetParent(directory)?.FullName)
+            {
+                try
+                {
+                    if (Directory.EnumerateFiles(directory, "*.csproj", SearchOption.TopDirectoryOnly).Any() ||
+                        Directory.EnumerateFiles(directory, "package.json", SearchOption.TopDirectoryOnly).Any())
+                    {
+                        return directory;
+                    }
+                }
+                catch (IOException)
+                {
+                    return null;
+                }
+                catch (UnauthorizedAccessException)
+                {
+                    return null;
+                }
+            }
+
+            return null;
+        }
+    }
+
+    private enum AcpContextAttachmentKind { Embedded, Link, Unsupported }
+
+    private sealed record AcpContextAttachment(AcpContextAttachmentKind Kind, string Uri, string Content, bool Truncated)
+    {
+        public static AcpContextAttachment Embedded(string uri, string content, bool truncated) => new(AcpContextAttachmentKind.Embedded, uri, content, truncated);
+        public static AcpContextAttachment Link(string uri, string? name) => new(AcpContextAttachmentKind.Link, uri, name ?? "Referenced resource; content was not embedded.", false);
+        public static AcpContextAttachment Unsupported(string uri, string reason) => new(AcpContextAttachmentKind.Unsupported, uri, $"Not included: {reason}.", false);
     }
 }

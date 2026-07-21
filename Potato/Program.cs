@@ -58,7 +58,9 @@ class Program
                     webUiReporter,
                     gladosEndpoint,
                     clientFactory,
-                    options.ContextSize);
+                    options.ContextSize,
+                    provider.GetRequiredService<ReActSession>(),
+                    provider.GetRequiredService<PlanningService>());
                 await acpServer.RunAsync(CancellationToken.None);
             }
             finally

@@ -36,7 +36,7 @@ Run Potato as an [Agent Client Protocol](https://agentclientprotocol.com/) agent
 dotnet run --project Potato -- --acp --model <model-id>
 ```
 
-ACP mode uses newline-delimited JSON-RPC on stdout. It supports ACP v1 `initialize`, `session/new`, `session/prompt`, `session/cancel`, and `session/close`; output is sent as `session/update` notifications and mirrored in the GLaDOS Agents view. ACP sessions are prompt-only for now: Potato's local edit and shell tools remain available in the interactive CLI until their ACP permission bridge is added.
+ACP mode uses newline-delimited JSON-RPC on stdout. It supports ACP v1 `initialize`, `session/new`, `session/prompt`, `session/cancel`, and `session/close`; output is sent as `session/update` notifications and mirrored in the GLaDOS Agents view. Prompts run through Potato's ReAct loop, including local edit and shell tools. Before those tools run, Potato sends a `session/request_permission` request so the connected IDE—not the GLaDOS web UI—shows the approval choices.
 
 ### Configuring the Endpoint
 

@@ -70,7 +70,12 @@ public static class OpenAiEndpoints
         }
 
         // 4. Transform to internal domain architecture
-        var domainMessages = request.Messages.Select(message => message.ToDomainModel()).ToList();
+        var toolNamesByCallId = request.Messages
+            .Where(message => message.Role.Equals("assistant", StringComparison.OrdinalIgnoreCase))
+            .SelectMany(message => message.ToolCalls ?? [])
+            .Where(toolCall => !string.IsNullOrWhiteSpace(toolCall.Id) && !string.IsNullOrWhiteSpace(toolCall.Function.Name))
+            .ToDictionary(toolCall => toolCall.Id, toolCall => toolCall.Function.Name, StringComparer.Ordinal);
+        var domainMessages = request.Messages.Select(message => message.ToDomainModel(toolNamesByCallId)).ToList();
         var domainTools = request.Tools?.Select(tool => tool.ToDomainModel()).ToList() ?? [];
         var protocolName = SelectProtocolName(request, domainTools);
 
