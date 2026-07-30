@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>GLaDOS Client</title>
-    <link rel="stylesheet" href="css/site.css?v=chat-session-choice-1">
+    <link rel="stylesheet" href="css/site.css?v=vram-visibility-1">
 </head>
 <body>
 
@@ -21,7 +21,10 @@
                     <div class="context-meter-fill" id="contextMeterFill"></div>
                 </div>
             </div>
-            <div class="context-memory" id="contextMemoryUsage" title="Memory: loading...">Memory: loading...</div>
+            <div class="context-memory" id="contextMemoryUsage" title="Memory: loading...">
+                <span class="memory-vram">VRAM: loading...</span>
+                <span class="memory-details">Memory: loading...</span>
+            </div>
         </div>
         <div class="header-actions">
             <div class="top-tabs" role="tablist" aria-label="Primary views">
@@ -282,7 +285,7 @@
 <script src="js/app/content.js"></script>
 <script src="js/app/artifacts.js"></script>
 <script src="js/app/history.js"></script>
-<script src="js/app/settings.js?v=chat-session-choice-1"></script>
+<script src="js/app/settings.js?v=vram-visibility-1"></script>
 <script src="js/app/messages.js?v=chat-session-choice-1"></script>
 <script src="js/app/permissions.js"></script>
 <script src="js/app/controls.js"></script>

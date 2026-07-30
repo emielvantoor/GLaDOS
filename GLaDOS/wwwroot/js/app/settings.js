@@ -112,6 +112,9 @@
         const memoryElement = document.getElementById('contextMemoryUsage');
         if (!memoryElement || !baseEndpoint) return;
 
+        const vramElement = memoryElement.querySelector('.memory-vram');
+        const detailsElement = memoryElement.querySelector('.memory-details');
+
         try {
             const response = await fetch(`${baseEndpoint}/v1/runtime/memory`, { method: 'GET' });
             if (!response.ok) throw new Error();
@@ -127,10 +130,28 @@
                 : "VRAM: unavailable";
 
             const memoryUsageText = `${ramText} | ${processText} | ${heapText} | ${gpuText}`;
-            memoryElement.innerText = memoryUsageText;
+            const compactVramText = data.gpu_vram_total_mb
+                ? `VRAM ${formatCompactMegabytes(data.gpu_vram_used_mb)}/${formatCompactMegabytes(data.gpu_vram_total_mb)}`
+                : "VRAM unavailable";
+            if (vramElement && detailsElement) {
+                vramElement.textContent = compactVramText;
+                detailsElement.textContent = `${ramText} | ${processText} | ${heapText}`;
+            } else {
+                memoryElement.innerText = memoryUsageText;
+            }
             memoryElement.title = memoryUsageText;
         } catch {
-            memoryElement.innerText = "Memory: unavailable";
+            if (vramElement && detailsElement) {
+                vramElement.textContent = "VRAM unavailable";
+                detailsElement.textContent = "Memory: unavailable";
+            } else {
+                memoryElement.innerText = "Memory: unavailable";
+            }
             memoryElement.title = "Memory: unavailable";
         }
+    }
+
+    function formatCompactMegabytes(value) {
+        const megabytes = Number(value || 0);
+        return megabytes >= 1024 ? `${(megabytes / 1024).toFixed(1)}G` : `${Math.round(megabytes)}M`;
     }

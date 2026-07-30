@@ -256,8 +256,28 @@ h1 {
 }
 
 .header-usage .context-memory {
+    display: flex;
+    align-items: center;
+    gap: 8px;
     overflow: hidden;
     max-width: min(520px, 34vw);
+}
+
+.memory-vram {
+    flex: 0 0 auto;
+    border: 1px solid color-mix(in srgb, var(--portal-orange) 58%, var(--border-color));
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--portal-orange) 12%, var(--surface-color));
+    color: var(--text-main);
+    font-size: 11px;
+    font-weight: 800;
+    line-height: 1;
+    padding: 5px 7px;
+}
+
+.memory-details {
+    min-width: 0;
+    overflow: hidden;
     text-overflow: ellipsis;
 }
 
@@ -1661,6 +1681,10 @@ pre {
     .header-usage .context-memory {
         max-width: 230px;
     }
+
+    .memory-details {
+        display: none;
+    }
 }
 
 @media (max-width: 680px) {
@@ -1684,8 +1708,13 @@ pre {
     }
 
     .header-usage .context-memory {
-        max-width: 105px;
+        max-width: none;
         font-size: 10px;
+    }
+
+    .memory-vram {
+        font-size: 10px;
+        padding: 4px 6px;
     }
 
     .header-actions {
