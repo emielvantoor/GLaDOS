@@ -8,6 +8,7 @@
     function initializeAgentsView() {
         document.getElementById('chatTab')?.addEventListener('click', () => switchPrimaryView('chat'));
         document.getElementById('agentsTab')?.addEventListener('click', () => switchPrimaryView('agents'));
+        window.addEventListener('popstate', () => switchPrimaryView(getPrimaryViewFromUrl(), { updateUrl: false }));
         document.getElementById('refreshAgentsBtn')?.addEventListener('click', () => refreshPotatoSessions({ forceDetail: true }));
         document.getElementById('agentSystemActionsToggle')?.addEventListener('click', togglePotatoSystemActions);
         document.getElementById('agentSubmitBtn')?.addEventListener('click', sendPotatoInput);
@@ -16,13 +17,26 @@
         document.getElementById('agentPrompt')?.addEventListener('click', scheduleAgentCompletions);
         setAgentComposerState(false, 'Status: Select a Potato session');
         updatePotatoSystemActionsToggle();
+        switchPrimaryView(getPrimaryViewFromUrl(), { updateUrl: false });
 
         refreshPotatoSessions();
         potatoSessionsPollId = window.setInterval(refreshPotatoSessions, 2000);
     }
 
-    function switchPrimaryView(view) {
+    function getPrimaryViewFromUrl() {
+        return new URLSearchParams(window.location.search).get('view') === 'agents' ? 'agents' : 'chat';
+    }
+
+    function switchPrimaryView(view, options = {}) {
         activePrimaryView = view === 'agents' ? 'agents' : 'chat';
+
+        if (options.updateUrl !== false) {
+            const url = new URL(window.location.href);
+            if (url.searchParams.get('view') !== activePrimaryView) {
+                url.searchParams.set('view', activePrimaryView);
+                window.history.pushState({ primaryView: activePrimaryView }, '', url);
+            }
+        }
 
         const isAgents = activePrimaryView === 'agents';
         document.getElementById('chatTab')?.classList.toggle('active', !isAgents);
@@ -48,7 +62,8 @@
             const response = await fetch(`${baseEndpoint}/v1/potato/sessions`);
             if (!response.ok) throw new Error(`HTTP ${response.status}`);
             const payload = await response.json();
-            potatoSessions = Array.isArray(payload.data) ? payload.data : [];
+            const fetchedSessions = Array.isArray(payload.data) ? payload.data : [];
+            potatoSessions = keepPotatoSessionOrder(fetchedSessions);
 
             if (activePotatoSessionId && !potatoSessions.some((session) => session.id === activePotatoSessionId)) {
                 activePotatoSessionId = potatoSessions[0]?.id || null;
@@ -67,37 +82,56 @@
         }
     }
 
+    function keepPotatoSessionOrder(fetchedSessions) {
+        const sessionsById = new Map(fetchedSessions.map((session) => [session.id, session]));
+        const previouslyDisplayedIds = new Set(potatoSessions.map((session) => session.id));
+        const existingSessions = potatoSessions
+            .map((session) => sessionsById.get(session.id))
+            .filter(Boolean);
+        const newSessions = fetchedSessions.filter((session) => !previouslyDisplayedIds.has(session.id));
+        return [...existingSessions, ...newSessions];
+    }
+
     function renderPotatoSessionList() {
         const list = document.getElementById('potatoSessionList');
         const empty = document.getElementById('potatoSessionsEmpty');
         if (!list || !empty) return;
 
-        list.innerHTML = '';
         empty.style.display = potatoSessions.length ? 'none' : 'block';
         empty.textContent = 'No active Potato sessions.';
 
+        const existingItems = new Map(
+            [...list.querySelectorAll('[data-potato-session-id]')]
+                .map((item) => [item.dataset.potatoSessionId, item]));
+
         potatoSessions.forEach((session) => {
-            const item = document.createElement('button');
-            item.type = 'button';
+            let item = existingItems.get(session.id);
+            if (!item) {
+                item = document.createElement('button');
+                item.type = 'button';
+                item.dataset.potatoSessionId = session.id;
+                item.addEventListener('click', async () => {
+                    activePotatoSessionId = session.id;
+                    renderPotatoSessionList();
+                    await refreshActivePotatoSession();
+                });
+
+                const title = document.createElement('div');
+                title.className = 'chat-list-title';
+                const meta = document.createElement('div');
+                meta.className = 'chat-list-meta';
+                item.append(title, meta);
+            }
+
+            existingItems.delete(session.id);
             item.className = `chat-list-item${session.id === activePotatoSessionId ? ' active' : ''}`;
             item.title = session.workingDirectory;
-            item.addEventListener('click', async () => {
-                activePotatoSessionId = session.id;
-                renderPotatoSessionList();
-                await refreshActivePotatoSession();
-            });
-
-            const title = document.createElement('div');
-            title.className = 'chat-list-title';
-            title.textContent = session.displayName || session.workingDirectory;
-
-            const meta = document.createElement('div');
-            meta.className = 'chat-list-meta';
-            meta.textContent = `${session.messageCount} events · ${session.model || 'model unknown'}`;
-
-            item.append(title, meta);
+            item.querySelector('.chat-list-title').textContent = session.displayName || session.workingDirectory;
+            item.querySelector('.chat-list-meta').textContent = `${session.messageCount} events · ${session.model || 'model unknown'}`;
             list.appendChild(item);
         });
+
+        existingItems.forEach((item) => item.remove());
     }
 
     async function refreshActivePotatoSession(options = {}) {
@@ -120,7 +154,10 @@
 
         const session = await response.json();
         setPotatoHeader(session);
-        renderPotatoEvents(session.events || [], { force: options.forceRender });
+        renderPotatoEvents(session.events || [], {
+            force: options.forceRender,
+            webUiInputEnabled: Boolean(session.webUiInputEnabled)
+        });
         updatePotatoThinkingIndicator(session);
     }
 
@@ -234,10 +271,13 @@
         const chatBox = document.getElementById('agentChatBox');
         if (!chatBox) return;
 
-        if (chatBox.dataset.sessionId !== activePotatoSessionId || options.force) {
+        const webUiInputEnabled = Boolean(options.webUiInputEnabled);
+        const inputStateChanged = chatBox.dataset.webUiInputEnabled !== String(webUiInputEnabled);
+        if (chatBox.dataset.sessionId !== activePotatoSessionId || options.force || inputStateChanged) {
             chatBox.dataset.eventCount = '0';
             chatBox.dataset.lastSequence = '0';
             chatBox.dataset.sessionId = activePotatoSessionId || '';
+            chatBox.dataset.webUiInputEnabled = String(webUiInputEnabled);
             chatBox.innerHTML = '';
         }
 
@@ -264,7 +304,11 @@
             chatBox.dataset.lastSequence = '0';
             const permissionStates = getPotatoPermissionStates(events);
             events.forEach((event) => {
-                appendPotatoEventElement(chatBox, event, permissionStates.get(Number(event.sequence || 0)));
+                appendPotatoEventElement(
+                    chatBox,
+                    event,
+                    permissionStates.get(Number(event.sequence || 0)),
+                    webUiInputEnabled);
             });
             chatBox.dataset.lastSequence = String(Math.max(...events.map((event) => Number(event.sequence || 0))));
             chatBox.scrollTop = chatBox.scrollHeight;
@@ -274,7 +318,7 @@
 
         const shouldStickToBottom = isScrolledNearBottom(chatBox);
         newEvents.forEach((event) => {
-            appendPotatoEventElement(chatBox, event);
+            appendPotatoEventElement(chatBox, event, null, webUiInputEnabled);
         });
 
         chatBox.dataset.lastSequence = String(Math.max(lastSequence, ...events.map((event) => Number(event.sequence || 0))));
@@ -285,9 +329,9 @@
         initializeCodeBlockActions();
     }
 
-    function appendPotatoEventElement(chatBox, event, permissionState = null) {
+    function appendPotatoEventElement(chatBox, event, permissionState = null, webUiInputEnabled = false) {
         if (!shouldShowPotatoEvent(event)) return;
-        chatBox.appendChild(createPotatoEventElement(event, permissionState));
+        chatBox.appendChild(createPotatoEventElement(event, permissionState, webUiInputEnabled));
     }
 
     function shouldShowPotatoEvent(event) {
@@ -361,9 +405,9 @@
         return div;
     }
 
-    function createPotatoEventElement(event, permissionState = null) {
+    function createPotatoEventElement(event, permissionState = null, webUiInputEnabled = false) {
         if (event.kind === 'permission') {
-            return createPotatoPermissionElement(event, permissionState);
+            return createPotatoPermissionElement(event, permissionState, webUiInputEnabled);
         }
 
         if (event.collapsed) {
@@ -391,7 +435,7 @@
         });
     }
 
-    function createPotatoPermissionElement(event, permissionState = null) {
+    function createPotatoPermissionElement(event, permissionState = null, webUiInputEnabled = false) {
         const permDiv = document.createElement('div');
         permDiv.className = 'message tool-call permission-prompt potato-permission-prompt';
 
@@ -405,6 +449,11 @@
 
         if (permissionState) {
             permDiv.classList.add('permission-choice-submitted', `permission-${permissionState.replace(/\s+/g, '-')}`);
+            permDiv.append(title, content);
+            return permDiv;
+        }
+
+        if (!webUiInputEnabled) {
             permDiv.append(title, content);
             return permDiv;
         }

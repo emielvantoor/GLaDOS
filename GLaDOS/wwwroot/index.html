@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>GLaDOS Client</title>
-    <link rel="stylesheet" href="css/site.css?v=portal2-theme-clean-1">
+    <link rel="stylesheet" href="css/site.css?v=chat-session-choice-1">
 </head>
 <body>
 
@@ -244,6 +244,24 @@
     </div>
 </div>
 
+<dialog class="new-chat-dialog" id="newChatDialog" aria-labelledby="newChatDialogTitle">
+    <form method="dialog">
+        <h2 id="newChatDialogTitle">Start a new chat</h2>
+        <p>Choose whether this chat should keep a server-side session.</p>
+        <div class="new-chat-options">
+            <button type="button" class="new-chat-option" id="newSessionChatBtn">
+                <span>With session</span>
+                <small>Keeps server context; messages can be copied but not deleted.</small>
+            </button>
+            <button type="button" class="new-chat-option" id="newSessionlessChatBtn">
+                <span>Without session</span>
+                <small>Sends only this chat's local message history; messages can be deleted.</small>
+            </button>
+        </div>
+        <button type="submit" class="new-chat-cancel">Cancel</button>
+    </form>
+</dialog>
+
 <script src="js/tools/index.js"></script>
 <script>
     // Send the flip from the bottom-right corner across the grid's rising diagonal.
@@ -260,22 +278,22 @@
 </script>
 <script src="js/app/state.js"></script>
 <script src="js/app/theme.js"></script>
-<script src="js/app/chats.js?v=release-inference-session-1"></script>
+<script src="js/app/chats.js?v=chat-session-choice-1"></script>
 <script src="js/app/content.js"></script>
 <script src="js/app/artifacts.js"></script>
 <script src="js/app/history.js"></script>
-<script src="js/app/settings.js?v=server-context-sessions-1"></script>
-<script src="js/app/messages.js?v=code-block-actions-2"></script>
+<script src="js/app/settings.js?v=chat-session-choice-1"></script>
+<script src="js/app/messages.js?v=chat-session-choice-1"></script>
 <script src="js/app/permissions.js"></script>
 <script src="js/app/controls.js"></script>
 <script src="js/app/assistant.js?v=code-block-actions-2"></script>
 <script src="js/app/models.js"></script>
 <script src="js/app/composer.js"></script>
 <script src="js/app/tools.js"></script>
-<script src="js/app/stream.js?v=interactive-sessions-2"></script>
+<script src="js/app/stream.js?v=chat-session-choice-1"></script>
 <script src="js/app/fim.js?v=fim-verification-1"></script>
-<script src="js/app/agents.js?v=potato-permissions-1"></script>
-<script src="js/site.js?v=fim-verification-1"></script>
+<script src="js/app/agents.js?v=stable-agent-list-1"></script>
+<script src="js/site.js?v=chat-session-choice-1"></script>
 
 </body>
 </html>

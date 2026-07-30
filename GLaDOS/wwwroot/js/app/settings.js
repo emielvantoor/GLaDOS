@@ -86,7 +86,7 @@
     }
 
     async function refreshServerContextUsage() {
-        if (!baseEndpoint || !activeChatId) return;
+        if (!baseEndpoint || !activeChatId || getActiveChat()?.usesSession === false) return;
 
         try {
             const response = await fetch(`${baseEndpoint}/v1/runtime/sessions/${encodeURIComponent(activeChatId)}`);

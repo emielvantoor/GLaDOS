@@ -18,6 +18,7 @@
 
     function removeFromChatHistory(messageId) {
         if (!messageId) return;
+        if (getActiveChat()?.usesSession !== false) return;
         const message = chatHistory.find((candidate) => candidate._id === messageId);
         const linkedToolCallIds = new Set();
 

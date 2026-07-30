@@ -45,7 +45,9 @@ class Program
         IChatClient openAiClient = clientFactory.CreateOpenAiClient(gladosEndpoint, model, options.ContextSize);
         provider.GetRequiredService<CurrentChatClientState>().SetOpenAiClient(openAiClient);
         provider.GetRequiredService<CurrentChatClientState>().SetModel(model);
-        await webUiReporter.StartAsync(options.WebUiInputEnabled);
+        // ACP handles prompts and permissions through its client. Its ReAct execution
+        // does not allow interactive user intervention, so do not expose Web UI input.
+        await webUiReporter.StartAsync(options.WebUiInputEnabled && !options.AcpMode);
         PotatoConsole.EventSink = webUiReporter;
 
         if (options.AcpMode)

@@ -62,6 +62,12 @@
         copyButton.setAttribute('aria-label', 'Copy message');
         copyButton.addEventListener('click', () => copyMessageText(messageElement, copyButton));
 
+        if (getActiveChat()?.usesSession !== false) {
+            actions.append(copyButton);
+            messageElement.appendChild(actions);
+            return;
+        }
+
         const deleteButton = document.createElement('button');
         deleteButton.type = 'button';
         deleteButton.className = 'message-action danger';

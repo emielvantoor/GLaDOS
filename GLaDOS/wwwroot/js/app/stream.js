@@ -35,12 +35,17 @@
         rawStreamPre.innerText = '';
 
         try {
+            const activeChat = getActiveChat();
+            const headers = {
+                'Content-Type': 'application/json'
+            };
+            if (activeChat?.usesSession !== false) {
+                headers['X-GLaDOS-Session-Id'] = activeChatId || 'default';
+            }
+
             const response = await fetch(endpoint, {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'X-GLaDOS-Session-Id': activeChatId || 'default'
-                },
+                headers,
                 body: JSON.stringify(requestBody)
             });
 

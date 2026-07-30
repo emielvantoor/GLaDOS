@@ -32,6 +32,8 @@
                     title: typeof chat.title === "string" && chat.title.trim() ? chat.title : "New Chat",
                     createdAt: chat.createdAt || new Date().toISOString(),
                     updatedAt: chat.updatedAt || chat.createdAt || new Date().toISOString(),
+                    // Chats created before this option existed always used a server session.
+                    usesSession: chat.usesSession !== false,
                     messages: chat.messages
                         .filter((message) =>
                             message &&
@@ -67,11 +69,12 @@
         }
     }
 
-    function createChat(title = "New Chat") {
+    function createChat(title = "New Chat", usesSession = true) {
         const now = new Date().toISOString();
         return {
             id: `chat-${Date.now()}-${Math.random().toString(16).slice(2)}`,
             title,
+            usesSession,
             createdAt: now,
             updatedAt: now,
             messages: []
@@ -110,10 +113,16 @@
         chat.title = compactTitle.length > 34 ? `${compactTitle.slice(0, 34)}...` : compactTitle;
     }
 
-    function createAndSwitchToNewChat() {
+    function showNewChatDialog() {
         if (document.getElementById('submitBtn').disabled) return;
 
-        const chat = createChat();
+        document.getElementById('newChatDialog').showModal();
+    }
+
+    function createAndSwitchToNewChat(usesSession) {
+        if (document.getElementById('submitBtn').disabled || typeof usesSession !== 'boolean') return;
+
+        const chat = createChat("New Chat", usesSession);
         chats.unshift(chat);
         activeChatId = chat.id;
         syncActiveChatHistory();
@@ -121,7 +130,8 @@
         renderActiveChatMessages();
         saveChats();
         updateContextUsage();
-        document.getElementById('statusText').innerText = 'Status: New chat created.';
+        document.getElementById('newChatDialog').close();
+        document.getElementById('statusText').innerText = `Status: New ${usesSession ? 'session' : 'sessionless'} chat created.`;
     }
 
     function switchChat(chatId) {
@@ -141,6 +151,7 @@
         if (document.getElementById('submitBtn').disabled || !activeChatId) return;
 
         const deletedChatId = activeChatId;
+        const deletedChat = getActiveChat();
         chats = chats.filter((chat) => chat.id !== activeChatId);
         if (chats.length === 0) {
             chats.push(createChat());
@@ -154,7 +165,7 @@
         updateContextUsage();
         document.getElementById('statusText').innerText = 'Status: Chat deleted.';
 
-        if (baseEndpoint) {
+        if (baseEndpoint && deletedChat?.usesSession !== false) {
             void fetch(`${baseEndpoint}/v1/runtime/sessions/${encodeURIComponent(deletedChatId)}`, {
                 method: 'DELETE'
             });
@@ -182,7 +193,7 @@
 
                 const meta = document.createElement('div');
                 meta.className = 'chat-list-meta';
-                meta.textContent = `${chat.messages.length} messages`;
+                meta.textContent = `${chat.messages.length} messages · ${chat.usesSession !== false ? 'session' : 'sessionless'}`;
 
                 item.append(title, meta);
                 chatList.appendChild(item);

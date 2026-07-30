@@ -8,7 +8,9 @@
         baseEndpoint = currentHost ? `${protocol}//${currentHost}` : "http://localhost:11434";
         document.getElementById('endpoint').value = `${baseEndpoint}/v1/chat/completions`;
         document.getElementById('themeBtn').addEventListener('click', toggleTheme);
-        document.getElementById('newChatBtn').addEventListener('click', createAndSwitchToNewChat);
+        document.getElementById('newChatBtn').addEventListener('click', showNewChatDialog);
+        document.getElementById('newSessionChatBtn').addEventListener('click', () => createAndSwitchToNewChat(true));
+        document.getElementById('newSessionlessChatBtn').addEventListener('click', () => createAndSwitchToNewChat(false));
         document.getElementById('deleteChatBtn').addEventListener('click', deleteActiveChat);
         document.getElementById('prompt').addEventListener('keydown', handleKeyPress);
         document.getElementById('submitBtn').addEventListener('click', sendPrompt);
