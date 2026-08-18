@@ -694,25 +694,6 @@ public class AgentTools(ExecutionMemory memory, CurrentChatClientState chatClien
         return StoreAndReturn($"{nameof(SummarizeFilePurpose)} {resolvedPath}", builder.ToString());
     }
 
-    [Description("Retrieves earlier collected tool results and execution context by reference key. Use 'list' to see all available context items with descriptions and their ref#N keys. Use 'latest' to get the most recent item. Use a numeric ref#N (e.g., GetCollectedContext(\"5\") for ref#5) or index to retrieve a specific item. Set full=true ONLY when you need the complete original content (use sparingly to save tokens). Typical uses: (1) When you see [TRUNCATED • ref#N] in an observation, call GetCollectedContext(\"N\", full=true) to get full content, (2) Before re-reading an unchanged file, call GetCollectedContext(\"list\") to check if you already have it in context, (3) To retrieve earlier large search results or shell output for analysis.")]
-    public string GetCollectedContext(
-        [Description("Use 'list' to list available items with descriptions and reference keys, 'latest' for the newest item, or a numeric index/ref#N from the context list.")] string index = "list",
-        [Description("Set to true only when exact full content is needed; returns truncated to 12KB if content is very large. Use sparingly to conserve tokens.")] bool full = false)
-    {
-        if (!TryReserveToolInvocation(nameof(GetCollectedContext), out string rejectionReason))
-        {
-            return RejectToolInvocation(nameof(GetCollectedContext), rejectionReason);
-        }
-
-        WriteToolCall(nameof(GetCollectedContext),
-        [
-            ("index", index),
-            ("full", full.ToString())
-        ]);
-
-        return memory.Get(index, full);
-    }
-
     [Description("Executes a shell command after showing it to the user and asking for permission. Uses PowerShell on Windows and Bash on other platforms.")]
     public async Task<string> ExecuteShellCommandAsync(
         [Description("The command to execute. This is passed to PowerShell on Windows and Bash on other platforms.")] string command,
@@ -1872,7 +1853,6 @@ public class AgentTools(ExecutionMemory memory, CurrentChatClientState chatClien
             nameof(SearchFiles) => "Search files",
             nameof(SearchFileContents) => "Search file contents",
             nameof(SummarizeFilePurpose) => "Summarize file",
-            nameof(GetCollectedContext) => "Read context",
             nameof(ApplySearchReplaceAsync) => "WriteFile",
             nameof(ApplyFimEditAsync) => "WriteFile",
             nameof(CreateFileAsync) => "WriteFile",

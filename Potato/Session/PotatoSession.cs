@@ -29,7 +29,6 @@ internal sealed class PotatoSession
     private string? currentSessionSubject;
     private DateTime currentSessionStartedAt;
     private CancellationTokenSource? currentTaskCancellationSource;
-    private bool contextOptimizationEnabled;
 
     public PotatoSession(
         Uri gladosEndpoint,
@@ -56,8 +55,6 @@ internal sealed class PotatoSession
         _reActSession = reActSession;
         currentOpenAiClient = openAiClient;
         
-        PotatoAppSettings settings = appSettingsStore.Load();
-        contextOptimizationEnabled = settings.ContextOptimizationEnabled ?? false;
     }
 
     public async Task RunAsync()
@@ -80,9 +77,7 @@ internal sealed class PotatoSession
             ContinueSession,
             () => options.ContextSize,
             () => currentOpenAiClient,
-            SwitchModel,
-            SetContextOptimizationEnabled,
-            GetContextOptimizationEnabled);
+            SwitchModel);
 
         try
         {
@@ -170,7 +165,7 @@ internal sealed class PotatoSession
     private async Task HandleUserGoalWithReActAsync(string expandedGoal, CancellationToken cancellationToken)
     {
         string guidance = planningService.BuildDirectExecutionGuidance(Environment.CurrentDirectory);
-        string finalMessage = await _reActSession.ExecuteAsync(expandedGoal, guidance, currentOpenAiClient, GetContextOptimizationEnabled, cancellationToken);
+        string finalMessage = await _reActSession.ExecuteAsync(expandedGoal, guidance, currentOpenAiClient, cancellationToken);
         chatHistory.Add(new ChatMessage(ChatRole.Assistant, finalMessage));
         PotatoConsole.WriteAgentResponse(finalMessage);
         ResetConversationState();
@@ -622,14 +617,6 @@ internal sealed class PotatoSession
         Potato.Prompts.PromptLibrary.SetUseCompiledDefaultsOnly(useCompiledDefaultsOnly);
         ResetConversationState();
     }
-
-    private void SetContextOptimizationEnabled(bool enabled)
-    {
-        contextOptimizationEnabled = enabled;
-        appSettingsStore.SetContextOptimizationEnabled(enabled);
-    }
-
-    private bool GetContextOptimizationEnabled() => contextOptimizationEnabled;
 
     private CancellationTokenSource BeginTaskCancellation()
     {

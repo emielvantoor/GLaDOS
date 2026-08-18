@@ -43,6 +43,7 @@ internal static partial class PromptLibrary
         yield return ReActSystem;
         yield return ReActInitialUser;
         yield return ReActObservationUser;
+        yield return DirectExecutionGuidance;
     }
 
     private static string Load(PromptDefinition definition) =>

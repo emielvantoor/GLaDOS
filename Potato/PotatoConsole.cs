@@ -506,7 +506,6 @@ internal static class PotatoConsole
             "  /ask question   Ask a side question without changing chat history",
             "  /prompts        Show or change prompt source: status, defaults, external",
             "  /webui-input    Enable or disable GLaDOS WebUI input: enable, disable",
-           "  /context-optimization  Show or change context optimization: status, enable, disable, toggle",
            "  /sessions       List tracked sessions",
            "  /continue       Continue the latest tracked session, or /continue <session>",
            "  /transcript     Show or save a tracked session transcript",

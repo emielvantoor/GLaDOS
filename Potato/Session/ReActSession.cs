@@ -14,26 +14,21 @@ namespace Potato.Session;
 internal sealed class ReActSession(
     AgentTools agentTools,
     ExecutionMemory executionMemory,
-    PlanningService planningService,
-    ContextCompactor contextCompactor)
+    PlanningService planningService)
 {
     private const int MaxReActIterations = 24;
     private const int MaxToolCallsPerIteration = 1;
     private const int MaxConsecutiveInvalidReActResponses = 2;
     private const int ReActMaxOutputTokens = 8192;
     private const int NativeToolSelectionMaxOutputTokens = ReActMaxOutputTokens;
-    private const int MaxToolResultCharactersInHistory = 12_000;
     private const int MaxAssistantResponseCharactersInHistory = 4_000;
     private const int ContextUsageWarningThreshold = 70;  // Warn when context reaches 70% of limit
     private const int EstimatedTokensPerCharacter = 4;    // Rough estimate: 4 characters ≈ 1 token
     
-    private readonly Queue<(int index, string source)> recentTruncations = new(5);
-
     public async Task<string> ExecuteAsync(
         string goal,
         string executionGuidance,
         IChatClient chatClient,
-        Func<bool> getContextOptimizationEnabled,
         CancellationToken cancellationToken,
         bool useNativeToolCalls = true,
         bool allowInteractiveUserIntervention = true)
@@ -49,13 +44,12 @@ internal sealed class ReActSession(
 
         var reactHistory = new List<ChatMessage>
         {
-            new(ChatRole.System, PromptLibrary.BuildReActSystemPrompt(getContextOptimizationEnabled())),
+            new(ChatRole.System, PromptLibrary.BuildReActSystemPrompt()),
             new(ChatRole.User, PromptLibrary.BuildReActInitialUserPrompt(
                 goal,
                 executionGuidance,
                 Environment.CurrentDirectory,
-                projectMap,
-                getContextOptimizationEnabled()))
+                projectMap))
         };
 
         for (int iteration = 1; iteration <= MaxReActIterations; iteration++)
@@ -102,80 +96,9 @@ internal sealed class ReActSession(
 
                 string result = await ExecuteFunctionCallAsync(functionCall, cancellationToken);
                 
-                // Special handling for GetCollectedContext (retrieval tool, not data-gathering)
-                // Retrieval tools should NOT be re-compacted, re-stored, or re-summarized
-                if (functionCall.Name == nameof(AgentTools.GetCollectedContext) && !result.StartsWith("Error"))
-                {
-                    // Add full retrieval result directly to chat history (no truncation)
-                    reactHistory.Add(new ChatMessage(
-                        ChatRole.Tool,
-                        [new FunctionResultContent(functionCall.CallId, result)]));
-                    
-                    consecutiveInvalidResponses = 0;
-                    continue;  // Skip normal truncation → storage → summarization flow
-                }
-                
-                // Intelligently compact the result for chat history (uses placeholder {{INDEX}})
-                bool optimize = getContextOptimizationEnabled();
-                
-                if (optimize)
-                {
-                    ContextCompactor.CompactionResult compaction;
-                    
-                    if (functionCall.Name == nameof(AgentTools.ReadFileContent) && !result.StartsWith("Error"))
-                    {
-                        compaction = contextCompactor.Compact(
-                            result, 
-                            DetectToolResultType(functionCall.Name),
-                            MaxToolResultCharactersInHistory,
-                            functionCall.Arguments?["filePath"]?.ToString() ?? "");
-
-                    }
-                    else
-                    {
-                        compaction = contextCompactor.Compact(
-                            result, 
-                            DetectToolResultType(functionCall.Name),
-                            MaxToolResultCharactersInHistory);
-                    }
-                    
-                    // Store full result in execution memory - this assigns the actual index
-                    int memoryIndex = executionMemory.Add(
-                        $"{functionCall.Name}",
-                        result,
-                        DetectToolResultType(functionCall.Name),
-                        compaction.OriginalLength,
-                        compaction.RetrievalHint,
-                        contextKey: null);
-                    
-                    // Replace placeholder index with actual memory index
-                    string finalContent = compaction.TruncatedContent;
-                    if (compaction.WasTruncated)
-                    {
-                        finalContent = finalContent.Replace("{{INDEX}}", memoryIndex.ToString());
-                        
-                        // Track recent truncation to enforce GetCollectedContext before edits
-                        recentTruncations.Enqueue((memoryIndex, functionCall.Name));
-                        if (recentTruncations.Count > 5)
-                        {
-                            recentTruncations.Dequeue();
-                        }
-                    }
-                    
-                    // Add compacted version to chat history (minified code goes directly, no summarization)
-                    reactHistory.Add(new ChatMessage(
-                        ChatRole.Tool,
-                        [new FunctionResultContent(functionCall.CallId, finalContent)]));
-                    
-                    // await executionMemory.SummarizeLargeUnsummarizedItemsAsync(goal, chatClient, cancellationToken);
-                }
-                else
-                {
-                    // Context optimization disabled: passthrough mode - add raw result directly
-                    reactHistory.Add(new ChatMessage(
-                        ChatRole.Tool,
-                        [new FunctionResultContent(functionCall.CallId, result)]));
-                }
+                reactHistory.Add(new ChatMessage(
+                    ChatRole.Tool,
+                    [new FunctionResultContent(functionCall.CallId, result)]));
                 
                 consecutiveInvalidResponses = 0;
                 continue;
@@ -198,21 +121,19 @@ internal sealed class ReActSession(
             }
 
             int toolCallsThisIteration = agentTools.ToolInvocationCount - toolCallsBefore;
-            // await executionMemory.SummarizeLargeUnsummarizedItemsAsync(goal, chatClient, cancellationToken);
-
             if (toolCallsThisIteration > 0)
             {
                 consecutiveInvalidResponses = 0;
                 string observation = CompactForReActHistory(
                     executionMemory.GetRange(memoryItemsBefore, executionMemory.Count, full: false),
-                    MaxToolResultCharactersInHistory);
+                    int.MaxValue);
                 reactHistory.Add(new ChatMessage(
                     ChatRole.User,
-                    PromptLibrary.BuildReActObservationUserPrompt(goal, executionGuidance, "native tool call", observation, getContextOptimizationEnabled())));
+                    PromptLibrary.BuildReActObservationUserPrompt(goal, executionGuidance, "native tool call", observation)));
                 continue;
             }
 
-            if (await TryExecuteTextualActionAsync(responseText, reactHistory, goal, executionGuidance, chatClient, getContextOptimizationEnabled, cancellationToken))
+            if (await TryExecuteTextualActionAsync(responseText, reactHistory, goal, executionGuidance, cancellationToken))
             {
                 consecutiveInvalidResponses = 0;
                 continue;
@@ -341,7 +262,6 @@ internal sealed class ReActSession(
                 AIFunctionFactory.Create(agentTools.SearchFiles),
                 AIFunctionFactory.Create(agentTools.SearchFileContents),
                 AIFunctionFactory.Create(agentTools.SummarizeFilePurpose),
-                AIFunctionFactory.Create(agentTools.GetCollectedContext),
                 AIFunctionFactory.Create(agentTools.ExecuteShellCommandAsync),
                 AIFunctionFactory.Create(agentTools.ApplySearchReplaceAsync),
                 ..(fimAvailable ? new[] { AIFunctionFactory.Create(agentTools.ApplyFimEditAsync) } : []),
@@ -400,8 +320,6 @@ internal sealed class ReActSession(
         List<ChatMessage> reactHistory,
         string goal,
         string executionGuidance,
-        IChatClient chatClient,
-        Func<bool> getContextOptimizationEnabled,
         CancellationToken cancellationToken)
     {
         TextualToolCall? toolCall = TryParseToolCall(responseText) ??
@@ -415,64 +333,13 @@ internal sealed class ReActSession(
 
         PotatoConsole.WriteStatus($"Interpreting textual action as tool call: {toolCall.Name}");
         string result = await ExecuteTextualToolCallAsync(toolCall, cancellationToken);
-        
-        // Intelligently compact the result
-        bool optimize = getContextOptimizationEnabled();
-        
-        if (optimize)
-        {
-            ContextCompactor.CompactionResult compaction = contextCompactor.Compact(
-                result,
-                DetectToolResultType(toolCall.Name),
-                MaxToolResultCharactersInHistory);
-            
-            // Store full result in execution memory - gets assigned index
-            int memoryIndex = executionMemory.Add(
-                $"{toolCall.Name}",
-                result,
-                DetectToolResultType(toolCall.Name),
-                compaction.OriginalLength,
-                compaction.RetrievalHint,
-                contextKey: null);
-            
-            // Replace placeholder with actual index
-            string finalContent = compaction.TruncatedContent;
-            if (compaction.WasTruncated)
-            {
-                finalContent = finalContent.Replace("{{INDEX}}", memoryIndex.ToString());
-                
-                // Track recent truncation to enforce GetCollectedContext before edits
-                recentTruncations.Enqueue((memoryIndex, toolCall.Name));
-                if (recentTruncations.Count > 5)
-                {
-                    recentTruncations.Dequeue();
-                }
-            }
-            
-            // await executionMemory.SummarizeLargeUnsummarizedItemsAsync(goal, chatClient, cancellationToken);
-            
-            // Add to chat history with correct index (minified content goes directly, no summarization)
-            reactHistory.Add(new ChatMessage(
-                ChatRole.User,
-                PromptLibrary.BuildReActObservationUserPrompt(
-                    goal,
-                    executionGuidance,
-                    toolCall.Name,
-                    finalContent,
-                    getContextOptimizationEnabled())));
-        }
-        else
-        {
-            // Context optimization disabled: passthrough mode - add raw result directly
-            reactHistory.Add(new ChatMessage(
-                ChatRole.User,
-                PromptLibrary.BuildReActObservationUserPrompt(
-                    goal,
-                    executionGuidance,
-                    toolCall.Name,
-                    result,
-                    getContextOptimizationEnabled())));
-        }
+        reactHistory.Add(new ChatMessage(
+            ChatRole.User,
+            PromptLibrary.BuildReActObservationUserPrompt(
+                goal,
+                executionGuidance,
+                toolCall.Name,
+                result)));
         return true;
     }
 
@@ -490,16 +357,6 @@ internal sealed class ReActSession(
             _ => ToolResultType.Generic
         };
 
-    private static bool IsEditTool(string toolName) =>
-        toolName switch
-        {
-            nameof(AgentTools.CreateFileAsync) => true,
-            nameof(AgentTools.ApplySearchReplaceAsync) => true,
-            nameof(AgentTools.ApplyFimEditAsync) => true,
-            nameof(AgentTools.ApplyDiffPatchAsync) => true,
-            _ => false
-        };
-
     private static string CompactForReActHistory(string value, int maxCharacters)
     {
         string trimmed = value.Trim();
@@ -509,7 +366,7 @@ internal sealed class ReActSession(
         }
 
         return trimmed[..maxCharacters] +
-               $"\n...(truncated for ReAct history after {maxCharacters:N0} characters; use GetCollectedContext if exact earlier content is needed)";
+               $"\n...(assistant response truncated for ReAct history after {maxCharacters:N0} characters)";
     }
 
     private async Task<string> ExecuteFunctionCallAsync(
@@ -557,31 +414,6 @@ internal sealed class ReActSession(
         {
             cancellationToken.ThrowIfCancellationRequested();
             string toolName = NormalizeTextualToolName(toolCall.Name);
-            
-            // Check if this is an edit tool and if there's recent truncated context
-            if (IsEditTool(toolName) && recentTruncations.Count > 0)
-            {
-                // Get the most recent truncation info
-                var (truncationIndex, truncationSource) = recentTruncations.Peek();
-                
-                // Smart blocking: Check if summary has HIGH confidence
-                // If HIGH confidence, summary is sufficient - allow edit
-                // If MEDIUM/LOW/Unknown, block and require GetCollectedContext
-                var confidenceLevel = executionMemory.GetSummaryConfidence(truncationIndex);
-                
-                if (confidenceLevel == Potato.Models.ConfidenceLevel.High)
-                {
-                    // Summary is sufficient for the goal - allow edit ✓
-                    // (Don't block, let execution continue)
-                }
-                else
-                {
-                    // Summary missing, low, or medium confidence - block edit
-                    return $"⚠️ Cannot proceed with {toolName}: You just received truncated content (ref#{truncationIndex} from {truncationSource}).\n\n" +
-                           $"The summary confidence is {confidenceLevel}. You MUST call GetCollectedContext(\"{truncationIndex}\", full=true) first to retrieve the complete file content.\n\n" +
-                           $"Full content is required before performing edits. Retrieve the full context, then retry your edit operation.";
-                }
-            }
             
             agentTools.BeginToolInvocationBatch(1);
             try
@@ -666,9 +498,6 @@ internal sealed class ReActSession(
                         GetStringArgument(toolCall.Arguments, "filePath") ??
                         GetStringArgument(toolCall.Arguments, "file_path") ??
                         string.Empty),
-                    nameof(AgentTools.GetCollectedContext) => agentTools.GetCollectedContext(
-                        GetStringArgument(toolCall.Arguments, "index") ?? "list",
-                        GetBoolArgument(toolCall.Arguments, "full") ?? false),
                     nameof(AgentTools.ApplyDiffPatchAsync) => await agentTools.ApplyDiffPatchAsync(
                         GetStringArgument(toolCall.Arguments, "patch") ?? string.Empty,
                         GetStringArgument(toolCall.Arguments, "workingDirectory") ??
@@ -716,12 +545,6 @@ internal sealed class ReActSession(
                     nameof(AgentTools.ExecuteShellCommandAsync) => await ExecuteShellToolCallAsync(toolCall),
                     _ => $"Error: Unknown textual tool call '{toolCall.Name}'."
                 };
-                
-                // If GetCollectedContext was successfully called, clear the truncation blocking
-                if (toolName == nameof(AgentTools.GetCollectedContext) && !result.StartsWith("Error"))
-                {
-                    recentTruncations.Clear();
-                }
                 
                 return result;
             }

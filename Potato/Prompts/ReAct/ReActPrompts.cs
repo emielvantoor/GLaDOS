@@ -28,10 +28,6 @@ internal static partial class PromptLibrary
         After all requested files have been successfully written to the correct paths, return FINAL immediately with the created paths and any verification note. Do not continue looping just to restate the work.
         When the task is complete and verified, respond with FINAL: followed by a concise summary.
 
-        {{MinifiedSourcesSection}}
-
-        {{ContextOptimizationSection}}
-
         If native tool calling is unavailable, emit exactly one textual tool call:
         <tool_call>{"name":"ReadFileContent","arguments":{"filePath":"path/to/file"}}</tool_call>
         Or, for a bounded slice:
@@ -57,10 +53,6 @@ internal static partial class PromptLibrary
         - If a requested folder does not exist, create files inside that folder with CreateFileAsync; do not place sibling files in the source folder you inspected.
         - For extracted static assets, use relative links that work when opening the generated HTML from its final folder.
         - Read the full target file with ReadFileContent unless its complete current contents were supplied as an authoritative ACP IDE attachment, or an earlier observation establishes the exact line range needed for ReadFileRange.
-
-        {{MinifiedSourcesSection}}
-
-        {{ContextOptimizationSection}}
 
         Start execution now.
 
@@ -88,116 +80,34 @@ internal static partial class PromptLibrary
         If all requested artifacts exist at the requested paths and their relative links are coherent, respond with FINAL now.
         If an observed path does not match the requested destination, fix the destination path before doing anything else.
 
-        {{ContextOptimizationSection}}
-
         Continue with the next required action. Use exactly one targeted tool call, or FINAL: if the task is complete and verified.
         """);
 
-    public static string BuildReActSystemPrompt(bool contextOptimizationEnabled) =>
-        Render(ReActSystem, new Dictionary<string, string>
-        {
-            ["MinifiedSourcesSection"] = BuildMinifiedSourcesSection(),
-            ["ContextOptimizationSection"] = BuildContextOptimizationSection(contextOptimizationEnabled)
-        });
-
-    private static string BuildMinifiedSourcesSection()
-    {
-        return """
-            **HANDLING MINIFIED SOURCE CODE**
-            Code files (C#, TypeScript, Python, CSS, HTML, JavaScript, Go, Rust, Ruby, Java, C++, etc.) may appear minified in context—compressed with reduced comments and whitespace to save tokens.
-            Minified code is marked with a reference like [ref#N] and the full original content is retained in collected context.
-
-            When you encounter minified code:
-            - It is valid and complete for analysis and extraction.
-            - You can use GetCollectedContext("N") to retrieve the original unminified version if needed for detailed understanding.
-            - When creating or modifying output files, always produce properly formatted, readable code with proper indentation and structure.
-
-            Do NOT treat minified code the same as truncated content. Minified code is COMPLETE—it's just reformatted. You don't need to retrieve it unless you specifically want the original spacing/comments.
-
-            Example: If you read minified TypeScript:
-            ```
-            interface User{id:string;name:string;email:string}export function getUser(id:string):User{return{id,name:'User '+id,email:id+'@example.com'}}
-            ```
-
-            You should generate properly formatted output:
-            ```typescript
-            interface User {
-              id: string;
-              name: string;
-              email: string;
-            }
-
-            export function getUser(id: string): User {
-              return {
-                id,
-                name: 'User ' + id,
-                email: id + '@example.com'
-              };
-            }
-            ```
-
-            Always de-minify and re-format extracted code before writing to output files. The output must be clean and readable.
-            """;
-    }
-
-    private static string BuildContextOptimizationSection(bool contextOptimizationEnabled)
-    {
-        if (!contextOptimizationEnabled)
-            return string.Empty;
-
-        return """
-            **CRITICAL: Handling Truncated Data**
-            Important: Tool results larger than 12KB are truncated in chat history to save tokens. Truncation is indicated by [TRUNCATED • ref#N] markers.
-            When you see [TRUNCATED • ref#N] in any observation:
-            1. STOP. Do not edit, create, or analyze based on partial data.
-            2. Call GetCollectedContext("N", full=true) immediately to retrieve the complete content.
-            3. Wait for the full content response before proceeding with any edits or analysis.
-            4. Only after retrieving the full content should you proceed with edits, file operations, or decisions.
-             
-            CRITICAL RULE: Never attempt to reconstruct, guess, or work around truncated content. You will cause errors if you proceed without retrieving the full data first.
-             
-            Examples (you MUST follow this pattern):
-            - You see: "file content: src/auth.ts (1530 lines) ... [TRUNCATED • ref#5]"
-              → STOP. Call GetCollectedContext("5", full=true)
-              → Wait for full 1530 lines
-              → THEN edit the file with complete knowledge
-            - You see: "Search: 42 results, showing top 10 ... [TRUNCATED • ref#7]"
-              → STOP. Call GetCollectedContext("7") to see summary or full results
-              → Proceed with analysis only after retrieving
-            - Use GetCollectedContext("list") anytime to see all available collected context
-             
-            If the system blocks your edit with a message about truncated data, it means you skipped step 2. Call GetCollectedContext immediately and retry.
-            """;
-    }
+    public static string BuildReActSystemPrompt() => Render(ReActSystem, new Dictionary<string, string>());
 
     public static string BuildReActInitialUserPrompt(
         string goal,
         string executionGuidance,
         string workingDirectory,
-        string projectMap,
-        bool contextOptimizationEnabled) =>
+        string projectMap) =>
         Render(ReActInitialUser, new Dictionary<string, string>
         {
             ["Goal"] = goal,
             ["ExecutionGuidance"] = executionGuidance,
             ["WorkingDirectory"] = workingDirectory,
-            ["ProjectMap"] = projectMap,
-            ["MinifiedSourcesSection"] = BuildMinifiedSourcesSection(),
-            ["ContextOptimizationSection"] = BuildContextOptimizationSection(contextOptimizationEnabled)
+            ["ProjectMap"] = projectMap
         });
 
     public static string BuildReActObservationUserPrompt(
         string goal,
         string executionGuidance,
         string observationSource,
-        string observation,
-        bool contextOptimizationEnabled) =>
+        string observation) =>
         Render(ReActObservationUser, new Dictionary<string, string>
         {
             ["Goal"] = goal,
             ["ExecutionGuidance"] = executionGuidance,
             ["ObservationSource"] = observationSource,
-            ["Observation"] = observation,
-            ["ContextOptimizationSection"] = BuildContextOptimizationSection(contextOptimizationEnabled)
+            ["Observation"] = observation
         });
 }

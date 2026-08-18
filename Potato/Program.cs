@@ -25,7 +25,6 @@ class Program
         services.AddSingleton<FimClient>();
         services.AddSingleton<ProjectMapBuilder>();
         services.AddSingleton<PlanningService>();
-        services.AddSingleton<ContextCompactor>();
         services.AddSingleton<ReActSession>();
         services.AddSingleton<AgentTools>();
         services.AddSingleton<ExecutionMemory>();

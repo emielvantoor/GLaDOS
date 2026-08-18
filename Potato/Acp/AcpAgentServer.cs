@@ -239,7 +239,6 @@ internal sealed class AcpAgentServer(
                 goal,
                 guidance,
                 session.ChatClient,
-                getContextOptimizationEnabled: () => false,
                 cancellationToken,
                 useNativeToolCalls: true,
                 allowInteractiveUserIntervention: false);

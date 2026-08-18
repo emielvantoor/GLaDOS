@@ -16,9 +16,7 @@ internal sealed class SlashCommandHandler(
     Action<string> continueSession,
     Func<int> getContextSize,
     Func<IChatClient> getClient,
-    Action<IChatClient, string> switchModel,
-    Action<bool> setContextOptimizationEnabled,
-    Func<bool> getContextOptimizationEnabled)
+    Action<IChatClient, string> switchModel)
 {
     public async Task<bool> TryHandleAsync(string input)
     {
@@ -57,10 +55,6 @@ internal sealed class SlashCommandHandler(
 
             case "/webui-input":
                 await HandleWebUiInputCommandAsync(arguments);
-                return true;
-
-            case "/context-optimization":
-                HandleContextOptimizationCommand(arguments);
                 return true;
 
             case "/transcript":
@@ -256,51 +250,4 @@ internal sealed class SlashCommandHandler(
         }
     }
 
-    private void HandleContextOptimizationCommand(string arguments)
-    {
-        string mode = arguments.Trim().ToLowerInvariant();
-        switch (mode)
-        {
-            case "":
-            case "status":
-                WriteContextOptimizationStatus();
-                return;
-
-            case "on":
-            case "enable":
-            case "enabled":
-            case "true":
-            case "1":
-                setContextOptimizationEnabled(true);
-                PotatoConsole.WriteSuccess("Context optimization: enabled (intelligent truncation + summarization).");
-                return;
-
-            case "off":
-            case "disable":
-            case "disabled":
-            case "false":
-            case "0":
-                setContextOptimizationEnabled(false);
-                PotatoConsole.WriteSuccess("Context optimization: disabled (raw passthrough mode).");
-                return;
-
-            case "toggle":
-                bool newState = !getContextOptimizationEnabled();
-                setContextOptimizationEnabled(newState);
-                PotatoConsole.WriteSuccess($"Context optimization: {(newState ? "enabled" : "disabled")}.");
-                return;
-
-            default:
-                PotatoConsole.WriteStatus("Type /context-optimization status, enable, disable, or toggle.");
-                return;
-        }
-    }
-
-    private void WriteContextOptimizationStatus()
-    {
-        string state = getContextOptimizationEnabled()
-            ? "enabled (intelligent truncation + summarization)"
-            : "disabled (raw passthrough mode)";
-        PotatoConsole.WriteStatus($"Context optimization: {state}");
-    }
 }

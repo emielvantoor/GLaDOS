@@ -127,9 +127,6 @@ The CLI exposes local tools to the agent:
 - `ReadFileRange`
   Reads an inclusive line range from a specific text file without returning the whole file.
 
-- `GetCollectedContext`
-  Retrieves context collected during the current ReAct execution. Use `index: "list"` to see stored items with contextual descriptions, `index: "latest"` for the newest item, or a numeric index to retrieve one item. Large entries are summarized automatically for compact retrieval; pass `full: true` only when exact content is needed.
-
 - `ApplyDiffPatchAsync`
   Applies a unified diff patch after showing the patch to the user and asking for permission. The tool validates the patch with `git apply --check` before applying it.
 

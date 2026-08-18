@@ -13,7 +13,6 @@ public sealed class PotatoAppSettings
 
     public int? ContextSize { get; init; }
 
-    public bool? ContextOptimizationEnabled { get; init; }
 }
 
 public sealed class PotatoAppSettingsStore
@@ -22,7 +21,6 @@ public sealed class PotatoAppSettingsStore
     private const string WebUiInputEnabledProperty = "WebUiInputEnabled";
     private const string SelectedModelProperty = "SelectedModel";
     private const string ContextSizeProperty = "ContextSize";
-    private const string ContextOptimizationEnabledProperty = "ContextOptimizationEnabled";
     private readonly string path;
 
     public PotatoAppSettingsStore(string path)
@@ -40,8 +38,7 @@ public sealed class PotatoAppSettingsStore
             UseCompiledDefaultPrompts = GetBool(root, UseCompiledDefaultPromptsProperty),
             WebUiInputEnabled = GetBool(root, WebUiInputEnabledProperty),
             SelectedModel = GetString(root, SelectedModelProperty),
-            ContextSize = GetInt(root, ContextSizeProperty),
-            ContextOptimizationEnabled = GetBool(root, ContextOptimizationEnabledProperty, defaultValue: true)
+            ContextSize = GetInt(root, ContextSizeProperty)
         };
     }
 
@@ -63,13 +60,6 @@ public sealed class PotatoAppSettingsStore
     {
         JsonObject root = LoadRoot();
         root[SelectedModelProperty] = model;
-        SaveRoot(root);
-    }
-
-    public void SetContextOptimizationEnabled(bool value)
-    {
-        JsonObject root = LoadRoot();
-        root[ContextOptimizationEnabledProperty] = value;
         SaveRoot(root);
     }
 
