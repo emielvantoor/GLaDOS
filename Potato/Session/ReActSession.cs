@@ -6,6 +6,7 @@ using System.Text.RegularExpressions;
 using Microsoft.Extensions.AI;
 using Potato.Models;
 using Potato.Prompts;
+using Potato.Session.Planning;
 using Potato.Tools;
 using Potato.WebUi;
 
@@ -36,6 +37,30 @@ internal sealed class ReActSession(
         executionMemory.Clear();
         int successfulEditsBeforeExecution = agentTools.SuccessfulEditCount;
         int consecutiveInvalidResponses = 0;
+        ProofCarryingPlan proofPlan;
+        using (PotatoConsole.StartProgress("Preparing proof-carrying execution plan..."))
+        {
+            proofPlan = await planningService.CreateProofCarryingPlanAsync(
+                goal,
+                Environment.CurrentDirectory,
+                chatClient,
+                cancellationToken);
+        }
+
+        ToolPermissionChoice planChoice = await PotatoConsole.RequestToolPermissionAsync(
+            "proof-carrying-plan",
+            "Review proof-carrying execution plan",
+            [proofPlan.FormatForReview()],
+            "Approve this plan? Individual edits and commands will still request permission.");
+        if (planChoice == ToolPermissionChoice.Deny)
+        {
+            return "Execution cancelled: the proof-carrying plan was not approved.";
+        }
+
+        PotatoConsole.WriteStatus("Proof-carrying plan approved. Collecting evidence during execution.");
+        agentTools.BeginTaskCheckpoint(proofPlan.Goal);
+        var proofLedger = new ProofExecutionLedger();
+        string proofGuidance = $"{executionGuidance}\n\nApproved proof-carrying plan:\n{proofPlan.FormatForExecution()}";
         bool fimAvailable = useNativeToolCalls && await agentTools.IsFimAvailableAsync(cancellationToken);
         ChatOptions toolOptions = CreateToolOptions(fimAvailable, useNativeToolCalls);
         string projectMap = await planningService.BuildProjectMapHeaderAsync(Environment.CurrentDirectory, cancellationToken);
@@ -47,7 +72,7 @@ internal sealed class ReActSession(
             new(ChatRole.System, PromptLibrary.BuildReActSystemPrompt()),
             new(ChatRole.User, PromptLibrary.BuildReActInitialUserPrompt(
                 goal,
-                executionGuidance,
+                proofGuidance,
                 Environment.CurrentDirectory,
                 projectMap))
         };
@@ -95,6 +120,7 @@ internal sealed class ReActSession(
                 }
 
                 string result = await ExecuteFunctionCallAsync(functionCall, cancellationToken);
+                proofLedger.Record(NormalizeTextualToolName(functionCall.Name), result);
                 
                 reactHistory.Add(new ChatMessage(
                     ChatRole.Tool,
@@ -117,7 +143,14 @@ internal sealed class ReActSession(
                     continue;
                 }
 
-                return RemoveFinalMarker(responseText);
+                string? taskCheckpoint = agentTools.CompleteTaskCheckpoint(proofPlan.Goal);
+                if (!string.IsNullOrWhiteSpace(taskCheckpoint))
+                {
+                    PotatoConsole.RecordTaskRollbackReady(taskCheckpoint);
+                }
+
+                return $"{RemoveFinalMarker(responseText)}\n\n{proofLedger.BuildCompletionEvidence()}" +
+                       (string.IsNullOrWhiteSpace(taskCheckpoint) ? string.Empty : $"\n\n{taskCheckpoint}");
             }
 
             int toolCallsThisIteration = agentTools.ToolInvocationCount - toolCallsBefore;
@@ -129,11 +162,11 @@ internal sealed class ReActSession(
                     int.MaxValue);
                 reactHistory.Add(new ChatMessage(
                     ChatRole.User,
-                    PromptLibrary.BuildReActObservationUserPrompt(goal, executionGuidance, "native tool call", observation)));
+                    PromptLibrary.BuildReActObservationUserPrompt(goal, proofGuidance, "native tool call", observation)));
                 continue;
             }
 
-            if (await TryExecuteTextualActionAsync(responseText, reactHistory, goal, executionGuidance, cancellationToken))
+            if (await TryExecuteTextualActionAsync(responseText, reactHistory, goal, proofGuidance, proofLedger, cancellationToken))
             {
                 consecutiveInvalidResponses = 0;
                 continue;
@@ -180,7 +213,7 @@ internal sealed class ReActSession(
                 {goal}
 
                 Execution guidance:
-                {executionGuidance}
+                {proofGuidance}
 
                 Current working directory: {Environment.CurrentDirectory}
                 """));
@@ -320,6 +353,7 @@ internal sealed class ReActSession(
         List<ChatMessage> reactHistory,
         string goal,
         string executionGuidance,
+        ProofExecutionLedger proofLedger,
         CancellationToken cancellationToken)
     {
         TextualToolCall? toolCall = TryParseToolCall(responseText) ??
@@ -333,6 +367,7 @@ internal sealed class ReActSession(
 
         PotatoConsole.WriteStatus($"Interpreting textual action as tool call: {toolCall.Name}");
         string result = await ExecuteTextualToolCallAsync(toolCall, cancellationToken);
+        proofLedger.Record(NormalizeTextualToolName(toolCall.Name), result);
         reactHistory.Add(new ChatMessage(
             ChatRole.User,
             PromptLibrary.BuildReActObservationUserPrompt(

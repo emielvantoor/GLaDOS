@@ -58,10 +58,9 @@ GLaDOS_OPENAI_ENDPOINT=http://your-server:port dotnet run --project Potato
 
 Potato operates in a **staged review loop** to ensure safety, clarity, and control:
 
-1. **Specification** — The agent summarizes the task and asks for approval. It must not execute or invent facts. It will indicate if file inspection is needed.
-2. **Adjustment** — Only runs if the user rejects or modifies the specification. Otherwise, skips to execution.
-3. **Execution Steps** — After approval, the agent breaks down the task into named steps with `Purpose`, `Action`, and `Result`. It names tools or explains shell commands needed.
-4. **Execution** — Potato runs a bounded ReAct loop to complete steps, inspect files, execute commands, apply patches, and revise steps if needed. It halts until completion or user approval.
+1. **Proof-carrying plan** — The agent proposes a bounded plan and asks for approval before execution. Each step includes its action, evidence needed, expected result, verification method, and rollback guidance.
+2. **Execution** — Potato runs a bounded ReAct loop to inspect files, execute commands, apply patches, and collect tool observations.
+3. **Evidence record** — The final result includes recent observed evidence and states whether verification was collected after a file change. Individual edits and commands still require their own permission.
 
 ---
 
@@ -120,9 +119,9 @@ Execute shell command? [y/N]: y
 
 Potato uses a **dual approval system** for safety:
 
-### 1. Specification Approval
+### 1. Proof-plan approval
 
-Before any execution, the agent summarizes the task in bullet points and asks for approval.
+Before execution, Potato displays the proof-carrying plan and asks for approval.
 
 **Approvals accepted:**
 
@@ -130,7 +129,19 @@ Before any execution, the agent summarizes the task in bullet points and asks fo
 y, yes, approved, approve, go, ok, okay, correct
 ```
 
-> If you type `yes` after a specification, it approves the task and proceeds to execution steps.
+> If you type `yes`, Potato approves the plan and begins evidence-gathering execution. Edits and shell commands still require their own permission.
+
+### Checkpoint rollback
+
+Every successful Potato file write creates an in-memory checkpoint containing the
+previous file contents. Use `/checkpoints` to inspect them and `/rollback` to
+restore the latest one; use `/rollback <number>` to select a listed checkpoint.
+Potato asks for confirmation and refuses to overwrite a file that changed after
+the checkpoint was created. Checkpoints expire when Potato exits.
+
+Completed agent tasks also get one combined checkpoint. Use `/task-checkpoints`
+and `/rollback-task [number]` to restore every file touched by a completed task
+to its state before that task began.
 
 ### 2. Execution Approval
 

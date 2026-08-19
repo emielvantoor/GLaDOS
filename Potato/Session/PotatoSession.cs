@@ -75,6 +75,10 @@ internal sealed class PotatoSession
             HandleTranscriptCommand,
             WriteSessions,
             ContinueSession,
+            () => PotatoConsole.WriteStatus(agentTools.ListRollbackCheckpoints()),
+            HandleRollbackAsync,
+            () => PotatoConsole.WriteStatus(agentTools.ListTaskRollbackCheckpoints()),
+            HandleTaskRollbackAsync,
             () => options.ContextSize,
             () => currentOpenAiClient,
             SwitchModel);
@@ -123,6 +127,54 @@ internal sealed class PotatoSession
         if (inputHistory.Count == 0 || !string.Equals(inputHistory[^1], input, StringComparison.Ordinal))
         {
             inputHistory.Add(input);
+        }
+    }
+
+    private async Task HandleRollbackAsync(string selector)
+    {
+        try
+        {
+            string result = await agentTools.RollbackAsync(selector);
+            if (result.StartsWith("Rolled back", StringComparison.OrdinalIgnoreCase))
+            {
+                PotatoConsole.WriteSuccess(result);
+            }
+            else
+            {
+                PotatoConsole.WriteStatus(result);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            PotatoConsole.WriteStatus("Rollback cancelled.");
+        }
+        catch (Exception ex)
+        {
+            PotatoConsole.WriteError($"Rollback failed: {ex.Message}");
+        }
+    }
+
+    private async Task HandleTaskRollbackAsync(string selector)
+    {
+        try
+        {
+            string result = await agentTools.RollbackTaskAsync(selector);
+            if (result.StartsWith("Rolled back", StringComparison.OrdinalIgnoreCase))
+            {
+                PotatoConsole.WriteSuccess(result);
+            }
+            else
+            {
+                PotatoConsole.WriteStatus(result);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            PotatoConsole.WriteStatus("Task rollback cancelled.");
+        }
+        catch (Exception ex)
+        {
+            PotatoConsole.WriteError($"Task rollback failed: {ex.Message}");
         }
     }
 

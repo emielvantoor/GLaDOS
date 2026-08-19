@@ -30,19 +30,14 @@ GLaDOS_OPENAI_ENDPOINT=http://localhost:11434/v1 dotnet run --project Potato
 
 The CLI uses a staged workflow:
 
-1. Specification
-   The agent summarizes the requested work in clear bullet points and asks for approval. It must not answer the task or invent repository facts during this phase. If the task requires local context, it states that execution must inspect the actual files first.
+1. Proof-carrying plan
+   Before execution, Potato asks the selected model for a short structured plan. Each step contains an action, evidence that must be collected, an expected result, a verification method, and rollback guidance. Potato presents that plan for approval; this approval does not bypass later edit or command permissions.
 
-2. Adjustment
-   This phase only runs if the user rejects or changes the specification. If the user approves the specification, this phase is skipped.
+2. Execution
+   The CLI runs a bounded ReAct loop after plan approval. Tool observations are retained as execution evidence. The approved plan is included in the execution context so the model can use its expected result and verification method while it works.
 
-3. Execution Steps
-   After approval, the agent explains how the task will be completed. It breaks the approved specification into named steps and substeps, states what each step or substep is responsible for, describes what will be done to complete each one, and includes a concrete `Result:` that must be observed before the next step or substep may begin. It also names the available CLI tool or tools it intends to use and why. If no direct tool fits, it states whether the task can be solved through shell execution and what kind of shell action would be needed. It must not run tools, emit tool-call JSON, or print exact shell commands in this phase.
-
-   Execution steps should be flat when possible. Substeps are allowed when a parent step is only a grouping heading; the executable leaf step or substep must include `Purpose`, `Action`, and `Result`. Each executable `Action` should name exactly one registered tool, or explicitly say `No tool` for a draft/reasoning step that uses prior observations.
-
-4. Execution
-   The CLI executes the approved execution steps through a bounded ReAct loop. The model uses the steps and substeps as a working map: it chooses the next step or substep, inspects files, runs commands, applies patches, observes results, and can revise the breakdown when observations show it is incomplete or incorrect. The loop continues until the model returns a final answer.
+3. Evidence record
+   When the agent returns `FINAL:`, Potato appends an execution record with recent observed tool evidence and reports whether verification was collected after a file change. This is evidence for review, not a claim that an unrun verification succeeded.
 
 For simple read-only or inspection tasks, the CLI may proceed from the execution steps directly to the command permission prompt. For write, delete, install, risky, or multi-step tasks, the agent should ask the user to type `execute` before continuing. Once execution is approved, the registered tools are allowed to perform the approved work.
 
@@ -114,6 +109,18 @@ Slash commands are handled by the CLI before a message is sent to the staged age
 - `/abort`
   Cancels the current staged task, clears the in-progress conversation history, and returns to the main prompt while keeping the selected model and working directory.
 
+- `/checkpoints`
+  Lists the reversible checkpoints that Potato created for successful file writes in the current process.
+
+- `/rollback [latest|number]`
+  Restores a Potato checkpoint after explicit confirmation. Rollback is refused if any affected file no longer matches the content Potato wrote, which protects later user edits.
+
+- `/task-checkpoints`
+  Lists one combined checkpoint for each completed Potato task that changed files.
+
+- `/rollback-task [latest|number]`
+  Restores all files touched by a completed task to their pre-task state after explicit confirmation.
+
 ## Tools
 
 The CLI exposes local tools to the agent:
@@ -139,7 +146,7 @@ Tool calls are printed with their parameters before execution. For file reads, P
 
 During ReAct execution, Potato stores assistant responses and tool outputs as collected context. List entries include descriptors such as file paths, shell commands, or response previews, so smaller stateless models can choose the right index without relying on hidden memory or oversized prompts.
 
-Potato also tracks the steps and substeps parsed from the approved execution steps. The tracker is separate from collected context: ReAct memory stores what was observed, while the subtask tracker stores the current planned work item and injects the live step/substep state into continuation prompts. During execution, the console status line includes the current step or substep. Tool observations are treated as evidence for the current step's `Result:`; the tracker advances only after the model emits `READY_FOR_NEXT_SUBSTEP`.
+Potato retains the approved proof-carrying plan separately from collected context. ReAct memory stores the full observations used by the model, while the execution ledger records concise recent evidence and whether a verification command ran after a file change.
 
 ## Shell Execution
 
@@ -199,37 +206,47 @@ git apply --whitespace=nowarn
 
 If either step fails, the tool returns the exit code, stdout, and stderr to the model as the next observation.
 
+## Rollback checkpoints
+
+Potato captures the complete pre-write contents of files changed by its create,
+overwrite, search/replace, FIM, and unified-diff tools. A checkpoint can span
+multiple files for a unified diff. `/rollback` restores the latest checkpoint;
+`/rollback <number>` restores a selected entry from `/checkpoints`.
+
+Checkpoints are in memory and expire when Potato exits. Before restoring,
+Potato compares each current file to the content it wrote. If anything changed
+in the meantime, rollback is refused rather than overwriting that later work.
+
+In addition to individual write checkpoints, Potato merges all successful
+writes in an approved ReAct run into a task checkpoint. It retains the first
+pre-write version of each file and the final version Potato produced, so a task
+rollback restores the entire completed task through one confirmed action. The GLaDOS Agents view
+shows a rollback action for a completed task when Web UI input is enabled. That
+action includes a `Changed Files` summary with scoped `+added -removed` line
+counts for the files changed by the task.
+
 ## ReAct Execution Loop
 
 After execution is approved, Potato runs a bounded observe-act loop:
 
-1. Potato sends a compact next-action prompt for the current step, including the original request, current working directory, and latest observation.
-2. The first tool call in that ReAct iteration is executed through the local permissioned tools only if it matches the current step's approved `Action:`. Additional native tool calls in the same iteration are rejected before they run.
+1. Potato sends a compact next-action prompt containing the approved proof plan, original request, current working directory, and latest observation.
+2. The first tool call in that ReAct iteration is executed through the local permissioned tools. Additional native tool calls in the same iteration are rejected before they run.
 3. Tool results are treated as observations for the next iteration.
-4. The model emits `READY_FOR_NEXT_SUBSTEP` only after the latest observation satisfies the current step's `Result:`, then continues with the next approved subtask.
+4. Potato records each tool result as evidence in the execution ledger.
 5. The loop continues until the model responds with `FINAL:` or the iteration limit is reached.
 
-The current loop limit is 40 iterations. Each assistant turn should either call the next useful tool, hand off with `READY_FOR_NEXT_SUBSTEP`, or finish with `FINAL:`. Potato accepts `FINAL:` at the start of a response or on its own later line, so models that produce the answer first and append the marker still terminate the loop cleanly.
+The current loop limit is 24 iterations. Each assistant turn should either call the next useful tool or finish with `FINAL:`. Potato accepts `FINAL:` at the start of a response or on its own later line, so models that produce the answer first and append the marker still terminate the loop cleanly.
 
 Some local models emit textual commands instead of native tool calls. When Potato sees a `<tool_call>{...}</tool_call>` block or a fenced shell command during the ReAct loop, it routes that action through the same permissioned local tool path and appends the result as the next observation.
 
 For read-only project or folder inspection tasks, if the model fails to choose the first directory-listing action, Potato runs a deterministic read-only listing fallback through the same permissioned shell tool and continues with that observation.
 
-## Execution Planning
+## Execution planning
 
-Older versions of the CLI asked the selected GLaDOS model to produce a single execution plan after the execution steps phase.
-
-The execution planner returns JSON with:
-
-```json
-{
-  "command": "command to run",
-  "workingDirectory": null,
-  "timeoutSeconds": 60
-}
-```
-
-The ReAct loop now handles approved execution instead, because coding tasks usually need multiple inspect, edit, and verify steps.
+The proof-carrying planner asks the selected model for a small JSON plan before
+execution. If the model returns invalid JSON or planning is unavailable, Potato
+uses a conservative fallback plan: inspect relevant context, then make the
+smallest justified change and verify it.
 
 ## Safety Boundaries
 
@@ -241,7 +258,7 @@ The extra `execute` prompt is reserved for tasks that appear write-oriented, del
 
 ## Current Limitations
 
-- Risk detection is heuristic and based on the approved specification and execution steps text.
+- A plan is a reviewable contract, not a sandbox: individual tool permissions remain the enforcement boundary.
 - ReAct execution depends on the selected model producing valid tool calls and a final `FINAL:` response.
 - The CLI-local tools are separate from GLaDOS server-side `IAgentTool` registrations.
 - Long-running commands are killed when they exceed the configured timeout.

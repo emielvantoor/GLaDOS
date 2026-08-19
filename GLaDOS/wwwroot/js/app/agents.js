@@ -189,9 +189,6 @@
         updateAgentComposerVisibility(session);
         setAgentComposerState(Boolean(session.webUiInputEnabled), getAgentStatusText(session));
         updateAgentPromptPlaceholder(session);
-        if (session.webUiInputEnabled) {
-            scheduleAgentCompletions();
-        }
     }
 
     function setPotatoContextUsageHeader(element, usage) {
@@ -264,7 +261,9 @@
 
         const isVisible = Boolean(session?.webUiInputEnabled);
         composer.classList.toggle('webui-input-disabled', !isVisible);
-        hideAgentCompletions();
+        if (!isVisible) {
+            hideAgentCompletions();
+        }
     }
 
     function renderPotatoEvents(events, options = {}) {
@@ -410,6 +409,10 @@
             return createPotatoPermissionElement(event, permissionState, webUiInputEnabled);
         }
 
+        if (event.kind === 'rollback-task-ready') {
+            return createTaskRollbackElement(event, webUiInputEnabled);
+        }
+
         if (event.collapsed) {
             const details = document.createElement('details');
             details.className = 'potato-event-details';
@@ -433,6 +436,35 @@
             html: event.role === 'assistant',
             actions: false
         });
+    }
+
+    function createTaskRollbackElement(event, webUiInputEnabled) {
+        const container = document.createElement('div');
+        container.className = 'message tool-call permission-prompt potato-task-rollback';
+
+        const title = document.createElement('p');
+        title.className = 'permission-text permission-title';
+        title.textContent = 'Task rollback available';
+
+        const content = document.createElement('pre');
+        content.className = 'potato-permission-content';
+        content.textContent = event.content || 'A completed Potato task can be rolled back.';
+
+        const match = String(event.content || '').match(/Task checkpoint\s+(\d+)/i);
+        const checkpoint = match?.[1] || 'latest';
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'permission-button no';
+        button.textContent = 'Rollback task';
+        button.disabled = !webUiInputEnabled;
+        button.title = webUiInputEnabled ? '' : 'Enable Web UI input in Potato to roll back this task.';
+        button.addEventListener('click', async () => {
+            button.disabled = true;
+            await sendPotatoCommand(`/rollback-task ${checkpoint}`, button);
+        });
+
+        container.append(title, content, button);
+        return container;
     }
 
     function createPotatoPermissionElement(event, permissionState = null, webUiInputEnabled = false) {
@@ -626,6 +658,27 @@
             await refreshActivePotatoSession();
         } catch (error) {
             setAgentComposerState(true, `Status: Could not send input: ${error.message}`);
+        }
+    }
+
+    async function sendPotatoCommand(command, button = null) {
+        if (!activePotatoSessionId) return;
+
+        setAgentComposerState(false, 'Status: Sending command...');
+        try {
+            const response = await fetch(`${baseEndpoint}/v1/potato/sessions/${encodeURIComponent(activePotatoSessionId)}/input`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ content: command })
+            });
+
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            setAgentComposerState(true, 'Status: Rollback command queued');
+            if (button) button.textContent = 'Rollback command queued';
+            await refreshActivePotatoSession();
+        } catch (error) {
+            if (button) button.disabled = false;
+            setAgentComposerState(true, `Status: Could not send command: ${error.message}`);
         }
     }
 

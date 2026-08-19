@@ -508,6 +508,10 @@ internal static class PotatoConsole
             "  /webui-input    Enable or disable GLaDOS WebUI input: enable, disable",
            "  /sessions       List tracked sessions",
            "  /continue       Continue the latest tracked session, or /continue <session>",
+           "  /checkpoints    List file-change checkpoints made by Potato",
+           "  /rollback [n]   Restore the latest or numbered Potato checkpoint",
+           "  /task-checkpoints List completed agent-task checkpoints",
+           "  /rollback-task [n] Restore the latest or numbered agent-task checkpoint",
            "  /transcript     Show or save a tracked session transcript",
            "  /abort          Cancel the current task and return to the main prompt",
            "  Ctrl+C          Abort the in-flight task; exits normally at the idle prompt",
@@ -587,6 +591,12 @@ internal static class PotatoConsole
         Console.ForegroundColor = ConsoleColor.DarkGray;
         Console.WriteLine(message);
         Console.ResetColor();
+    }
+
+    public static void RecordTaskRollbackReady(string message)
+    {
+        EventSink?.Record("rollback-task-ready", "status", message, collapsed: false);
+        ActivityHandler.Value?.Invoke("thought", message);
     }
 
     public static IProgressReporter StartProgress(string message)

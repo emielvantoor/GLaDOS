@@ -14,6 +14,10 @@ internal sealed class SlashCommandHandler(
     Action<string> handleTranscriptCommand,
     Action writeSessions,
     Action<string> continueSession,
+    Action writeCheckpoints,
+    Func<string, Task> rollback,
+    Action writeTaskCheckpoints,
+    Func<string, Task> rollbackTask,
     Func<int> getContextSize,
     Func<IChatClient> getClient,
     Action<IChatClient, string> switchModel)
@@ -67,6 +71,22 @@ internal sealed class SlashCommandHandler(
 
             case "/continue":
                 continueSession(arguments);
+                return true;
+
+            case "/checkpoints":
+                writeCheckpoints();
+                return true;
+
+            case "/rollback":
+                await rollback(arguments);
+                return true;
+
+            case "/task-checkpoints":
+                writeTaskCheckpoints();
+                return true;
+
+            case "/rollback-task":
+                await rollbackTask(arguments);
                 return true;
 
             case "/abort":

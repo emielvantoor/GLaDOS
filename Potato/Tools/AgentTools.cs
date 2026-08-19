@@ -7,7 +7,7 @@ using Microsoft.Extensions.AI;
 
 namespace Potato.Tools;
 
-public class AgentTools(ExecutionMemory memory, CurrentChatClientState chatClientState, PotatoRuntimeOptions options, FimClient fimClient)
+public class AgentTools(ExecutionMemory memory, CurrentChatClientState chatClientState, PotatoRuntimeOptions options, FimClient fimClient, RollbackManager rollbackManager)
 {
     private const int DefaultCommandTimeoutSeconds = 60;
     private const int MaxCommandTimeoutSeconds = 600;
@@ -68,6 +68,20 @@ public class AgentTools(ExecutionMemory memory, CurrentChatClientState chatClien
 
     public Task<bool> IsFimAvailableAsync(CancellationToken cancellationToken) =>
         fimClient.IsAvailableAsync(cancellationToken);
+
+    public string ListRollbackCheckpoints() => rollbackManager.List();
+
+    public Task<string> RollbackAsync(string selector, CancellationToken cancellationToken = default) =>
+        rollbackManager.RollbackAsync(selector, cancellationToken);
+
+    public void BeginTaskCheckpoint(string description) => rollbackManager.BeginTask(description);
+
+    public string? CompleteTaskCheckpoint(string description) => rollbackManager.CompleteTask(description);
+
+    public string ListTaskRollbackCheckpoints() => rollbackManager.ListTaskCheckpoints();
+
+    public Task<string> RollbackTaskAsync(string selector, CancellationToken cancellationToken = default) =>
+        rollbackManager.RollbackTaskAsync(selector, cancellationToken);
 
     private bool TryReserveToolInvocation(string toolName, out string rejectionReason)
     {
@@ -868,6 +882,8 @@ public class AgentTools(ExecutionMemory memory, CurrentChatClientState chatClien
         }
 
         string patchFile = Path.Combine(Path.GetTempPath(), $"potato-{Guid.NewGuid():N}.patch");
+        IReadOnlyList<RollbackManager.FileSnapshot> checkpointFiles = rollbackManager.CaptureFiles(
+            GetPatchedFilePaths(patch, effectiveWorkingDirectory));
 
         try
         {
@@ -901,6 +917,7 @@ public class AgentTools(ExecutionMemory memory, CurrentChatClientState chatClien
             builder.AppendLine("Patch applied successfully.");
             builder.AppendLine("Changed files:");
             builder.AppendLine(FormatPatchedFiles(patch));
+            rollbackManager.Record("Apply diff patch", checkpointFiles);
             SuccessfulEditCount++;
             WriteCompactToolResult(true, "Patch applied", effectiveWorkingDirectory);
             return StoreAndReturn(nameof(ApplyDiffPatchAsync), builder.ToString());
@@ -982,7 +999,9 @@ public class AgentTools(ExecutionMemory memory, CurrentChatClientState chatClien
         }
 
         string updatedContent = content.Remove(replacementStart, replacementLength).Insert(replacementStart, replace ?? string.Empty);
+        RollbackManager.FileSnapshot checkpoint = rollbackManager.CaptureFile(resolvedPath);
         await File.WriteAllTextAsync(resolvedPath, updatedContent, CurrentCancellationToken);
+        rollbackManager.Record("Search/replace edit", [checkpoint]);
         SuccessfulEditCount++;
         WriteCompactToolResult(true, "WriteFile wrote", resolvedPath);
         return StoreAndReturn(nameof(ApplySearchReplaceAsync), $"SEARCH/REPLACE edit applied successfully to {resolvedPath}.");
@@ -1037,7 +1056,9 @@ public class AgentTools(ExecutionMemory memory, CurrentChatClientState chatClien
         }
 
         string updated = string.Join(newline, lines[..(startLine - 1)]) + (startLine > 1 ? newline : string.Empty) + replacement.TrimEnd('\r', '\n') + (endLine < lines.Length ? newline : string.Empty) + string.Join(newline, lines[endLine..]);
+        RollbackManager.FileSnapshot checkpoint = rollbackManager.CaptureFile(resolvedPath);
         await File.WriteAllTextAsync(resolvedPath, updated, CurrentCancellationToken);
+        rollbackManager.Record("FIM edit", [checkpoint]);
         SuccessfulEditCount++;
         WriteCompactToolResult(true, "WriteFile wrote", resolvedPath);
         return StoreAndReturn(nameof(ApplyFimEditAsync), $"FIM edit applied successfully to {resolvedPath}.");
@@ -1091,6 +1112,7 @@ public class AgentTools(ExecutionMemory memory, CurrentChatClientState chatClien
 
         Directory.CreateDirectory(parentDirectory);
         await File.WriteAllTextAsync(resolvedPath, sanitizedContent, CurrentCancellationToken);
+        rollbackManager.Record("Create file", [new RollbackManager.FileSnapshot(resolvedPath, false, null, null)]);
         SuccessfulEditCount++;
         WriteCompactToolResult(true, "WriteFile created", resolvedPath);
         return StoreAndReturn(nameof(CreateFileAsync), $"File created successfully at {resolvedPath}.");
@@ -1138,7 +1160,9 @@ public class AgentTools(ExecutionMemory memory, CurrentChatClientState chatClien
             return StoreAndReturn(nameof(OverwriteFileAsync), "File overwrite denied by user.");
         }
 
+        RollbackManager.FileSnapshot checkpoint = rollbackManager.CaptureFile(resolvedPath);
         await File.WriteAllTextAsync(resolvedPath, sanitizedContent, CurrentCancellationToken);
+        rollbackManager.Record(fileExisted ? "Overwrite file" : "Create file", [checkpoint]);
         SuccessfulEditCount++;
         WriteCompactToolResult(true, fileExisted ? "WriteFile wrote" : "WriteFile created", resolvedPath);
         return StoreAndReturn(nameof(OverwriteFileAsync), $"File written successfully at {resolvedPath}.");
@@ -2136,6 +2160,24 @@ public class AgentTools(ExecutionMemory memory, CurrentChatClientState chatClien
             .ToArray();
 
         return files.Length == 0 ? "(none found in patch headers)" : string.Join(Environment.NewLine, files);
+    }
+
+    private static IReadOnlyList<string> GetPatchedFilePaths(string patch, string workingDirectory)
+    {
+        string root = Path.GetFullPath(workingDirectory)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        return patch
+            .Replace("\r\n", "\n")
+            .Split('\n')
+            .Where(line => line.StartsWith("+++ ", StringComparison.Ordinal) || line.StartsWith("--- ", StringComparison.Ordinal))
+            .Select(line => line[4..].Trim())
+            .Where(path => path != "/dev/null")
+            .Select(path => path.StartsWith("a/", StringComparison.Ordinal) || path.StartsWith("b/", StringComparison.Ordinal) ? path[2..] : path)
+            .Select(path => Path.GetFullPath(Path.Combine(root, path)))
+            .Where(path => path.Equals(root, StringComparison.OrdinalIgnoreCase) ||
+                           path.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
     }
 
     private static async Task<ProcessResult> RunProcessAsync(

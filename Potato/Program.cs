@@ -26,6 +26,7 @@ class Program
         services.AddSingleton<ProjectMapBuilder>();
         services.AddSingleton<PlanningService>();
         services.AddSingleton<ReActSession>();
+        services.AddSingleton<RollbackManager>();
         services.AddSingleton<AgentTools>();
         services.AddSingleton<ExecutionMemory>();
 
