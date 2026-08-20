@@ -85,15 +85,28 @@ public static class PotatoEndpoints
 
     private static IResult GetNextInput(
         [FromServices] PotatoSessionStore store,
+        [FromQuery] string? sessionId,
         [FromQuery] string? workingDirectory)
     {
-        if (string.IsNullOrWhiteSpace(workingDirectory))
+        // sessionId is authoritative. The working-directory fallback preserves
+        // compatibility with Potato clients from before session IDs were sent.
+        if (string.IsNullOrWhiteSpace(sessionId) && string.IsNullOrWhiteSpace(workingDirectory))
         {
-            return Results.BadRequest(new { error = "WorkingDirectory is required." });
+            return Results.BadRequest(new { error = "SessionId is required." });
         }
 
-        string? input = store.DequeueInput(workingDirectory);
+        string id = string.IsNullOrWhiteSpace(sessionId)
+            ? CreateLegacySessionId(workingDirectory!)
+            : sessionId.Trim();
+        string? input = store.DequeueInput(id);
         return input is null ? Results.NoContent() : Results.Ok(new { content = input });
+    }
+
+    private static string CreateLegacySessionId(string workingDirectory)
+    {
+        string normalizedWorkingDirectory = Path.GetFullPath(workingDirectory);
+        return Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+            System.Text.Encoding.UTF8.GetBytes(normalizedWorkingDirectory)));
     }
 
     private static IResult GetCompletions(

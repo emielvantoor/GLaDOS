@@ -25,7 +25,7 @@ public sealed class PotatoSessionStore
     {
         string workingDirectory = NormalizeWorkingDirectory(request.WorkingDirectory);
         DateTimeOffset now = DateTimeOffset.UtcNow;
-        string id = CreateSessionId(workingDirectory);
+        string id = ResolveSessionId(request.SessionId, workingDirectory);
 
         lock (sync)
         {
@@ -55,7 +55,7 @@ public sealed class PotatoSessionStore
     {
         string workingDirectory = NormalizeWorkingDirectory(request.WorkingDirectory);
         DateTimeOffset now = DateTimeOffset.UtcNow;
-        string id = CreateSessionId(workingDirectory);
+        string id = ResolveSessionId(request.SessionId, workingDirectory);
 
         lock (sync)
         {
@@ -160,25 +160,16 @@ public sealed class PotatoSessionStore
         }
     }
 
-    public string? DequeueInput(string workingDirectory)
+    public string? DequeueInput(string sessionId)
     {
-        string normalizedWorkingDirectory = NormalizeWorkingDirectory(workingDirectory);
-        string id = CreateSessionId(normalizedWorkingDirectory);
-        DateTimeOffset now = DateTimeOffset.UtcNow;
-
         lock (sync)
         {
-            if (!sessions.TryGetValue(id, out StoredPotatoSession? session))
+            if (!sessions.TryGetValue(sessionId, out StoredPotatoSession? session))
             {
-                session = new StoredPotatoSession(
-                    id,
-                    normalizedWorkingDirectory,
-                    Path.GetFileName(normalizedWorkingDirectory),
-                    string.Empty,
-                    now);
-                sessions[id] = session;
+                return null;
             }
 
+            DateTimeOffset now = DateTimeOffset.UtcNow;
             session.Status = "active";
             session.LastActivityAt = now;
             return session.PendingInputs.TryDequeue(out string? input) ? input : null;
@@ -390,6 +381,11 @@ public sealed class PotatoSessionStore
 
     private static string CreateSessionId(string workingDirectory) =>
         Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(workingDirectory)));
+
+    // Older clients did not supply a session ID. Keep their directory-derived
+    // identity as a compatibility fallback, but never use it for new clients.
+    private static string ResolveSessionId(string? sessionId, string workingDirectory) =>
+        string.IsNullOrWhiteSpace(sessionId) ? CreateSessionId(workingDirectory) : sessionId.Trim();
 
     private static string BuildDisplayName(PotatoSessionStartRequest request, string workingDirectory) =>
         string.IsNullOrWhiteSpace(request.DisplayName)

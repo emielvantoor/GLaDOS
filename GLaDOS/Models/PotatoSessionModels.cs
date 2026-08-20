@@ -42,7 +42,8 @@ public sealed record PotatoSessionStartRequest(
     string WorkingDirectory,
     string Model,
     string? DisplayName,
-    string? Mode);
+    string? Mode,
+    string? SessionId = null);
 
 public sealed record PotatoSessionEventRequest(
     string WorkingDirectory,
@@ -51,7 +52,8 @@ public sealed record PotatoSessionEventRequest(
     string Role,
     string Content,
     bool Collapsed,
-    PotatoContextUsage? ContextUsage = null);
+    PotatoContextUsage? ContextUsage = null,
+    string? SessionId = null);
 
 public sealed record PotatoContextUsage(
     int PromptTokens,

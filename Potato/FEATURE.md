@@ -262,3 +262,4 @@ The extra `execute` prompt is reserved for tasks that appear write-oriented, del
 - ReAct execution depends on the selected model producing valid tool calls and a final `FINAL:` response.
 - The CLI-local tools are separate from GLaDOS server-side `IAgentTool` registrations.
 - Long-running commands are killed when they exceed the configured timeout.
+- Potato session IDs are process-scoped. Sessions and rollback checkpoints are not persisted after either process exits.

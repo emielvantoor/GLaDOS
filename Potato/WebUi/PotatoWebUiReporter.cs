@@ -239,7 +239,7 @@ internal sealed class PotatoWebUiReporter(Uri gladosEndpoint, string model) : Po
     private Uri BuildNextInputUri() =>
         new(
             gladosEndpoint,
-            $"potato/sessions/input/next?workingDirectory={Uri.EscapeDataString(Environment.CurrentDirectory)}&sessionId={Uri.EscapeDataString(sessionId)}");
+            $"potato/sessions/input/next?sessionId={Uri.EscapeDataString(sessionId)}");
 
     private sealed record PotatoSessionStartPayload(string SessionId, string WorkingDirectory, string Model, string Mode, string? DisplayName);
 
